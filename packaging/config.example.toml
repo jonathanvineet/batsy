@@ -1,0 +1,23 @@
+# Batsy settings. Every key is optional; delete what you don't change.
+# Restart Batsy after editing (or say "Batsy, restart yourself").
+
+[claude]
+model = "claude-opus-5-5"   # or "claude-sonnet-5-5" for cheaper/faster
+effort = "medium"           # low | medium | high | xhigh | max
+web_tools = true            # web search + fetch
+
+[voice]
+wake_words = ["batsy", "bat see", "bats see", "betsy", "batsie", "bitsy", "patsy"]
+whisper_model = "small.en"  # tiny.en / base.en = faster, medium.en = more accurate
+piper_voice = "en_GB-alan-medium"
+follow_up_seconds = 6       # listen for a follow-up without the wake word; 0 to disable
+barge_in = true             # say "Batsy" while it's talking to interrupt
+# input_device = "USB Microphone"
+
+[safety]
+confirm_dangerous = true    # ask by voice before rm -rf, dnf remove, shutdown, ...
+
+[monitor]
+battery_low_percent = 15
+cpu_temp_high_c = 90
+disk_free_low_gb = 5

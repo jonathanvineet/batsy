@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Batsy
+Comment=Voice assistant powered by Claude
+Exec=@BATSY@ run
+Icon=audio-input-microphone
+Terminal=false
+X-GNOME-Autostart-enabled=true
+X-GNOME-Autostart-Delay=5

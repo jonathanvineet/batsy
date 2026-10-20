@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "batsy"
+version = "0.1.0"
+description = "Batsy - a voice-controlled Claude assistant that runs your Fedora laptop"
+requires-python = ">=3.11"
+dependencies = [
+  "anthropic>=1.16",
+  "psutil>=5.9",
+  "pyserial>=3.5",
+  "pillow>=10.0",
+  "numpy>=1.26",
+]
+
+[project.optional-dependencies]
+voice = [
+  "sounddevice>=0.4.6",
+  "vosk>=0.3.45",
+  "piper-tts>=1.2",
+]
+whisper = [
+  "faster-whisper>=1.0",
+]
+
+[project.scripts]
+batsy = "batsy.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["batsy*"]

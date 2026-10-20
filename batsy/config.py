@@ -1,0 +1,91 @@
+"""Paths and user configuration.
+
+Config lives in ~/.config/batsy/config.toml (every key optional), the API key in
+~/.config/batsy/env (ANTHROPIC_API_KEY=...) or the environment.
+"""
+import os
+import tomllib
+from pathlib import Path
+
+HOME = Path.home()
+CONFIG_DIR = Path(os.environ.get("XDG_CONFIG_HOME", HOME / ".config")) / "batsy"
+DATA_DIR = Path(os.environ.get("XDG_DATA_HOME", HOME / ".local" / "share")) / "batsy"
+WORKSPACE = HOME / "Batsy"  # where Batsy keeps sketches, scripts and scratch work
+SKILLS_DIR = DATA_DIR / "skills"
+MODELS_DIR = DATA_DIR / "models"
+JOBS_DIR = DATA_DIR / "jobs"
+SOCKET_PATH = Path(os.environ.get("XDG_RUNTIME_DIR", "/tmp")) / f"batsy-{os.getuid()}.sock"
+SOURCE_DIR = Path(__file__).resolve().parent
+
+DEFAULTS = {
+    "claude": {
+        "model": "claude-opus-5-5",
+        # medium keeps voice replies snappy; raise to "high" for heavier coding work
+        "effort": "medium",
+        "max_tokens": 32000,
+        "web_tools": True,
+        "max_steps": 40,
+    },
+    "voice": {
+        "wake_words": ["batsy", "bat see", "bats see", "betsy", "batsie", "bitsy", "patsy"],
+        "vosk_model": "vosk-model-small-en-us-0.15",
+        "stt_engine": "auto",  # auto | whisper | vosk
+        "whisper_model": "small.en",  # tiny.en / base.en are faster, small.en more accurate
+        "tts_engine": "auto",  # auto | piper | espeak
+        "piper_voice": "en_GB-alan-medium",
+        "follow_up_seconds": 6,
+        "barge_in": True,
+        "input_device": None,  # sounddevice device name/index; None = system default
+        "chime": True,
+    },
+    "safety": {
+        "confirm_dangerous": True,
+    },
+    "monitor": {
+        "health_interval": 60,
+        "battery_low_percent": 15,
+        "cpu_temp_high_c": 90,
+        "disk_free_low_gb": 5,
+    },
+}
+
+
+def _merge(base: dict, override: dict) -> dict:
+    out = dict(base)
+    for k, v in override.items():
+        out[k] = _merge(base[k], v) if isinstance(v, dict) and isinstance(base.get(k), dict) else v
+    return out
+
+
+def _load_env_file(path: Path) -> None:
+    if not path.exists():
+        return
+    for line in path.read_text().splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        os.environ.setdefault(key.strip(), value.strip().strip('"').strip("'"))
+
+
+class Config:
+    def __init__(self, data: dict):
+        self.data = data
+
+    def get(self, dotted: str):
+        node = self.data
+        for part in dotted.split("."):
+            node = node[part]
+        return node
+
+    @classmethod
+    def load(cls) -> "Config":
+        for d in (CONFIG_DIR, DATA_DIR, WORKSPACE, SKILLS_DIR, MODELS_DIR, JOBS_DIR):
+            d.mkdir(parents=True, exist_ok=True)
+        _load_env_file(CONFIG_DIR / "env")
+        data = DEFAULTS
+        cfg_file = CONFIG_DIR / "config.toml"
+        if cfg_file.exists():
+            with open(cfg_file, "rb") as f:
+                data = _merge(DEFAULTS, tomllib.load(f))
+        return cls(data)
