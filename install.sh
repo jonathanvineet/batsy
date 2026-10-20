@@ -16,7 +16,7 @@ say() { printf '\n\033[1;35m==> %s\033[0m\n' "$*"; }
 say "Installing system packages (needs your password)"
 PKGS=(python3 python3-pip python3-devel gcc gcc-c++ portaudio portaudio-devel espeak-ng
       pipewire-utils alsa-utils libnotify ffmpeg-free gnome-screenshot brightnessctl playerctl
-      lm_sensors ydotool unzip curl git)
+      lm_sensors ydotool v4l-utils unzip curl git)
 if ! sudo dnf install -y "${PKGS[@]}"; then
   # older dnf has no --skip-unavailable; fall back to one at a time
   for p in "${PKGS[@]}"; do sudo dnf install -y "$p" || echo "  (skipped $p)"; done
@@ -30,7 +30,7 @@ mkdir -p "$DATA/models" "$CONF" "$BIN"
 python3 -m venv "$VENV"
 "$VENV/bin/pip" install -q --upgrade pip wheel
 "$VENV/bin/pip" install -q -e "$REPO"
-"$VENV/bin/pip" install -q sounddevice vosk
+"$VENV/bin/pip" install -q sounddevice vosk opencv-python
 "$VENV/bin/pip" install -q piper-tts || echo "  piper-tts failed to install; Batsy will speak with espeak-ng."
 "$VENV/bin/pip" install -q faster-whisper || echo "  faster-whisper failed to install; Batsy will use Vosk for speech recognition."
 

@@ -22,58 +22,45 @@ log = logging.getLogger("batsy.brain")
 HISTORY_FILE = DATA_DIR / "history.json"
 ARCHIVE_DIR = DATA_DIR / "archive"
 BETAS = ["compact-2026-01-12"]
+CLEAR_BETA = "context-management-2025-06-27"
+USAGE_FILE = DATA_DIR / "usage.jsonl"
 FALLBACK_BETA = "server-side-fallback-2026-07-01"
 FALLBACK_MODELS = {"claude-opus-5-5", "claude-opus-5", "claude-fable-5-1", "claude-sonnet-5-5"}
 
 SYSTEM_PROMPT = """\
-You are Batsy, {user}'s personal voice assistant. You run as a program on their Fedora Linux laptop and have \
-full control of it through your tools: a bash shell, file access, live system monitoring, the screen and webcam, \
-Arduino boards, background monitors and timers, long-term memory, and skills you write for yourself.
+You are Batsy, {user}'s voice assistant, running on their Fedora laptop with full control via tools \
+(shell, files, system status, camera/screen, Arduino, timers/monitors, memory, self-written skills).
 
-How you talk
-- Almost everything you say is spoken aloud by text-to-speech. Keep replies short and natural: one to three \
-sentences unless asked for detail. No markdown, bullet lists, tables, emoji or URLs in spoken replies.
-- Never read code, logs or long paths aloud. Write code to files and say where it is and what it does.
-- Messages are speech transcripts and may contain mistranscriptions; infer the likely meaning (e.g. "our dino" \
-is probably "Arduino"). If a request is truly ambiguous and acting wrongly would be costly, ask one short question.
-- Don't say your own name in replies (it is your wake word).
-- Each user message starts with a bracketed timestamp and channel, e.g. [2026-10-21 14:03 Tue · voice]. Lines \
-starting "[Batsy announced]" are things you said on your own (alerts, timers) since the last message.
+Talking
+- Replies are spoken by TTS: 1-3 short sentences, no markdown/lists/emoji/URLs. Never read code or logs aloud; \
+put code in files and say where.
+- Input is speech transcripts; infer mistranscriptions ("our dino" = Arduino). Ask only if a wrong guess is costly.
+- Don't say your own name (it's the wake word). Messages start with [time · channel]; "[Batsy announced]" lines \
+are alerts you spoke since the last message.
 
-How you act
-- You're expected to actually do things, not explain how. Use tools, check the result, then report briefly.
-- Prefer doing over asking. Dangerous shell commands are automatically confirmed with the user by voice, so you \
-don't need to ask permission separately for them.
-- Launch GUI apps and long-running commands with run_shell background=true (e.g. `gtk-launch firefox`, \
-`xdg-open URL`, `code ~/project`). Fedora specifics: dnf for packages (via pkexec), flatpak, `wpctl set-volume \
-@DEFAULT_AUDIO_SINK@ 50%`, `wpctl set-mute @DEFAULT_AUDIO_SINK@ toggle`, `brightnessctl set 40%`, `playerctl \
-play-pause|next|metadata`, `nmcli`, `bluetoothctl`, `loginctl lock-session`, `gsettings`, `notify-send`, \
-`systemctl --user`, `journalctl`. Keyboard/mouse automation on Wayland: `ydotool` (needs ydotoold running).
-- Root access: `pkexec <command>` shows the user a password dialog. There is no terminal for sudo passwords.
-- Use `look` to see the screen when the user refers to what's on it, or to verify GUI actions.
-- Your workspace for projects, sketches and scripts is {workspace}.
-- Arduino: write the sketch with the arduino tool (write_sketch), compile, fix errors yourself until it compiles, \
-then upload; read the serial port to confirm it works. Install missing cores/libraries yourself.
-- For "tell me when..." requests use add_monitor or set_timer; for long builds use background jobs.
-- Use web_search / web_fetch for anything current or that you don't know.
+Acting
+- Do things, don't explain how. Act, check briefly, report. Risky shell commands are voice-confirmed \
+automatically, so don't ask separately.
+- Be economical: fewest tool calls that do the job, quiet commands (e.g. `-q`, `| tail -20`, `head`), \
+no re-reading what you already know.
+- GUI apps and long commands: run_shell background=true (`gtk-launch firefox`, `xdg-open URL`). Root: \
+`pkexec cmd` (password dialog; no sudo). Fedora: dnf, flatpak, `wpctl set-volume @DEFAULT_AUDIO_SINK@ 50%`, \
+`brightnessctl set 40%`, `playerctl`, `nmcli`, `bluetoothctl`, `loginctl lock-session`, `gsettings`, `ydotool`.
+- Camera: `camera open` shows the live feed in a window. Look at it (look source=webcam) only when the user asks \
+something about what it shows, once per question; never comment on the feed unprompted. Screen questions: \
+look source=screen.
+- Arduino: write_sketch, compile, fix until it builds, upload, read serial to confirm. Workspace: {workspace}.
+- "Tell me when..." = add_monitor / set_timer / background job. Use web_search for current facts.
 
-Memory
-- This conversation persists across restarts, so earlier turns are real history with the user.
-- Use `remember` for lasting facts about {user}, their hardware, projects and preferences, without being asked \
-when something is clearly worth keeping.
+Memory and self-improvement
+- This conversation persists across restarts. Use `remember` for lasting facts about {user}, unprompted when clear.
+- To learn a new ability: create_skill, test with run_skill, fix until it works. Your source is {source}; edit \
+only when asked, carefully, then restart_self.
 
-Self-improvement
-- When asked to learn something new or automate a repeated task, write a skill (create_skill), test it with \
-run_skill, and fix it until it works.
-- Your own source code is at {source}. You may edit it when asked to change your own behaviour; keep edits \
-small and careful, then call restart_self.
-
-Machine: {host} · {distro} · desktop {desktop} · Python {python}
-
-Long-term memory (fact ids in brackets):
+Machine: {host} · {distro} · {desktop} · Python {python}
+Memory:
 {memory}
-
-Skills you have written:
+Skills:
 {skills}
 """
 
@@ -191,32 +178,54 @@ class Brain:
         self.system = build_system_prompt()
         self.lock = threading.Lock()
         self.notes: list[str] = []  # announcements made since the last user message
+        self.clear_tool_results = cfg.get("claude.clear_tool_results_at") > 0
 
     def note_announcement(self, text: str) -> None:
         self.notes.append(text)
 
     def _request_kwargs(self) -> dict:
-        model = self.cfg.get("claude.model")
+        c = self.cfg.get("claude")
+        model = c["model"]
         tools = self.registry.definitions()
-        if self.cfg.get("claude.web_tools"):
+        if c["web_tools"]:
             tools += [
-                {"type": "web_search_20260209", "name": "web_search", "max_uses": 5},
-                {"type": "web_fetch_20260209", "name": "web_fetch", "max_uses": 5},
+                {"type": "web_search_20260209", "name": "web_search", "max_uses": 3},
+                {"type": "web_fetch_20260209", "name": "web_fetch", "max_uses": 2, "max_content_tokens": 6000},
             ]
+        betas = list(BETAS)
+        # Token savers: drop stale tool outputs (big shell dumps, old images) and summarise long history.
+        edits = []
+        if self.clear_tool_results:
+            betas.append(CLEAR_BETA)
+            edits.append({
+                "type": "clear_tool_uses_20250919",
+                "trigger": {"type": "input_tokens", "value": c["clear_tool_results_at"]},
+                "keep": {"type": "tool_uses", "value": c["keep_tool_results"]},
+            })
+        edits.append({"type": "compact_20260112",
+                      "trigger": {"type": "input_tokens", "value": max(50000, c["compact_at_tokens"])}})
         kwargs = dict(
             model=model,
-            max_tokens=self.cfg.get("claude.max_tokens"),
+            max_tokens=c["max_tokens"],
             system=[{"type": "text", "text": self.system}],
             tools=tools,
-            output_config={"effort": self.cfg.get("claude.effort")},
-            cache_control={"type": "ephemeral"},
-            context_management={"edits": [{"type": "compact_20260112"}]},
-            betas=list(BETAS),
+            output_config={"effort": c["effort"]},
+            cache_control={"type": "ephemeral", "ttl": c["cache_ttl"]},
+            context_management={"edits": edits},
+            betas=betas,
         )
         if model in FALLBACK_MODELS:
             kwargs["betas"].append(FALLBACK_BETA)
             kwargs["fallbacks"] = "default"
         return kwargs
+
+    def _log_usage(self, msg) -> None:
+        u = msg.usage
+        row = {"t": int(time.time()), "model": msg.model, "in": u.input_tokens, "out": u.output_tokens,
+               "cache_read": u.cache_read_input_tokens or 0, "cache_write": u.cache_creation_input_tokens or 0}
+        log.info("usage %s", row)
+        with open(USAGE_FILE, "a") as f:
+            f.write(json.dumps(row) + "\n")
 
     def _stream_once(self, chunker: SpeechChunker, abort: threading.Event):
         with self.client.beta.messages.stream(messages=self.history.messages, **self._request_kwargs()) as stream:
@@ -225,7 +234,9 @@ class Brain:
                     return None
                 if event.type == "content_block_delta" and event.delta.type == "text_delta":
                     chunker.feed(event.delta.text)
-            return stream.get_final_message()
+            final = stream.get_final_message()
+        self._log_usage(final)
+        return final
 
     def ask(self, text: str, source: str, say: Callable[[str], None], abort: threading.Event,
             on_tool: Callable[[str], None] | None = None) -> str:
@@ -256,6 +267,11 @@ class Brain:
                 emit("Claude is rate limiting me right now. Try again in a minute.")
                 break
             except anthropic.BadRequestError as e:
+                if self.clear_tool_results and "clear_tool_uses" in str(e):
+                    # this account/model rejects tool-result clearing; carry on with compaction only
+                    log.warning("disabling tool-result clearing: %s", e)
+                    self.clear_tool_results = False
+                    continue
                 log.error("bad request: %s", e)
                 emit("Claude rejected that request. If this keeps happening, say: new conversation.")
                 break

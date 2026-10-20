@@ -20,11 +20,22 @@ SOURCE_DIR = Path(__file__).resolve().parent
 DEFAULTS = {
     "claude": {
         "model": "claude-opus-5-5",
-        # medium keeps voice replies snappy; raise to "high" for heavier coding work
-        "effort": "medium",
+        # low = fewest thinking tokens and fastest replies; "medium"/"high" for heavy coding sessions
+        "effort": "low",
         "max_tokens": 32000,
         "web_tools": True,
-        "max_steps": 40,
+        "max_steps": 25,
+        # token savers
+        "compact_at_tokens": 50000,    # summarise older conversation past this size (API minimum 50000)
+        "clear_tool_results_at": 20000,  # drop old tool outputs/images from context past this size
+        "keep_tool_results": 3,        # ...but keep the most recent few
+        "cache_ttl": "1h",             # voice use is bursty; a 1h cache survives the gaps between questions
+    },
+    "camera": {
+        "name": "lenovo",       # matched against the V4L2 device name; first camera if none match
+        "device": None,         # force /dev/videoN by number
+        "snapshot_edge": 768,   # px sent to Claude per webcam look (~450 tokens)
+        "screen_edge": 1280,    # px per screenshot (readable text, ~1200 tokens)
     },
     "voice": {
         "wake_words": ["batsy", "bat see", "bats see", "betsy", "batsie", "bitsy", "patsy"],

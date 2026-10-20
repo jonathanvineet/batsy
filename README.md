@@ -20,6 +20,9 @@ Log out and back in once so the Arduino serial-port permission (`dialout` group)
 | "Batsy, open Firefox and VS Code" | launches apps in the background |
 | "Batsy, set volume to 40 and pause the music" | `wpctl`, `playerctl` |
 | "Batsy, write a sketch that blinks pin 13 twice a second and upload it" | writes it, compiles, fixes errors, flashes, reads serial to check |
+| "Batsy, open the camera" | opens a live window showing your Lenovo webcam (no Claude call, no tokens) |
+| "Batsy, what am I holding?" / "what colour is this?" | grabs one small frame from that window and answers |
+| "Batsy, close the camera" | closes the window |
 | "Batsy, what's on my screen?" | takes a screenshot and looks at it |
 | "Batsy, tell me when my build finishes" / "when the website is back up" | background job or monitor that speaks up when it happens |
 | "Batsy, remind me in 20 minutes to check the oven" | timer (survives restarts) |
@@ -55,10 +58,20 @@ Log out and back in once so the Arduino serial-port permission (`dialout` group)
 
 ## Tuning
 
-- Voice replies feel slow? Use `effort = "low"` or `model = "claude-sonnet-5-5"`, and `whisper_model = "base.en"`.
+- Voice replies feel slow? Use `model = "claude-sonnet-5-5"` and `whisper_model = "base.en"`. For a long coding session, temporarily raise `effort` to `"medium"`.
+- Wrong camera? `batsy doctor` lists the cameras. Set `[camera] name = "..."` or `device = 2` in the config.
 - False wake-ups? Remove `"patsy"` and `"bitsy"` from `wake_words`. Missed wake-ups? Add how Vosk hears you (`batsy -v` logs it).
 - Batsy hears itself through the speakers? Use a headset, or turn on PipeWire echo cancellation.
 - Want keyboard and mouse control on Wayland? `sudo systemctl enable --now ydotool` (installed by `install.sh`).
+
+## Keeping token use low
+
+- **The camera never streams to Claude.** The window just shows the feed. Batsy sends a single 768px frame (about 450 tokens) only when you ask a question that needs it.
+- **Instant local commands** use no tokens at all: open/close camera, time, date, "volume 40", mute, play/pause, next, stop, new conversation.
+- **Lean context.** Effort defaults to `low`. Tool output is capped. Old tool results and images are dropped from context once it passes 20K tokens, and history past 50K is summarised. Web search and fetch are limited per question.
+- **Caching.** The system prompt and tools (about 3.3K tokens) are cached for an hour, so repeat questions only pay for the new part.
+- **No false triggers.** Whisper must confirm "Batsy" before anything is sent. Background chatter heard during the follow-up window is ignored.
+- **`batsy usage`** shows how many tokens you've used today, this week and all time. Each request is logged to `~/.local/share/batsy/usage.jsonl`.
 
 ## Cost and safety
 

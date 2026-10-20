@@ -22,11 +22,13 @@ log = logging.getLogger("batsy")
 FILLERS = ["On it.", "One sec.", "Working on it.", "Give me a moment."]
 STOP_WORDS = {"stop", "cancel", "never mind", "nevermind", "shut up", "be quiet", "quiet", "forget it"}
 RESET_PHRASES = {"new conversation", "start over", "fresh start", "clear context", "reset conversation"}
+# Whisper sometimes "hears" these in silence or background noise; never spend tokens on them.
+NOISE_TRANSCRIPTS = {"you", "thank you for watching", "bye", "uh", "um", "hmm", "so", ""}
 END_FOLLOWUP = {"thanks", "thank you", "that's all", "thats all", "nothing", "no", "no thanks", "that's it", "ok", "okay"}
 
 
 def _norm(text: str) -> str:
-    return re.sub(r"[^a-z' ]", "", text.lower()).strip()
+    return re.sub(r"\s+", " ", re.sub(r"[^a-z0-9' ]", "", text.lower())).strip()
 
 
 class Batsy:
@@ -121,7 +123,9 @@ class Batsy:
         os.execv(sys.executable, [sys.executable, "-m", "batsy", *sys.argv[1:]])
 
     def local_command(self, text: str) -> bool:
-        """Handle a few phrases instantly without calling Claude. Returns True if handled."""
+        """Handle common phrases instantly, without calling Claude (zero tokens). Returns True if handled."""
+        from batsy.tools import screen
+
         n = _norm(text)
         if n in STOP_WORDS:
             self.speaker.stop()
@@ -129,6 +133,31 @@ class Batsy:
         if n in RESET_PHRASES:
             self.brain.reset()
             self.speaker.say("Fresh start. I still remember the long-term stuff.")
+            return True
+        if re.fullmatch(r"(please )?(open|start|show|turn on)( up)?( the| my)? (camera|webcam)( please)?", n):
+            self.speaker.say(screen.open_camera(self.cfg))
+            return True
+        if re.fullmatch(r"(please )?(close|stop|hide|turn off)( the| my)? (camera|webcam)( please)?", n):
+            self.speaker.say(screen.close_camera())
+            return True
+        if re.fullmatch(r"what('s| is) the time( now)?|what time is it( now)?", n):
+            self.speaker.say(time.strftime("It's %-I:%M %p."))
+            return True
+        if re.fullmatch(r"what('s| is) (the date|today's date)|what day is (it|today)", n):
+            self.speaker.say(time.strftime("It's %A, %B %-d."))
+            return True
+        m = re.fullmatch(r"(set )?(the )?volume (to )?(\d{1,3})( percent)?", n)
+        if m:
+            subprocess.run(["wpctl", "set-volume", "@DEFAULT_AUDIO_SINK@", f"{min(int(m.group(4)), 100)}%"])
+            return True
+        if n in ("mute", "unmute", "toggle mute"):
+            subprocess.run(["wpctl", "set-mute", "@DEFAULT_AUDIO_SINK@", "toggle"])
+            return True
+        if n in ("pause", "play", "pause music", "play music", "resume", "resume music"):
+            subprocess.run(["playerctl", "play-pause"], stderr=subprocess.DEVNULL)
+            return True
+        if n in ("next", "next song", "next track", "skip"):
+            subprocess.run(["playerctl", "next"], stderr=subprocess.DEVNULL)
             return True
         return False
 
@@ -157,7 +186,7 @@ class Batsy:
                 if audio is None:
                     continue
                 text = self.stt.transcribe(audio)
-                if not text or _norm(text) in END_FOLLOWUP:
+                if _norm(text) in END_FOLLOWUP | NOISE_TRANSCRIPTS:
                     continue
             else:
                 frame = self.ears.read(0.5)
@@ -190,6 +219,8 @@ class Batsy:
             audio = np.frombuffer(b"".join(preroll), dtype=np.int16)
         text = self.stt.transcribe(audio)
         found, rest = strip_wake_word(text, self.cfg.get("voice.wake_words"))
+        if _norm(rest) in NOISE_TRANSCRIPTS:
+            rest = ""
         if not found and self.stt.engine == "whisper":
             log.info("wake word not confirmed by whisper (%r); ignoring", text)
             return None

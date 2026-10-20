@@ -8,7 +8,7 @@ import traceback
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
-MAX_RESULT_CHARS = 16000
+MAX_RESULT_CHARS = 8000  # every char of tool output is re-read on later turns; keep it lean
 
 _TYPE_CHECKS = {
     "string": lambda v: isinstance(v, str),

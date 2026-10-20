@@ -18,11 +18,11 @@ def register(reg):
         {
             "path": {"type": "string"},
             "start_line": {"type": "integer", "description": "1-based first line (optional)"},
-            "max_lines": {"type": "integer", "description": "default 400"},
+            "max_lines": {"type": "integer", "description": "default 200"},
         },
         ["path"],
     )
-    def read_file(ctx, path, start_line=1, max_lines=400):
+    def read_file(ctx, path, start_line=1, max_lines=200):
         p = _resolve(path)
         lines = p.read_text(errors="replace").splitlines()
         start = max(start_line, 1) - 1

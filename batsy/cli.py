@@ -5,6 +5,7 @@
   batsy ask TEXT   one-off request
   batsy doctor     check microphone, models, API key and tools
   batsy reset      archive the conversation and start fresh
+  batsy usage      tokens used today / this week / all time
 """
 import argparse
 import fcntl
@@ -109,6 +110,23 @@ def cmd_reset(cfg, args) -> None:
     print("Conversation archived. Long-term memory kept.")
 
 
+def cmd_usage(cfg, args) -> None:
+    import json
+    import time
+    from batsy.brain import USAGE_FILE
+
+    if not USAGE_FILE.exists():
+        print("No usage recorded yet.")
+        return
+    rows = [json.loads(l) for l in USAGE_FILE.read_text().splitlines() if l.strip()]
+    for label, since in (("today", time.mktime(time.strptime(time.strftime("%Y-%m-%d"), "%Y-%m-%d"))),
+                         ("last 7 days", time.time() - 7 * 86400), ("all time", 0)):
+        sel = [r for r in rows if r["t"] >= since]
+        tot = {k: sum(r[k] for r in sel) for k in ("in", "out", "cache_read", "cache_write")}
+        print(f"{label:12} {len(sel):5} requests | input {tot['in']:>9,} | cached read {tot['cache_read']:>10,} "
+              f"| cache write {tot['cache_write']:>9,} | output {tot['out']:>8,}")
+
+
 def cmd_doctor(cfg, args) -> None:
     def check(label, ok, hint=""):
         print(f"  [{'ok' if ok else '!!'}] {label}" + ("" if ok else f"  -> {hint}"))
@@ -138,6 +156,16 @@ def cmd_doctor(cfg, args) -> None:
                        ("ffmpeg", "dnf install ffmpeg-free"), ("ydotool", "dnf install ydotool (optional)")]:
         check(tool, bool(shutil.which(tool) or os.path.exists(os.path.expanduser(f"~/.local/bin/{tool}"))), hint)
     try:
+        import cv2  # noqa: F401
+        check("opencv (camera window)", True)
+    except Exception:
+        check("opencv (camera window)", False, "pip install opencv-python")
+    from batsy.camera_view import find_camera, list_cameras
+
+    cams = list_cameras()
+    check(f"cameras: {'; '.join(cams) or 'none'} -> using /dev/video{find_camera(cfg.get('camera.name'))}", bool(cams),
+          "plug in the webcam")
+    try:
         import grp
 
         check("serial access (dialout group)", "dialout" in [grp.getgrgid(g).gr_name for g in os.getgroups()],
@@ -158,9 +186,10 @@ def main() -> None:
     p.add_argument("--speak", action="store_true")
     sub.add_parser("doctor", help="check the setup")
     sub.add_parser("reset", help="start a fresh conversation")
+    sub.add_parser("usage", help="show token usage")
     args = parser.parse_args()
 
     cfg = Config.load()
     _setup_logging(args.verbose or args.cmd in (None, "run") and sys.stderr.isatty())
     {"run": cmd_run, None: cmd_run, "chat": cmd_chat, "ask": cmd_ask,
-     "doctor": cmd_doctor, "reset": cmd_reset}[args.cmd](cfg, args)
+     "doctor": cmd_doctor, "reset": cmd_reset, "usage": cmd_usage}[args.cmd](cfg, args)

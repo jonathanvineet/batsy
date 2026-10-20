@@ -78,12 +78,12 @@ def register(reg):
             )
         except subprocess.TimeoutExpired as e:
             out = (e.stdout or "") if isinstance(e.stdout, str) else (e.stdout or b"").decode(errors="replace")
-            return f"TIMED OUT after {timeout}s. Partial output:\n{truncate(out, 6000)}\nRe-run with background=true if it needs longer."
+            return f"TIMED OUT after {timeout}s. Partial output:\n{truncate(out, 3000)}\nRe-run with background=true if it needs longer."
         parts = [f"exit code: {p.returncode}"]
         if p.stdout.strip():
-            parts.append(f"stdout:\n{truncate(p.stdout, 12000)}")
+            parts.append(f"stdout:\n{truncate(p.stdout, 6000)}")
         if p.stderr.strip():
-            parts.append(f"stderr:\n{truncate(p.stderr, 4000)}")
+            parts.append(f"stderr:\n{truncate(p.stderr, 2000)}")
         return "\n".join(parts)
 
     @reg.tool(
@@ -92,11 +92,11 @@ def register(reg):
         {
             "action": {"type": "string", "enum": ["list", "output", "stop"]},
             "job_id": {"type": "string"},
-            "tail_chars": {"type": "integer", "description": "how much of the log end to return (default 4000)"},
+            "tail_chars": {"type": "integer", "description": "how much of the log end to return (default 2000)"},
         },
         ["action"],
     )
-    def jobs(ctx, action, job_id=None, tail_chars=4000):
+    def jobs(ctx, action, job_id=None, tail_chars=2000):
         if action == "list":
             if not _jobs:
                 return "No background jobs."
