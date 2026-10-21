@@ -55,6 +55,9 @@ LOCAL_TOOLS = {
     "remember": ("Save a lasting fact about the user.", {"fact": {"type": "string"}}, ["fact"]),
     "camera": ("Open or close the live camera window.",
                {"action": {"type": "string", "enum": ["open", "close"]}}, ["action"]),
+    "look": ("See the camera (what the user is holding/showing) or the screen. Claude looks and answers.",
+             {"source": {"type": "string", "enum": ["webcam", "screen"]}, "question": {"type": "string"}},
+             ["source", "question"]),
     "ask_claude": ("Hand a hard request to Claude (expert answers, code, careful reasoning). Claude replies to the user.",
                    {"request": {"type": "string"}}, ["request"]),
 }
@@ -65,6 +68,21 @@ COMPLEX = re.compile(
     r"explain (why|how|the difference)|step by step|compare|difference between|pros and cons|analy[sz]e|"
     r"summari[sz]e|essay|email|letter|report|cover letter|resume|plan (a|my|the)|itinerary|design|calculate|"
     r"solve|prove|derive|translate|strategy|optimi[sz]e|review my|in detail|detailed|research)\b")
+
+
+# Questions about what the camera or screen shows: the small model can't see, so Claude looks at one frame.
+VISION = re.compile(
+    r"\b(what am i holding|what('s| is) (this|that)( thing| in my hand)?\??$|what do you see|can you see|look at (this|me|my)|"
+    r"what('s| is) in front of|in my hand|on (my|the) screen|this (error|page|window|tab|message)|"
+    r"what colou?r is (this|my)|read (this|that)|how do i look|do you see|which (one|component) is this|identify this)")
+SCREEN_WORDS = re.compile(r"\b(screen|window|page|tab|error|message|browser|code)\b")
+
+
+def vision_source(text: str) -> str | None:
+    t = text.lower().strip(" ?.!")
+    if not VISION.search(t):
+        return None
+    return "screen" if SCREEN_WORDS.search(t) else "webcam"
 
 
 def is_complex(text: str) -> bool:
@@ -163,6 +181,10 @@ class LocalBrain:
             if self.visual and not abort.is_set():
                 threading.Thread(target=self.visual, args=(kind, arg), daemon=True).start()
 
+        src = vision_source(text)
+        if src and self.claude_ok:
+            self._look(src, text, context, emit, on_marker, on_tool, actions)
+            return self._finish(source, text, spoken, actions, abort)
         if self.claude_ok and is_complex(text):
             self._claude(text, context, emit, on_marker, on_tool, actions)
             return self._finish(source, text, spoken, actions, abort)
@@ -191,6 +213,11 @@ class LocalBrain:
                         args = json.loads(args)
                     except ValueError:
                         args = {}
+                if name == "look" and self.claude_ok:
+                    self._look(args.get("source", "webcam"), args.get("question") or text, context,
+                               emit, on_marker, on_tool, actions)
+                    handed_off = True
+                    break
                 if name == "ask_claude" and self.claude_ok:
                     self._claude(args.get("request") or text, context, emit, on_marker, on_tool, actions)
                     handed_off = True
@@ -210,6 +237,19 @@ class LocalBrain:
         reply = " ".join(spoken)
         self.memory.add_exchange(source, text, reply + (" (interrupted)" if abort.is_set() else ""), actions)
         return reply
+
+    def _look(self, source, question, context, emit, on_marker, on_tool, actions) -> None:
+        """One frame from the camera window (or a screenshot) -> Claude Code looks at it and answers."""
+        from batsy.tools.screen import capture
+
+        img = WORKSPACE / ".vision" / f"{source}.jpg"
+        err = capture(source, img, self.cfg)
+        if err:
+            emit(f"I couldn't see the {source}: {err[:120]}")
+            return
+        actions.append(f"looked at {source}")
+        self._claude(f"{question}\n\n(Read the image at {img}: it's the user's {'screen' if source == 'screen' else 'webcam, showing them and what they hold'} right now.)",
+                     context, emit, on_marker, on_tool, actions)
 
     def _claude(self, request, context, emit, on_marker, on_tool, actions) -> None:
         """Answer with Claude Code on the user's Pro plan; its reply goes straight to speech and screen."""

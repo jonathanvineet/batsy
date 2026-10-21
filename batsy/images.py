@@ -1,8 +1,10 @@
-"""Find the *right* picture and facts for something, without involving an AI (no tokens).
+"""Find the *right* picture and facts for something.
 
-Not "top search result": the query is first resolved to the exact Wikipedia entity, then candidates
-from that article and from Wikimedia Commons are scored on how well they match, curated quality
-(featured / quality / valued images and the article's own lead image), resolution and shape.
+Not "top search result": candidates come from the live web (DuckDuckGo images: current photos, pinouts,
+diagrams), the exact Wikipedia entity's editor-chosen image, and Wikimedia Commons. Each is scored on
+match, source trust (e.g. Adafruit / Random Nerd Tutorials for pinouts; stock-photo sites penalised),
+curated quality, resolution and shape. For technical images (pinouts, schematics...) Claude Code then
+looks at the top few and picks the correct, legible one; the screen updates if it disagrees.
 Facts come from the entity's encyclopedia summary, not a search snippet.
 """
 import difflib
@@ -20,7 +22,7 @@ from pathlib import Path
 
 from PIL import Image
 
-from batsy.config import DATA_DIR
+from batsy.config import DATA_DIR, WORKSPACE
 
 CACHE = DATA_DIR / "images"
 UA = {"User-Agent": "Batsy/0.2 (personal voice assistant)"}
@@ -147,56 +149,181 @@ def download(url: str) -> Path:
         data = r.read(MAX_BYTES + 1)
     if len(data) > MAX_BYTES:
         raise ValueError("image too large")
-    img = Image.open(io.BytesIO(data)).convert("RGB")
+    img = Image.open(io.BytesIO(data))
+    img = (img.convert("RGBA") if img.mode in ("P", "LA") else img).convert("RGB")
+    if min(img.size) < 200:
+        raise ValueError("image too small")
     img.thumbnail((2400, 2400))
     img.save(out, "JPEG", quality=90)
     return out
 
 
-def best_image(query: str, entity: Entity | None = None) -> tuple[Path, str]:
-    """The best picture for the query: (local path, caption)."""
-    entity = entity or resolve(query)
+TECHNICAL = re.compile(r"\b(pin ?outs?|pin diagram|pins|diagram|schematic|wiring|circuit|datasheet|footprint|"
+                       r"block diagram|flow ?chart|chart|graph|infographic|map|layout|dimensions|blueprint|"
+                       r"cheat ?sheet|logo|screenshot|interface|connections?|module|sensor|board|chip|ic)\b")
+RECENT = re.compile(r"\b(latest|newest|new|current|recent|today|this year|20[2-3]\d)\b")
+TRUSTED = re.compile(r"(randomnerdtutorials|lastminuteengineers|components101|electronicwings|adafruit|sparkfun|"
+                     r"arduino\.cc|espressif|raspberrypi|pinout\.xyz|circuitdigest|microchip|st\.com|ti\.com|"
+                     r"nordicsemi|seeedstudio|wokwi|instructables|hackster|electronicshub|theengineeringprojects|"
+                     r"wikipedia|wikimedia|nasa\.gov|reuters|apnews|bbc|nationalgeographic|britannica)")
+STOCK = re.compile(r"(shutterstock|alamy|istockphoto|gettyimages|dreamstime|depositphotos|123rf|vecteezy|"
+                   r"freepik|aliexpress|alibaba|temu|pinimg|pinterest|ebay)")
+# image-scraping farms that re-host other sites' pictures (often wrong or low quality)
+JUNK = re.compile(r"(narodnatribuna|inspiredpencil|detailspin|wiringdiagram|wiring-diagram|diagramweb|schematron|"
+                  r"/lists/|pictures-20\d\d|wallpaper|clipart|\.edu\.pe/post|blogspot|imgur)")
+
+
+def _web(query: str, limit: int = 25) -> list[dict]:
+    """Live web image search (no API key)."""
+    try:
+        from ddgs import DDGS
+    except ImportError:
+        return []
+    out = []
+    for i, r in enumerate(DDGS().images(query, max_results=limit) or []):
+        if not r.get("image"):
+            continue
+        out.append({"url": r["image"], "alt": r.get("thumbnail"), "w": int(r.get("width") or 0),
+                    "h": int(r.get("height") or 0), "title": r.get("title", ""), "desc": r.get("url", ""),
+                    "source": (r.get("source") or "") + " " + (r.get("url") or ""), "rank": i, "quality": 0})
+    return out
+
+
+def _source_bonus(c: dict) -> float:
+    src = (c.get("source") or "") + " " + c["url"]
+    return (1.2 if TRUSTED.search(src) else 0.0) - (2.5 if STOCK.search(src) else 0.0) - \
+        (2.0 if JUNK.search(src) else 0.0)
+
+
+def best_image(query: str, entity: Entity | None = None, on_better=None) -> tuple[Path, str]:
+    """The best picture for the query: (local path, caption). on_better(path, caption) is called later
+    if Claude, looking at the top candidates, picks a better one (technical images only)."""
+    technical = bool(TECHNICAL.search(query.lower()))
+    try:
+        entity = entity or (None if technical else resolve(query))
+    except Exception:
+        entity = None
     extra = _words(query) - (_words(entity.title) if entity else set())
     candidates = []
+    try:
+        candidates += _web(query)
+    except Exception:
+        pass
     # The article's own lead image is hand-picked by editors: best when the query is just the thing itself.
     if entity and entity.lead_image:
         candidates.append({"url": entity.lead_image, "alt": _thumb(entity.lead_image), "w": 1600, "h": 1100, "title": entity.title, "desc": entity.title,
                            "rank": 0, "quality": 2.2 if not extra else 0.5, "caption": entity.title})
     # Commons covers specifics ("at night", "interior", "1969"): search with the resolved name plus the extras.
-    search = f"{entity.title} {' '.join(sorted(extra))}".strip() if entity else query
-    try:
-        candidates += _commons(search)
-    except Exception:
-        pass
+    if not technical:
+        search = f"{entity.title} {' '.join(sorted(extra))}".strip() if entity else query
+        try:
+            candidates += _commons(search)
+        except Exception:
+            pass
     if not candidates:
         raise LookupError(f"No good picture found for '{query}'.")
-    ranked = sorted(candidates, key=lambda c: _score(c, query, entity), reverse=True)
-    for c in ranked[:4]:
-        caption = c.get("caption") or (entity.title if entity else c["title"])
-        if extra and entity:
-            caption = f"{entity.title} ({' '.join(sorted(extra))})"
-        for url in filter(None, (c.get("alt"), c["url"])):  # a sensible-size thumbnail first, then the original
-            try:
-                return download(url), caption
-            except Exception:
-                continue
-    raise LookupError(f"Couldn't download a picture for '{query}'.")
+    ranked = sorted(candidates, key=lambda c: _score(c, query, entity) + _source_bonus(c), reverse=True)
+
+    def caption_for(c: dict) -> str:
+        if c.get("caption"):
+            return c["caption"]
+        if entity:
+            return f"{entity.title} ({' '.join(sorted(extra))})" if extra else entity.title
+        return query.strip().capitalize()
+
+    def fetch(c: dict, thumb: bool) -> Path | None:
+        if thumb:  # last resort: small preview image
+            url = c.get("alt")
+        elif c.get("source", "").strip() == "wikipedia":
+            url = c.get("alt") or c["url"]  # a sensibly sized Wikimedia thumbnail
+        else:
+            url = c["url"]  # full image: thumbnails are too small to read a pinout
+        try:
+            return download(url) if url else None
+        except Exception:
+            return None
+
+    top = ranked[:8]
+    first = None
+    for thumb in (False, True):  # every full-size candidate before any thumbnail
+        for c in top:
+            path = fetch(c, thumb)
+            if path:
+                first = (path, c)
+                break
+        if first:
+            break
+    if not first:
+        raise LookupError(f"Couldn't download a picture for '{query}'.")
+
+    if technical and on_better:
+        import threading
+        from concurrent.futures import ThreadPoolExecutor
+
+        def verify():  # in the background: the first pick is already on screen
+            rest = [c for c in top if c is not first[1]][:5]
+            with ThreadPoolExecutor(4) as pool:
+                got = [(p, c) for p, c in zip(pool.map(lambda c: fetch(c, False), rest), rest) if p][:3]
+            options = [first] + got
+            if len(options) < 2:
+                return
+            pick = claude_pick(query, [p for p, _ in options])
+            if pick and 1 < pick <= len(options):
+                path, c = options[pick - 1]
+                on_better(path, caption_for(c))
+
+        threading.Thread(target=verify, daemon=True, name="image-verify").start()
+    return first[0], caption_for(first[1])
+
+
+def claude_pick(query: str, paths: list[Path]) -> int | None:
+    """Let Claude Code look at candidate images and choose the right one (1-based), or None."""
+    import shutil
+    import subprocess
+
+    exe = shutil.which("claude")
+    if not exe:
+        return None
+    vis = WORKSPACE / ".vision"
+    vis.mkdir(parents=True, exist_ok=True)
+    local = []
+    for i, p in enumerate(paths, 1):
+        dst = vis / f"candidate{i}.jpg"
+        dst.write_bytes(Path(p).read_bytes())
+        local.append(dst)
+    listing = "\n".join(f"{i}) {p}" for i, p in enumerate(local, 1))
+    prompt = (f"Read each of these images:\n{listing}\nWhich one best shows: \"{query}\"? It must be correct "
+              f"(right part/model), complete, legible, and not watermarked. Reply with only the number, or 0 if none.")
+    try:
+        r = subprocess.run([exe, "-p", prompt, "--output-format", "text", "--allowedTools", "Read"],
+                           cwd=WORKSPACE, capture_output=True, text=True, timeout=120)
+        m = re.search(r"\b([0-9])\b", r.stdout)
+        return int(m.group(1)) if m else None
+    except Exception:
+        return None
 
 
 # Kept for callers that only want a picture.
-def find_image(query: str, source: str = "auto") -> tuple[Path, str]:
-    return best_image(query)
+def find_image(query: str, on_better=None) -> tuple[Path, str]:
+    return best_image(query, on_better=on_better)
 
 
-def pull_up(query: str) -> dict:
+def pull_up(query: str, on_better=None) -> dict:
     """Everything for an on-screen panel: the resolved entity, its best picture and accurate facts."""
-    entity = resolve(query)
-    if entity is None:
-        raise LookupError(f"I couldn't work out what '{query}' refers to.")
+    technical = bool(TECHNICAL.search(query.lower()))
     try:
-        path, caption = best_image(query, entity)
+        entity = None if technical else resolve(query)
+    except Exception:
+        entity = None
+    try:
+        path, caption = best_image(query, entity, on_better)
     except LookupError:
+        if entity is None:
+            raise LookupError(f"I couldn't find anything for '{query}'.")
         path, caption = None, ""
+    if entity is None:  # pinouts, diagrams...: the picture is the answer
+        return {"title": caption or query, "description": "", "facts": "", "spoken": f"Here's {caption or query}.",
+                "image": str(path), "caption": caption, "url": ""}
     sentences = re.split(r"(?<=[.!?])\s+", entity.summary)
     return {
         "title": entity.title,

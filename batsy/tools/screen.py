@@ -96,6 +96,20 @@ def _capture_webcam(out: Path, cfg) -> str | None:
     return None if p.returncode == 0 else p.stderr.strip()[:300]
 
 
+def capture(source: str, out: Path, cfg) -> str | None:
+    """Save one camera frame or screenshot to `out` (downscaled JPEG). Returns an error string or None."""
+    out.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory() as tmp:
+        raw = Path(tmp) / ("shot.png" if source == "screen" else "cam.jpg")
+        err = _capture_screen(raw) if source == "screen" else _capture_webcam(raw, cfg)
+        if err:
+            return err
+        img = Image.open(raw).convert("RGB")
+        img.thumbnail((cfg.get("camera.screen_edge" if source == "screen" else "camera.snapshot_edge"),) * 2)
+        img.save(out, "JPEG", quality=85)
+    return None
+
+
 def _encode(path: Path, edge: int) -> str:
     img = Image.open(path).convert("RGB")
     img.thumbnail((edge, edge))

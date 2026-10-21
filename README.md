@@ -55,7 +55,12 @@ The overlay closes by itself a few seconds after the answer, or 30 seconds after
 
 - **Your usual phrases work instantly, with no AI:** "pull up connections for Nikola Tesla", "pull up the Taj Mahal", "show me a picture of a capybara", "what does a quokka look like". **Pull up** shows the best picture with an accurate facts card and speaks the first line. **Picture** shows just the picture.
 - **Say it any other way** ("gimme a quick look at the Golden Gate Bridge", "throw everything on Marie Curie on the screen") and the AI works out what you meant. Batsy then **learns that phrasing**, so next time it's instant. Plain questions like "what is…" or "who's…" are never learned as show phrases. `batsy vocab` lists the phrases, and `batsy vocab --forget "phrase {x}"` removes one.
+- **Current pictures and technical diagrams:** Batsy searches the live web too (DuckDuckGo images, no key needed), so "ESP32 pinout", "HC-SR04 wiring diagram" or "latest iPhone" find up-to-date images, not old Wikipedia photos. Results from trusted electronics sites (Random Nerd Tutorials, Adafruit, SparkFun, Espressif…) rank higher. Stock-photo watermarks and image-scraping sites rank lower. For technical images, the best guess appears in about 2 seconds while **Claude Code looks at the top 4 candidates in the background**. If it finds a more correct, readable one, the picture on screen is swapped.
 - **The right picture, not the top search hit:** Batsy first works out exactly what you mean, so "jaguar animal" gives the animal and not the car. It then compares the article's editor-chosen image with high-resolution Wikimedia Commons photos. Images Wikipedia rates as featured or quality score highest, and wrong matches, tiny images and odd shapes score lowest. Specifics like "at night" or "interior" are taken into account. The facts come from the encyclopedia summary, not a search snippet.
+
+## Camera and screen questions
+
+The live camera window is local: OpenCV shows the feed and nothing streams anywhere. The local AI can't see. So when you ask something visual, like "what am I holding?", "what's this?", "which component is this?", "how do I look?" or "read this error on my screen", Batsy saves **one frame** (768 px) or a screenshot. Claude Code then looks at that image and answers. Each look uses a little of your Pro allowance, roughly one image plus the question. It isn't continuous video: every question is a fresh snapshot.
 
 ## Screensaver: token usage
 

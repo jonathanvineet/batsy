@@ -112,7 +112,7 @@ class Batsy:
                 print(f"\n[{title.strip()}]\n{body.strip()}")
             return title.strip()
         try:
-            path, caption = images.find_image(arg)
+            path, caption = images.find_image(arg, on_better=self._better_picture)
         except Exception as e:
             log.warning("no picture for %r: %s", arg, e)
             return None
@@ -122,10 +122,18 @@ class Batsy:
             subprocess.Popen(["xdg-open", str(path)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         return caption
 
+    def _better_picture(self, path, caption: str) -> None:
+        """Claude looked at the candidates and preferred another one: swap it in."""
+        log.info("Claude picked a better picture: %s", caption)
+        if self.overlay.enabled:
+            self.overlay.image(path, caption)
+        else:
+            subprocess.Popen(["xdg-open", str(path)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
     def pull_up(self, subject: str, speak: bool = True) -> str | None:
         """Picture + accurate facts card for a person/place/thing. Returns the resolved name."""
         try:
-            d = images.pull_up(subject)
+            d = images.pull_up(subject, on_better=self._better_picture)
         except Exception as e:
             log.warning("pull up %r failed: %s", subject, e)
             if speak:
@@ -135,7 +143,8 @@ class Batsy:
         if self.overlay.enabled:
             if d["image"]:
                 self.overlay.image(d["image"], d["caption"])
-            self.overlay.card(d["title"], body)
+            if body:
+                self.overlay.card(d["title"], body)
         else:
             print(f"\n[{d['title']}]\n{body}\n{d['url']}")
             if d["image"]:
