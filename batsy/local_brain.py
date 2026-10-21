@@ -181,7 +181,13 @@ class LocalBrain:
             if self.visual and not abort.is_set():
                 threading.Thread(target=self.visual, args=(kind, arg), daemon=True).start()
 
+        from batsy import docs
         from batsy.learning import ACTION, norm
+
+        doc = self._doc_target(text)
+        if doc is not None:
+            self._doc(text, doc, context, emit, on_marker, on_tool, actions)
+            return self._finish(source, text, spoken, actions, abort)
 
         if self.claude_ok and self.skills and ACTION.match(norm(text)):
             # a new kind of action: Claude writes code for it once; next time it runs without any AI
@@ -270,6 +276,50 @@ class LocalBrain:
         self.memory.add_exchange(source, text, reply + (" (interrupted)" if abort.is_set() else ""), actions)
         return reply
 
+    def _doc_target(self, text: str):
+        """The file this request is about ("this pdf", "my physics notes"), or a follow-up edit of the last one."""
+        from pathlib import Path
+
+        from batsy import docs
+
+        parsed = docs.parse_request(text)
+        if parsed:
+            name, kind = parsed
+            path = docs.resolve_file(name, kind)
+            return path if path else Path("/nonexistent")  # tell the user we couldn't find it
+        last = getattr(self, "last_doc", None)
+        if last and time.time() - last[1] < 1200 and docs.EDIT_VERBS.search(text.lower()) and \
+                re.search(r"\b(it|this|that|there|also|now|again|too|page|line|word|the)\b", text.lower()):
+            return last[0]
+        return None
+
+    def _doc(self, text, path, context, emit, on_marker, on_tool, actions) -> None:
+        """Read the file locally (and remember it), then let Claude Code do what was asked with Batsy's doc tools."""
+        from batsy import docs
+
+        if not path.exists():
+            emit("I couldn't find that file. Tell me its name, or open it first and say this again.")
+            return
+        if not self.claude_ok:
+            note = docs.learn(path)
+            emit(f"I've read {path.name}, {note}. Claude Code isn't set up, so I can't mark it up yet.")
+            return
+        emit(f"Looking at {path.stem.replace('_', ' ')}.")
+        if on_tool:
+            on_tool("doc")
+        try:
+            note = docs.learn(path)
+        except Exception as e:
+            log.warning("could not read %s: %s", path, e)
+            note = "unreadable locally"
+        self.last_doc = (path, time.time())
+        actions.append(f"worked on file {path}")
+        answer = ask_claude_docs(text, path, docs.info(path), note, context)
+        chunker = SpeechChunker(emit, on_marker)
+        chunker.feed(answer)
+        chunker.flush()
+        self.memory.set_document_summary(str(path), answer[:600])
+
     def _look(self, source, question, context, emit, on_marker, on_tool, actions) -> None:
         """One frame from the camera window (or a screenshot) -> Claude Code looks at it and answers."""
         from batsy.tools.screen import capture
@@ -306,6 +356,54 @@ To put something on their screen, add markers (not spoken): [[show: exact name]]
 numbers or code summaries. Put any code or files under {workspace} and just say where.
 {context}
 User: {request}"""
+
+
+DOC_BRIEF = """You are the hands and eyes of Batsy, a voice assistant on the user's Fedora laptop. The user said: \
+"{request}"
+
+It's about this file: {path}
+{info} ({note}). Never modify the original. Put anything you create in {out_dir}.
+
+Read it yourself with Read (PDF pages and images both work). Batsy's document tools (run with Bash):
+  batsy doc text FILE                  full text (OCR for images/scans)
+  batsy doc find FILE "exact words"    exact positions of text, as [{{page, bbox:[x0,y0,x1,y1]}}]
+  batsy doc render FILE --page N --grid  PNG of the page with a pixel grid, for placing shapes; Read it to look
+  batsy doc annotate FILE 'JSON'       mark up a copy. JSON: {{"actions": [...]}}, each action has a type, one of \
+highlight, underline, strike, circle, box, note, label, arrow or redact. Give exact "text" (found for you, best \
+for words) or "bbox" in render pixels (for drawings and objects). Optional: "page", "color" (red, yellow, green, \
+blue, orange, purple, pink, black), "occurrence"; label/note take "text"; arrow takes "from"/"to". Returns the \
+output path and anything not found.
+For anything else (crop, rotate, convert, extract tables, fill forms, merge...), write and run Python with \
+{python} (PyMuPDF as pymupdf, Pillow, pytesseract available).
+
+After marking something up, render the output and look at it. Fix anything misplaced before you finish.
+Final reply: two or three spoken sentences about what you found or did, no markdown. Then [[open: OUTPUT_PATH]] \
+for every file you made, and optionally [[card: Title | line; line]] for key facts.
+{context}"""
+
+
+def ask_claude_docs(request: str, path, info: dict, note: str, context: str = "", timeout: int = 600) -> str:
+    """Claude Code reads the file and does the job, using `batsy doc ...` and Python, then checks its own work."""
+    import sys
+
+    from batsy.docs import OUT_DIR
+
+    exe = shutil.which("claude")
+    if not exe:
+        return "Claude Code isn't installed."
+    OUT_DIR.mkdir(parents=True, exist_ok=True)
+    prompt = DOC_BRIEF.format(request=request, path=path, info=json.dumps(info), note=note, out_dir=OUT_DIR,
+                              python=sys.executable, context=context)
+    env = dict(os.environ, PATH=f"{os.path.dirname(sys.executable)}:{os.path.expanduser('~/.local/bin')}:"
+                                f"{os.environ.get('PATH', '')}")
+    try:
+        p = subprocess.run([exe, "-p", prompt, "--output-format", "text", "--permission-mode", "acceptEdits",
+                            "--add-dir", str(path.parent), "--add-dir", str(OUT_DIR),
+                            "--allowedTools", f"Read,Write,Edit,Glob,Grep,Bash(batsy doc:*),Bash({sys.executable}:*)"],
+                           cwd=OUT_DIR, capture_output=True, text=True, timeout=timeout, env=env)
+    except subprocess.TimeoutExpired:
+        return "That took too long. Try a smaller part of the file."
+    return (p.stdout.strip() or p.stderr.strip() or "Claude didn't answer.")[:3000]
 
 
 def ask_claude(prompt: str, context: str = "", timeout: int = 240) -> str:

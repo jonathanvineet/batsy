@@ -93,7 +93,7 @@ def build_system_prompt() -> str:
     )
 
 
-MARKER = re.compile(r"\[\[(show|card|pull):\s*(.*?)\]\]", re.S)
+MARKER = re.compile(r"\[\[(show|card|pull|open):\s*(.*?)\]\]", re.S)
 
 
 class SpeechChunker:

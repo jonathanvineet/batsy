@@ -68,6 +68,21 @@ The overlay closes by itself a few seconds after the answer, or 30 seconds after
 - **Current pictures and technical diagrams:** Batsy searches the live web too (DuckDuckGo images, no key needed), so "ESP32 pinout", "HC-SR04 wiring diagram" or "latest iPhone" find up-to-date images, not old Wikipedia photos. Results from trusted electronics sites (Random Nerd Tutorials, Adafruit, SparkFun, Espressif…) rank higher. Stock-photo watermarks and image-scraping sites rank lower. For technical images, the best guess appears in about 2 seconds while **Claude Code looks at the top 4 candidates in the background**. If it finds a more correct, readable one, the picture on screen is swapped.
 - **The right picture, not the top search hit:** Batsy first works out exactly what you mean, so "jaguar animal" gives the animal and not the car. It then compares the article's editor-chosen image with high-resolution Wikimedia Commons photos. Images Wikipedia rates as featured or quality score highest, and wrong matches, tiny images and odd shapes score lowest. Specifics like "at night" or "interior" are taken into account. The facts come from the encyclopedia summary, not a search snippet.
 
+## Files: PDFs, images, documents
+
+Talk about any file on the laptop: PDF, PNG/JPG/other images, DOCX, text or code.
+- "See this PDF" / "learn from my physics notes"
+- "Circle all the dates in this PDF" / "highlight the formulas" / "box the pin 13 description in the Arduino datasheet"
+- "Label the resistor values in this picture" / "redact my phone number" / "crop this image" / "turn these tables into a spreadsheet"
+
+**What happens:**
+1. **Batsy finds the file and says its name**, so you know it picked the right one. It uses the name you gave, or otherwise the file you opened most recently, or something new in Downloads, Desktop or Screenshots.
+2. **It reads the file on the laptop** (PDF text, OCR for images and scans) and stores it in local memory. Later questions like "when was the exam date in those notes?" can then use it.
+3. **Claude Code does what you asked.** It reads the file, finds exact text positions, renders pages with a coordinate grid to place circles and arrows, and marks up a copy. Then it **looks at its own result and fixes anything misplaced**. For anything else (convert, crop, rotate, extract, fill, merge…) it writes and runs Python.
+4. **The result opens** in your viewer and appears on screen, saved in `~/Batsy/docs/` as `<name>-marked.pdf` or `.png`. **Your original is never changed.**
+
+Follow-ups work too: "now underline the second one as well" applies to the same file. Each file job is one Claude Code request on your Pro plan. Bigger files and more marks take longer, usually 20–60 seconds.
+
 ## Camera and screen questions
 
 The live camera window is local: OpenCV shows the feed and nothing streams anywhere. The local AI can't see. So when you ask something visual, like "what am I holding?", "what's this?", "which component is this?", "how do I look?" or "read this error on my screen", Batsy saves **one frame** (768 px) or a screenshot. Claude Code then looks at that image and answers. Each look uses a little of your Pro allowance, roughly one image plus the question. It isn't continuous video: every question is a fresh snapshot.

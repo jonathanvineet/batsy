@@ -16,7 +16,7 @@ say() { printf '\n\033[1;35m==> %s\033[0m\n' "$*"; }
 say "Installing system packages (needs your password)"
 PKGS=(python3 python3-pip python3-devel gcc gcc-c++ portaudio portaudio-devel espeak-ng
       pipewire-utils alsa-utils libnotify ffmpeg-free gnome-screenshot brightnessctl playerctl
-      lm_sensors ydotool v4l-utils unzip curl git
+      lm_sensors ydotool v4l-utils unzip curl git tesseract tesseract-langpack-eng
       xcb-util-cursor libxkbcommon-x11 qt6-qtwayland)
 if ! sudo dnf install -y "${PKGS[@]}"; then
   # older dnf has no --skip-unavailable; fall back to one at a time
@@ -35,7 +35,7 @@ echo "  using $($PY --version)"
 [ -x "$VENV/bin/python" ] || "$PY" -m venv "$VENV"
 "$VENV/bin/pip" install -q --upgrade pip wheel
 "$VENV/bin/pip" install -q -e "$REPO"
-"$VENV/bin/pip" install -q sounddevice vosk opencv-python ddgs
+"$VENV/bin/pip" install -q sounddevice vosk opencv-python ddgs pymupdf pytesseract python-docx
 "$VENV/bin/pip" install -q PySide6 || echo "  PySide6 failed to install; the full-screen overlay will be off."
 "$VENV/bin/pip" install -q piper-tts || echo "  piper-tts failed to install; Batsy will speak with espeak-ng."
 "$VENV/bin/pip" install -q faster-whisper || echo "  faster-whisper failed to install; Batsy will use Vosk for speech recognition."

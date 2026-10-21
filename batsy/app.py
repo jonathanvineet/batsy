@@ -159,6 +159,8 @@ class Batsy:
         """Put a picture ([[show: query]]) or a text card ([[card: Title | text]]) on screen.
         Returns the picture's caption, or None if nothing was found."""
         self._turn_markers.append((kind, arg))
+        if kind == "open":
+            return self.open_result(arg)
         if kind == "pull":
             return self.pull_up(arg, speak=False)
         if kind == "card":
@@ -178,6 +180,24 @@ class Batsy:
         else:
             subprocess.Popen(["xdg-open", str(path)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         return caption
+
+    def open_result(self, path_str: str) -> str | None:
+        """A file Batsy made (marked-up PDF, edited image...): open it and preview it on screen."""
+        from pathlib import Path
+
+        from batsy import docs
+
+        path = Path(path_str.strip().strip('"').strip("'")).expanduser()
+        if not path.exists():
+            log.warning("result file missing: %s", path)
+            return None
+        subprocess.Popen(["xdg-open", str(path)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        if self.overlay.enabled and path.suffix.lower() in docs.PDF | docs.IMAGES:
+            try:
+                self.overlay.image(docs.render(path, 1) if path.suffix.lower() in docs.PDF else path, path.name)
+            except Exception as e:
+                log.warning("preview failed: %s", e)
+        return path.name
 
     def _better_picture(self, path, caption: str) -> None:
         """Claude looked at the candidates and preferred another one: swap it in."""

@@ -233,6 +233,12 @@ def cmd_doctor(cfg, args) -> None:
 
 
 def main() -> None:
+    if len(sys.argv) > 1 and sys.argv[1] == "doc":  # `batsy doc ...`: document tools (used by Claude Code)
+        from batsy import docs
+
+        Config.load()
+        docs.cli(sys.argv[2:])
+        return
     parser = argparse.ArgumentParser(prog="batsy", description="Batsy voice assistant")
     parser.add_argument("-v", "--verbose", action="store_true", help="log to the terminal too")
     sub = parser.add_subparsers(dest="cmd")

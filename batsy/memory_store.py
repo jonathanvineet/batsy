@@ -44,6 +44,8 @@ class MemoryStore:
                     user TEXT, reply TEXT, actions TEXT);
                 CREATE TABLE IF NOT EXISTS facts (id TEXT PRIMARY KEY, t REAL, fact TEXT);
                 CREATE TABLE IF NOT EXISTS state (key TEXT PRIMARY KEY, value TEXT);
+                CREATE TABLE IF NOT EXISTS documents (path TEXT PRIMARY KEY, name TEXT, summary TEXT, t REAL);
+                CREATE TABLE IF NOT EXISTS doc_chunks (id INTEGER PRIMARY KEY, path TEXT, page INTEGER, text TEXT);
                 CREATE TABLE IF NOT EXISTS agenda (id INTEGER PRIMARY KEY, day TEXT, text TEXT, t REAL);
                 CREATE INDEX IF NOT EXISTS agenda_day ON agenda(day);
             """)
@@ -54,6 +56,13 @@ class MemoryStore:
                     CREATE VIRTUAL TABLE IF NOT EXISTS facts_fts USING fts5(fact, content='facts', content_rowid='rowid');
                     CREATE TRIGGER IF NOT EXISTS ex_ai AFTER INSERT ON exchanges BEGIN
                         INSERT INTO exchanges_fts(rowid, user, reply, actions) VALUES (new.id, new.user, new.reply, new.actions);
+                    END;
+                    CREATE VIRTUAL TABLE IF NOT EXISTS doc_fts USING fts5(text, content='doc_chunks', content_rowid='id');
+                    CREATE TRIGGER IF NOT EXISTS doc_ai AFTER INSERT ON doc_chunks BEGIN
+                        INSERT INTO doc_fts(rowid, text) VALUES (new.id, new.text);
+                    END;
+                    CREATE TRIGGER IF NOT EXISTS doc_ad AFTER DELETE ON doc_chunks BEGIN
+                        INSERT INTO doc_fts(doc_fts, rowid, text) VALUES ('delete', old.id, old.text);
                     END;
                     CREATE TRIGGER IF NOT EXISTS facts_ai AFTER INSERT ON facts BEGIN
                         INSERT INTO facts_fts(rowid, fact) VALUES (new.rowid, new.fact);
@@ -143,6 +152,32 @@ class MemoryStore:
             return self.db.execute(f"SELECT * FROM facts WHERE {like} LIMIT ?",
                                    (*[f"%{t}%" for t in terms], limit)).fetchall()
 
+    # --- documents Batsy has read ("learn from this pdf") -------------------------------------------
+    def add_document(self, path: str, name: str, pages: list[tuple[int, str]]) -> None:
+        with self.lock, self.db:
+            self.db.execute("DELETE FROM doc_chunks WHERE path = ?", (path,))
+            self.db.execute("INSERT INTO documents (path, name, t) VALUES (?,?,?) ON CONFLICT(path) DO UPDATE "
+                            "SET t = excluded.t", (path, name, time.time()))
+            for page, text in pages:
+                words = text.split()
+                for i in range(0, len(words), 180):  # ~1 paragraph per chunk
+                    self.db.execute("INSERT INTO doc_chunks (path, page, text) VALUES (?,?,?)",
+                                    (path, page, " ".join(words[i:i + 200])))
+
+    def set_document_summary(self, path: str, summary: str) -> None:
+        with self.lock, self.db:
+            self.db.execute("UPDATE documents SET summary = ? WHERE path = ?", (summary, path))
+
+    def search_documents(self, text: str, limit: int = 2) -> list[sqlite3.Row]:
+        terms = _terms(text)
+        if not terms or not self.fts:
+            return []
+        with self.lock:
+            return self.db.execute(
+                "SELECT c.*, d.name FROM doc_fts f JOIN doc_chunks c ON c.id = f.rowid JOIN documents d ON d.path = c.path "
+                "WHERE doc_fts MATCH ? ORDER BY bm25(doc_fts) LIMIT ?",
+                (" OR ".join(f'"{t}"' for t in terms), limit)).fetchall()
+
     # --- agenda (plans per day, filled by the good-night routine or the agenda tool) --------------
     def add_agenda(self, day: str, text: str) -> int:
         with self.lock, self.db:
@@ -175,6 +210,11 @@ class MemoryStore:
             facts = self.search_facts(text, m["max_facts"])
         if facts:
             parts.append("[Things you remember]\n" + "\n".join(f"- ({f['id']}) {f['fact']}" for f in facts))
+
+        docs = self.search_documents(text, 1) if len(_terms(text)) >= 2 else []
+        if docs:
+            parts.append("[From documents you've read]\n" + "\n".join(
+                f"{d['name']} p.{d['page']}: {_clip(d['text'], 400)}" for d in docs))
 
         recent = self.recent(m["recent_exchanges"], m["recent_minutes"] * 60)
         oldest = recent[0]["id"] if recent else None
