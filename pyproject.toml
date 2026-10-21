@@ -25,6 +25,7 @@ api = [  # only for [brain] engine = "claude" (Claude API with your own key)
 voice = [
   "sounddevice>=0.4.6",
   "vosk>=0.3.45",
+  "sherpa-onnx>=1.12",
   "piper-tts>=1.2",
   "opencv-python>=4.8",
   "PySide6>=6.6",

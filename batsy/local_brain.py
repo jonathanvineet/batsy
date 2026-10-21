@@ -86,10 +86,30 @@ DESIGN = re.compile(r"\b(design|model|make|create|build|generate|draw)\b.*\b(3d|
                     r"to print|for printing|3d print|enclosure|bracket|mount|stand|holder|case|box|gear|knob)\b")
 
 
+# While the live camera is on screen, questions like these are about what it shows.
+CAMERA_TALK = re.compile(r"\b(this|that|these|those|it|its|here|they|them|what|which|who|how|why|is|are|does|do|can|"
+                         r"should|could|would|identify|read|tell|explain|wrong|right|correct|value|colou?r|wired|"
+                         r"connected|working|broken)\b")
+
+
+# Short questions without these go to the fast path: no tools, a tiny prompt (the CPU reads ~45 tokens/s,
+# so the full prompt with tools and memory costs ~30 s before the first word).
+NEEDS_TOOLS = re.compile(
+    r"\b(open|close|launch|start|play|pause|resume|skip|music|song|spotify|timer|remind|reminder|alarm|remember|"
+    r"forget|cpu|ram|memory|battery|temperature|temp|disk|storage|wifi|network|internet|volume|brightness|screen|"
+    r"camera|run|install|update|file|folder|download|agenda|schedule|calendar|plan|plans|today|tomorrow|tonight|"
+    r"weather|news|latest|price|score|search|look up|google|who won|current|now|my|laptop|computer|show|pull up)\b")
+QUICK_SYSTEM = ("You are Batsy, {user}'s friendly voice assistant. Answer in one or two short spoken sentences, "
+                "no lists or markdown. Input is speech-to-text, so guess sensibly at misheard words. If the answer "
+                "needs the laptop, the internet, recent events, or facts you're not sure of, reply with only: PASS")
+
+
 def vision_source(text: str) -> str | None:
     t = text.lower().strip(" ?.!")
     if not VISION.search(t):
-        return None
+        from batsy.tools.screen import camera_pid
+
+        return "webcam" if camera_pid() and CAMERA_TALK.search(t) else None
     return "screen" if SCREEN_WORDS.search(t) else "webcam"
 
 
@@ -149,7 +169,7 @@ class LocalBrain:
     def _stream(self, messages: list[dict], chunker: SpeechChunker, abort: threading.Event):
         body = {"model": self.model, "stream": True, "keep_alive": self.cfg.get("local.keep_alive"),
                 "messages": messages, "tools": self.tools, "options": self._options()}
-        content, calls, stats = "", [], {}
+        content, calls, stats, fed = "", [], {}, 0
         with self._post(body) as resp:
             for line in resp:
                 if abort.is_set():
@@ -160,12 +180,54 @@ class LocalBrain:
                 msg = part.get("message", {})
                 if msg.get("content"):
                     content += msg["content"]
-                    chunker.feed(msg["content"])
+                    # Small models sometimes write a tool call as text: never speak from the first '{"' on.
+                    end = content.find('{"')
+                    end = len(content) - content.endswith("{") if end < 0 else end
+                    if end > fed:
+                        chunker.feed(content[fed:end])
+                        fed = end
                 calls += msg.get("tool_calls") or []
                 if part.get("done"):
                     stats = part
         self._log_usage(stats)
+        if not calls:
+            calls = self._calls_in_text(content)
         return content, calls
+
+    def _quick(self, text: str) -> str | None:
+        """Fast answer with a tiny prompt and no tools. None = the small model passed (needs the full path)."""
+        recent = self.memory.build_context(text, self.cfg, recent=1, related=0)[-400:]
+        messages = [{"role": "system", "content": QUICK_SYSTEM.format(user=os.environ.get("BATSY_USER_NAME") or getpass.getuser())},
+                    {"role": "user", "content": (f"{recent}\n\n" if recent else "") + text}]
+        body = {"model": self.model, "stream": False, "keep_alive": self.cfg.get("local.keep_alive"),
+                "messages": messages, "options": {**self._options(), "num_predict": 80}}
+        try:
+            with self._post(body) as resp:
+                out = json.loads(resp.read())
+        except (urllib.error.URLError, ValueError) as e:
+            log.warning("quick answer failed: %s", e)
+            return None
+        self._log_usage(out)
+        reply = out.get("message", {}).get("content", "").strip()
+        return None if not reply or "PASS" in reply else reply
+
+    @staticmethod
+    def _calls_in_text(content: str) -> list[dict]:
+        """{"name": "runshell", "parameters": {...}} written as text -> a real tool call."""
+        start = content.find('{"')
+        if start < 0:
+            return []
+        try:
+            obj, _ = json.JSONDecoder().raw_decode(content[start:])
+        except ValueError:
+            return []
+        if not isinstance(obj, dict) or "name" not in obj:
+            return []
+        want = re.sub(r"[^a-z]", "", str(obj["name"]).lower())
+        name = next((n for n in [*LOCAL_TOOLS, "look", "ask_claude"] if n.replace("_", "") == want), None)
+        if name is None:
+            return []
+        return [{"function": {"name": name, "arguments": obj.get("parameters") or obj.get("arguments") or {}}}]
 
     def _log_usage(self, s: dict) -> None:
         from batsy.usage import USAGE_FILE
@@ -219,6 +281,12 @@ class LocalBrain:
             actions.append("redesigned the screensaver")
             return self._finish(source, text, spoken, actions, abort)
 
+        from batsy.tools.screen import camera_pid
+
+        if camera_pid() and self.claude_ok and vision_source(text):  # the live camera is on screen: it's about that
+            self._look("webcam", text, context, emit, on_marker, on_tool, actions)
+            return self._finish(source, text, spoken, actions, abort)
+
         if self.claude_ok and (model3d.VIEWER.active() and THREE_D_TALK.search(text.lower())
                                or DESIGN.search(text.lower())):
             self._claude_3d(text, context, emit, on_marker, on_tool, actions)
@@ -229,9 +297,17 @@ class LocalBrain:
             self._doc(text, doc, context, emit, on_marker, on_tool, actions)
             return self._finish(source, text, spoken, actions, abort)
 
+        src = vision_source(text)
+        if src and self.claude_ok:
+            self._look(src, text, context, emit, on_marker, on_tool, actions)
+            return self._finish(source, text, spoken, actions, abort)
+
         if self.claude_ok and self.skills and ACTION.match(norm(text)):
-            # a new kind of action: Claude writes code for it once; next time it runs without any AI
-            emit("Give me a moment, I'm learning how to do that.")
+            # a new kind of action: Claude writes code for it once; next time it runs without any AI.
+            # Read back what we heard first: a misheard word ("plot" for "Claude") must not run anything.
+            if not self.registry.ctx.confirm(f"Just to check, you want me to {text.strip().rstrip('.?!')}?"):
+                return self._finish(source, text, spoken, actions, abort)
+            emit("One sec.")  # usually an existing skill said differently; only new ones are "learned"
             out = self.skills.learn(text, self.registry.ctx.confirm)
             if out["kind"] == "answer":
                 emit(out["text"])
@@ -239,18 +315,22 @@ class LocalBrain:
                 if out.get("spoken"):
                     emit(out["spoken"])
                 if out.get("ok") and not out.get("alias"):
-                    emit("Next time that'll be instant.")
+                    emit("I've learned that, so next time it'll be instant.")
                     self.last_skill_run = out["name"]
                     actions.append(f"learned skill {out['name']}")
             return self._finish(source, text, spoken, actions, abort)
 
-        src = vision_source(text)
-        if src and self.claude_ok:
-            self._look(src, text, context, emit, on_marker, on_tool, actions)
-            return self._finish(source, text, spoken, actions, abort)
         if self.claude_ok and is_complex(text):
             self._claude(text, context, emit, on_marker, on_tool, actions)
             return self._finish(source, text, spoken, actions, abort)
+
+        if len(text.split()) <= 14 and not NEEDS_TOOLS.search(text.lower()):
+            reply = self._quick(text)
+            if reply:
+                for sentence in re.split(r"(?<=[.!?])\s+", reply):
+                    if sentence.strip():
+                        emit(sentence.strip())
+                return self._finish(source, text, spoken, actions, abort)
 
         for _ in range(m["max_steps"]):
             chunker = SpeechChunker(emit, on_marker)
@@ -401,10 +481,12 @@ class LocalBrain:
 
 
 CLAUDE_BRIEF = """You are the expert brain behind Batsy, a voice assistant on the user's Fedora laptop. Your reply is \
-spoken aloud: two to four natural sentences, no markdown or lists in the spoken part. Be precise and correct.
-To put something on their screen, add markers (not spoken): [[show: exact name]] for the best picture of a thing, \
-[[pull: exact name]] for a person/place/thing with its facts, [[card: Title | line; line]] for steps, lists, \
-numbers or code summaries. Put any code or files under {workspace} and just say where.
+spoken aloud. Answer exactly what was asked and stop: usually one short sentence, two at most, unless they \
+ask for detail, an explanation or steps. No extra facts, background, tips or follow-up offers they didn't ask \
+for ("what is this?" -> "That's a red banana."). No markdown or lists in the spoken part. Be precise and correct.
+Only when they ask to see something, or for steps/lists/code, add a screen marker (not spoken): [[show: exact \
+name]] for a picture, [[pull: exact name]] for a person/place/thing with its facts, [[card: Title | line; line]] \
+for steps, lists, numbers or code summaries. Put any code or files under {workspace} and just say where.
 {context}
 User: {request}"""
 

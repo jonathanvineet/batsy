@@ -54,6 +54,7 @@ def main() -> None:
     ap.add_argument("--width", type=int, default=1280)
     ap.add_argument("--height", type=int, default=720)
     ap.add_argument("--snapshot-edge", type=int, default=768)
+    ap.add_argument("--headless", action="store_true", help="no window; Batsy's overlay shows the frames")
     args = ap.parse_args()
     import cv2  # imported here so the rest of Batsy works without opencv installed
 
@@ -72,8 +73,10 @@ def main() -> None:
         running = False
 
     signal.signal(signal.SIGTERM, stop)
-    cv2.namedWindow(WINDOW, cv2.WINDOW_NORMAL)
-    cv2.resizeWindow(WINDOW, 960, 540)
+    if not args.headless:
+        cv2.namedWindow(WINDOW, cv2.WINDOW_NORMAL)
+        cv2.resizeWindow(WINDOW, 960, 540)
+    save_every = 0.12 if args.headless else 0.4  # the overlay's live view needs a smoother feed
     last_save = 0.0
     tmp = FRAME_PATH.with_suffix(".tmp.jpg")
     try:
@@ -83,13 +86,15 @@ def main() -> None:
                 time.sleep(0.05)
                 continue
             now = time.time()
-            if now - last_save > 0.4:
+            if now - last_save > save_every:
                 h, w = frame.shape[:2]
                 scale = args.snapshot_edge / max(h, w)
                 small = cv2.resize(frame, (int(w * scale), int(h * scale)), interpolation=cv2.INTER_AREA) if scale < 1 else frame
                 cv2.imwrite(str(tmp), small, [cv2.IMWRITE_JPEG_QUALITY, 80])
                 os.replace(tmp, FRAME_PATH)
                 last_save = now
+            if args.headless:
+                continue
             view = frame.copy()
             looking = FLASH_PATH.exists() and now - FLASH_PATH.stat().st_mtime < 1.5
             if looking:

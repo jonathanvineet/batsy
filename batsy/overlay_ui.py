@@ -4,10 +4,14 @@ Commands in:  {"cmd": "listen"} {"cmd": "level", "v": 0..1} {"cmd": "partial", "
               {"cmd": "think"} {"cmd": "say", "text"} {"cmd": "image", "path", "caption"}
               {"cmd": "card", "title", "text"} {"cmd": "done", "linger": s} {"cmd": "hide"}
               {"cmd": "saver", "stats": {...}, "next": "..."}  (screensaver; any mouse/key input ends it)
+              {"cmd": "camera", "on": bool, "path"}  (live camera feed from batsy.camera_view's frame file)
+              {"cmd": "model3d"}  (host the 3D viewer in this window; it then takes commands on its own socket)
 Events out:   {"event": "dismissed"}  (Esc / click / Space)
+              {"event": "measured", "mm"}  (3D viewer click-to-measure)
 """
 import json
 import math
+import os
 import sys
 import threading
 import time
@@ -16,6 +20,8 @@ from PySide6.QtCore import QObject, QPointF, QRectF, Qt, QTimer, Signal
 from PySide6.QtGui import (QColor, QFont, QFontMetrics, QGuiApplication, QPainter, QPainterPath, QPen, QPixmap,
                            QRadialGradient, QTextOption)
 from PySide6.QtWidgets import QApplication, QWidget
+
+from batsy.camera_view import FLASH_PATH
 
 ACCENT = {"listen": QColor(214, 70, 255), "think": QColor(70, 200, 255), "speak": QColor(150, 110, 255),
           "idle": QColor(120, 110, 160)}
@@ -45,6 +51,13 @@ class Overlay(QWidget):
         self.saver: dict | None = None  # stats while in screensaver mode
         self.saver_next = ""
         self.mouse_origin = None
+        self.camera_path: str | None = None  # live camera feed while set
+        self.camera_mtime = 0.0
+        self.cam_timer = QTimer(self, interval=100, timeout=self._camera_frame)
+        self.viewer = None  # batsy.viewer3d.Viewer drawing into this window, created on first use
+        self.model_on = False
+        # 3D unused for a while: quit, so Batsy restarts the overlay without VTK's few hundred MB.
+        self.free_timer = QTimer(self, singleShot=True, interval=5 * 60_000, timeout=self._free_3d)
         self.hide_timer = QTimer(self, singleShot=True, timeout=self._dismiss)
         self.anim = QTimer(self, interval=33, timeout=self._tick)
 
@@ -68,8 +81,10 @@ class Overlay(QWidget):
         if cmd == "listen":
             self.hide_timer.stop()
             if m.get("fresh"):
-                self.partial = self.heard = self.answer = self.caption = ""
-                self.image, self.card = None, None
+                self.partial = self.heard = self.answer = ""
+                self.card = None
+                if self.camera_path is None:
+                    self.image, self.caption = None, ""
             self.state = "listen"
             self._appear()
         elif cmd == "level":
@@ -94,13 +109,70 @@ class Overlay(QWidget):
         elif cmd == "card":
             self.card = (m.get("title", ""), m.get("text", ""))
             self._appear()
+        elif cmd == "camera":
+            if m.get("on"):
+                self.camera_path, self.camera_mtime = m.get("path"), 0.0
+                self.card = None
+                self.cam_timer.start()
+                self._camera_frame()
+                self._appear()
+            else:
+                self.camera_path = None
+                self.cam_timer.stop()
+                self.image, self.caption = None, ""
+            self._place_3d()
+        elif cmd == "model3d" and self.viewer is None:
+            import pyvista as pv
+
+            from batsy.viewer3d import Viewer
+
+            pv.global_theme.font.family = "arial"
+            self.viewer = Viewer(host=self)
+            self.viewer.plotter.interactor.hide()
         elif cmd == "done":
             self.state = "idle"
             self.level = 0.0
-            self.hide_timer.start(int(1000 * float(m.get("linger", 6))))
-        elif cmd == "hide":
+            busy = self.camera_path or self.model_on  # live views stay up until closed or idle a while
+            linger = max(float(m.get("linger", 6)), 180) if busy else float(m.get("linger", 6))
+            self.hide_timer.start(int(1000 * linger))
+        elif cmd == "hide" and self.camera_path is None:  # the live camera stays up until it's closed
             self._dismiss(notify=False)
         self.update()
+
+    # --- hosted 3D viewer ------------------------------------------------
+    def show_3d(self, on: bool) -> None:
+        self.model_on = on
+        if on:
+            self.free_timer.stop()
+            self.image, self.card, self.caption = None, None, ""
+            self._appear()
+        else:
+            self.free_timer.start(30_000)  # closed on purpose: free it soon
+        self._place_3d()
+        self.update()
+
+    def _place_3d(self) -> None:
+        if self.viewer is None:
+            return
+        widget = self.viewer.plotter.interactor
+        if self.model_on and self.camera_path is None:  # the live camera takes the screen while it's on
+            w, h = self.width(), self.height()
+            widget.setGeometry(int(w * 0.17), int(h * 0.06), int(w * 0.71), int(h * 0.72))  # clear of the orb
+            widget.show()
+        else:
+            widget.hide()
+
+    def resizeEvent(self, e):
+        self._place_3d()
+
+    def _free_3d(self) -> None:
+        if self.viewer is None:
+            return
+        if self.isVisible():  # never quit mid-conversation; try again later
+            self.free_timer.start(5 * 60_000)
+            return
+        print(json.dumps({"event": "viewer_closed"}), flush=True)
+        QApplication.quit()
 
     def _appear(self) -> None:
         if not self.isVisible():
@@ -134,6 +206,8 @@ class Overlay(QWidget):
         self.hide()
         self.anim.stop()
         self.state = "idle"
+        if self.viewer is not None:
+            self.free_timer.start()
         if notify:
             print(json.dumps({"event": "dismissed"}), flush=True)
 
@@ -143,6 +217,19 @@ class Overlay(QWidget):
 
     def mousePressEvent(self, e):
         self._dismiss()
+
+    def _camera_frame(self) -> None:
+        try:
+            mtime = os.stat(self.camera_path).st_mtime
+        except (OSError, TypeError):
+            return
+        looking = FLASH_PATH.exists() and time.time() - FLASH_PATH.stat().st_mtime < 1.5
+        self.caption = "Looking…" if looking else "Live camera · ask me about it"
+        if mtime != self.camera_mtime:
+            pix = QPixmap(self.camera_path)
+            if not pix.isNull():
+                self.image, self.camera_mtime = pix, mtime
+        self.update()
 
     def _tick(self) -> None:
         self.fade = min(1.0, self.fade + 0.12)
@@ -161,7 +248,7 @@ class Overlay(QWidget):
         p.fillRect(self.rect(), QColor(6, 5, 14, int(225 * self.fade)))
         p.setOpacity(self.fade)
 
-        has_media = self.image is not None or self.card is not None
+        has_media = self.image is not None or self.card is not None or (self.model_on and not self.camera_path)
         orb_c = QPointF(w * 0.08 + 40, h * 0.1 + 30) if has_media else QPointF(w / 2, h * 0.40)
         orb_r = 46 if has_media else min(w, h) * 0.11
         self._orb(p, orb_c, orb_r)
@@ -183,7 +270,7 @@ class Overlay(QWidget):
                 self._card(p, QRectF(w * 0.61, top + h * 0.04, w * 0.33, h * 0.60))
             elif self.image is not None:
                 self._image(p, QRectF(w * 0.18, top, w * 0.64, h * 0.68))
-            else:
+            elif self.card is not None:
                 self._card(p, QRectF(w * 0.18, top, w * 0.64, h * 0.68))
             sub = self.answer or self.heard or self.partial
             if sub:
@@ -459,7 +546,8 @@ class Overlay(QWidget):
         p.setClipPath(path)
         p.drawPixmap(target.toRect(), pix)
         p.restore()
-        p.setPen(QPen(QColor(255, 255, 255, 40), 1.5))
+        snapping = self.camera_path is not None and self.caption.startswith("Looking")
+        p.setPen(QPen(ACCENT["think"], 6) if snapping else QPen(QColor(255, 255, 255, 40), 1.5))
         p.setBrush(Qt.NoBrush)
         p.drawRoundedRect(target, 18, 18)
         if self.caption:

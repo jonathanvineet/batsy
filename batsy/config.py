@@ -92,7 +92,17 @@ DEFAULTS = {
     "voice": {
         "wake_words": ["batsy", "bat see", "bats see", "betsy", "batsie", "bitsy", "patsy"],
         "vosk_model": "vosk-model-small-en-us-0.15",
-        "stt_engine": "auto",  # auto | whisper | vosk
+        "stt_engine": "auto",  # auto (Parakeet if downloaded, else whisper) | parakeet | whisper | vosk
+        "parakeet_model": "sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8",
+        # Words Parakeet should expect (it has never heard "Batsy"); add your own project/part names here.
+        # Words Parakeet rarely heard in training. Tested on mic recordings: at score 1.0 this list took tech words
+        # from 11/21 to 15/21 with nothing invented in room noise; 1.5+ starts "hearing" them in silence.
+        "hotwords": ["Batsy", "Claude", "Claude Code", "GitHub", "VS Code", "Python", "API", "JSON", "Ollama", "Llama",
+                     "Arduino", "ESP32", "GPIO", "Docker", "Kubernetes", "Fedora", "npm", "Bluetooth", "repo", "commit",
+                     "sketch", "serial monitor"],
+        "hotwords_score": 1.0,       # keep at 1.0; higher invents hotwords out of background noise
+        "speaker_model": "wespeaker_en_voxceleb_resnet34_LM.onnx",  # after "learn my voice", only you trigger Batsy
+        "speaker_match": 0.5,        # 0..1; raise if others still trigger it, lower if it ignores you
         "whisper_model": "base.en",  # fast on CPU; small.en is more accurate but slower
         "end_silence": 0.7,          # seconds of quiet that mean you've finished talking
         "tts_engine": "auto",  # auto | piper | espeak

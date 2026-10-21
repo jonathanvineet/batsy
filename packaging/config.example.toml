@@ -19,7 +19,7 @@ snapshot_edge = 768         # pixels per look; smaller = fewer tokens
 
 [voice]
 wake_words = ["batsy", "bat see", "bats see", "betsy", "batsie", "bitsy", "patsy"]
-whisper_model = "small.en"  # tiny.en / base.en = faster, medium.en = more accurate
+whisper_model = "base.en"  # tiny.en = faster, small.en / medium.en = more accurate but slower
 piper_voice = "en_GB-alan-medium"
 follow_up_seconds = 6       # listen for a follow-up without the wake word; 0 to disable
 barge_in = true             # say "Batsy" while it's talking to interrupt

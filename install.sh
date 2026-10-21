@@ -8,6 +8,7 @@ CONF="${XDG_CONFIG_HOME:-$HOME/.config}/batsy"
 VENV="$DATA/venv"
 BIN="$HOME/.local/bin"
 VOSK_MODEL="vosk-model-small-en-us-0.15"
+PARAKEET_MODEL="sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8"
 PIPER_VOICE="en_GB-alan-medium"
 PIPER_URL="https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_GB/alan/medium"
 
@@ -42,6 +43,7 @@ echo "  using $($PY --version)"
   || echo "  3D viewer libraries failed to install; the 3D viewer will be off."
 "$VENV/bin/pip" install -q cascadio || echo "  (STEP file support not available; STL/OBJ/3MF/GLB still work)"
 "$VENV/bin/pip" install -q faster-whisper || echo "  faster-whisper failed to install; Batsy will use Vosk for speech recognition."
+"$VENV/bin/pip" install -q sherpa-onnx || echo "  sherpa-onnx failed to install; Batsy will use Whisper for speech recognition."
 
 say "Downloading wake-word model ($VOSK_MODEL)"
 if [ ! -d "$DATA/models/$VOSK_MODEL" ]; then
@@ -55,7 +57,15 @@ for f in "$PIPER_VOICE.onnx" "$PIPER_VOICE.onnx.json"; do
   [ -f "$DATA/models/piper/$f" ] || curl -fL --progress-bar -o "$DATA/models/piper/$f" "$PIPER_URL/$f"
 done
 
-say "Pre-loading the speech recognition model"
+say "Downloading the speech recognition model ($PARAKEET_MODEL, ~480 MB)"
+if [ ! -d "$DATA/models/$PARAKEET_MODEL" ]; then
+  curl -fL --progress-bar -o /tmp/parakeet.tar.bz2 \
+    "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/$PARAKEET_MODEL.tar.bz2" \
+    && tar xjf /tmp/parakeet.tar.bz2 -C "$DATA/models" && rm /tmp/parakeet.tar.bz2 \
+    || echo "  (skipped; Batsy will use Whisper)"
+fi
+
+say "Pre-loading the fallback speech recognition model"
 "$VENV/bin/python" -c "from faster_whisper import WhisperModel; WhisperModel('base.en', device='cpu', compute_type='int8')" \
   2>/dev/null || echo "  (skipped)"
 

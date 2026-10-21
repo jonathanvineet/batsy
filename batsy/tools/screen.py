@@ -20,11 +20,17 @@ from batsy.config import DATA_DIR
 from batsy.camera_view import FLASH_PATH, FRAME_PATH, PID_PATH
 
 _SCREENSHOT_CMDS = [
+    # GNOME Wayland only lets the portal take screenshots; it needs the system Python's PyGObject.
+    ("/usr/bin/python3", ["/usr/bin/python3", str(Path(__file__).with_name("portal_shot.py")), "{out}"]),
     ("gnome-screenshot", ["gnome-screenshot", "-f", "{out}"]),
     ("spectacle", ["spectacle", "-b", "-n", "-f", "-o", "{out}"]),
     ("grim", ["grim", "{out}"]),
     ("import", ["import", "-window", "root", "{out}"]),
 ]
+
+
+# Set by the voice app: on_camera(True/False) puts the live feed in the overlay instead of a separate window.
+on_camera = None
 
 
 def camera_pid() -> int | None:
@@ -40,13 +46,15 @@ def open_camera(cfg) -> str:
     if camera_pid():
         return "Camera window is already open."
     argv = [sys.executable, "-m", "batsy.camera_view", "--name", cfg.get("camera.name"),
-            "--snapshot-edge", str(cfg.get("camera.snapshot_edge"))]
+            "--snapshot-edge", str(cfg.get("camera.snapshot_edge"))] + (["--headless"] if on_camera else [])
     if cfg.get("camera.device") is not None:
         argv += ["--device", str(cfg.get("camera.device"))]
     log = open(DATA_DIR / "camera.log", "wb")
     proc = subprocess.Popen(argv, stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
     for _ in range(80):  # wait up to 8 s for the first frame
         if FRAME_PATH.exists():
+            if on_camera:
+                on_camera(True)
             return "Camera window is open."
         if proc.poll() is not None:
             break
@@ -62,6 +70,8 @@ def close_camera() -> str:
     if not pid:
         return "Camera window isn't open."
     os.kill(pid, signal.SIGTERM)
+    if on_camera:
+        on_camera(False)
     return "Camera closed."
 
 
@@ -79,6 +89,8 @@ def _capture_screen(out: Path) -> str | None:
 
 def _capture_webcam(out: Path, cfg) -> str | None:
     # Prefer the open camera window's latest frame: no device contention, no warm-up delay.
+    if not camera_pid() and on_camera and open_camera(cfg).endswith("open."):
+        time.sleep(1.0)  # let exposure settle; the user sees the feed come up before Batsy looks
     if camera_pid() and FRAME_PATH.exists() and time.time() - FRAME_PATH.stat().st_mtime < 3:
         FLASH_PATH.touch()
         shutil.copy(FRAME_PATH, out)

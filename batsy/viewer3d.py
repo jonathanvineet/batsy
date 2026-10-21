@@ -56,12 +56,15 @@ class Model:
 
 
 class Viewer(QMainWindow):
-    def __init__(self):
+    def __init__(self, host=None):
+        """host: a widget to draw into instead of this window (Batsy's overlay). It must have show_3d(on: bool)."""
         super().__init__()
+        self.host = host
         self.setWindowTitle("Batsy 3D")
         self.resize(1280, 820)
-        self.plotter = QtInteractor(self)
-        self.setCentralWidget(self.plotter.interactor)
+        self.plotter = QtInteractor(host or self)
+        if host is None:
+            self.setCentralWidget(self.plotter.interactor)
         p = self.plotter
         p.set_background("#100d1c", top="#2b2244")
         p.add_axes(color="white")
@@ -110,9 +113,21 @@ class Viewer(QMainWindow):
                 return
             try:
                 box["result"] = self.run(cmd)
+                if self.host is not None and cmd.get("cmd") not in ("close", "info", "screenshot") and self.models:
+                    self.host.show_3d(True)  # any voice command about the model brings it back on screen
             except Exception as e:
                 box["result"] = {"error": f"{type(e).__name__}: {e}"}
             done.set()
+
+    def _present(self, on: bool) -> None:
+        if self.host is not None:
+            self.host.show_3d(on)
+        elif on:
+            self.show()
+            self.raise_()
+            self.activateWindow()
+        else:
+            self.hide()
 
     # --- helpers ------------------------------------------------------------
     def _targets(self, cmd: dict) -> list[Model]:
@@ -205,9 +220,11 @@ class Viewer(QMainWindow):
         p, cmd = self.plotter, c.get("cmd")
         if cmd == "load":
             path = os.path.expanduser(c["path"])
-            mesh = trimesh.load(path, force="mesh")
+            mesh = trimesh.load(path, force="mesh", skip_materials=True)  # textures unused; they cost ~700 MB on big GLBs
             if not isinstance(mesh, trimesh.Trimesh) or len(mesh.faces) == 0:
                 return {"error": f"no mesh found in {path}"}
+            if path.lower().endswith((".glb", ".gltf")):  # glTF is Y-up; the viewer (and printing) is Z-up
+                mesh.apply_transform(trimesh.transformations.rotation_matrix(np.pi / 2, [1, 0, 0]))
             if not c.get("keep"):
                 self.models.clear()
                 self.plotter.clear_actors()
@@ -217,9 +234,7 @@ class Viewer(QMainWindow):
             self.message = f"Loaded {Path(path).name}"
             self._redraw(reset_camera=True)
             p.view_isometric()
-            self.show()
-            self.raise_()
-            self.activateWindow()
+            self._present(True)
             return self._stats(self.models[name])
         if cmd == "info":
             return {"models": [self._stats(m, c.get("material", "pla"), c.get("infill", 1.0))
@@ -361,7 +376,7 @@ class Viewer(QMainWindow):
             self._hud()
         elif cmd == "close":
             self.spin.stop()
-            self.hide()
+            self._present(False)
             return {"ok": True}
         else:
             return {"error": f"unknown command {cmd}"}

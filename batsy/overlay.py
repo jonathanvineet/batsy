@@ -20,6 +20,7 @@ class Overlay:
         self.has_media = False
         self.last_active = 0.0  # last time Batsy used the overlay for a conversation
         self.on_saver_exit = None
+        self.on_viewer_event = None  # 3D viewer hosted in the overlay: click-to-measure etc.
         if self.enabled:
             self._start()
 
@@ -54,6 +55,8 @@ class Overlay:
                 self.on_dismiss()
             elif ev.get("event") == "saver_exit" and self.on_saver_exit:
                 self.on_saver_exit()
+            elif ev.get("event") == "measured" and self.on_viewer_event:
+                self.on_viewer_event(ev)
 
     def send(self, cmd: str, **kw) -> None:
         if not self.enabled:

@@ -41,7 +41,9 @@ class Ears:
         self.wake = KaldiRecognizer(self.model, RATE, json.dumps(grammar + ["[unk]"]))
         self.q: queue.Queue[bytes] = queue.Queue()
         self.history = collections.deque(maxlen=FRAMES_PER_SEC * 3)  # pre-roll buffer
-        self.noise = 200.0
+        # Background level = a low percentile of the last few seconds, so it follows the room both ways
+        # (a fan spinning up must raise it, or every frame looks like speech and recording never ends).
+        self.levels = collections.deque(maxlen=FRAMES_PER_SEC * 5)
         self.stream = sd.RawInputStream(
             samplerate=RATE, blocksize=BLOCK, dtype="int16", channels=1,
             device=cfg.get("voice.input_device"), callback=self._callback,
@@ -71,10 +73,12 @@ class Ears:
         except queue.Empty:
             return None
         self.history.append(frame)
+        self.levels.append(rms(frame))
         return frame
 
     def threshold(self) -> float:
-        return max(self.noise * 3.0, 300.0)
+        noise = float(np.percentile(self.levels, 20)) if len(self.levels) >= FRAMES_PER_SEC else 200.0
+        return max(noise * 3.0, 300.0)
 
     def _hit(self, text: str) -> bool:
         text = " " + text.lower() + " "
@@ -83,9 +87,6 @@ class Ears:
     def wake_hit(self, frame: bytes, strict: bool = False) -> bool:
         """Feed a frame to the wake spotter. strict=True waits for a finished phrase (fewer false hits,
         used while Batsy is talking)."""
-        level = rms(frame)
-        if level < self.threshold():
-            self.noise = 0.98 * self.noise + 0.02 * level
         if self.wake.AcceptWaveform(frame):
             hit = self._hit(json.loads(self.wake.Result()).get("text", ""))
         elif strict:
@@ -108,7 +109,7 @@ class Ears:
         return KaldiRecognizer(self.model, RATE)
 
     def record_utterance(self, start_timeout: float, preroll: list[bytes] | None = None,
-                         end_silence: float | None = None, max_seconds: float = 30,
+                         end_silence: float | None = None, max_seconds: float = 15,
                          on_frame=None) -> np.ndarray | None:
         """Record until the speaker goes quiet. Returns int16 samples, or None if nobody spoke.
         on_frame(frame, level, speaking) is called for every frame (drives the overlay)."""
@@ -143,17 +144,25 @@ class Ears:
         return np.frombuffer(b"".join(frames), dtype=np.int16)
 
 
+# How speech recognizers (Parakeet especially) spell "Batsy". Only used to confirm a wake word Vosk already
+# spotted, never to wake Batsy, so everyday phrases like "that's it" can't start a conversation on their own.
+TRANSCRIPT_ALIASES = ["thats it", "thatsy", "matty", "matsy", "latzy", "lattsy", "patsy", "batty", "baxy", "bassy",
+                      "betsy", "bitsy", "pasty"]
+
+
 def strip_wake_word(text: str, wake_words: list[str]) -> tuple[bool, str]:
     """Find the wake word near the start of a transcript. Returns (found, rest_of_command)."""
     import difflib
 
     words = text.split()
     norm = [re.sub(r"[^a-z]", "", w.lower()) for w in words]
-    targets = [w.replace(" ", "") for w in wake_words]
+    targets = [w.replace(" ", "") for w in wake_words + TRANSCRIPT_ALIASES]
+    def score(cand: str) -> float:
+        return max(difflib.SequenceMatcher(None, cand, t).ratio() for t in targets) if cand else 0.0
+
     for i in range(min(len(words), 5)):
-        for span in (2, 1):
-            cand = "".join(norm[i:i + span])
-            if cand and max(difflib.SequenceMatcher(None, cand, t).ratio() for t in targets) >= 0.7:
-                rest = " ".join(words[i + span:]).lstrip(" ,.!?-")
-                return True, rest
+        # Take two words only when they match better than one ("bat see"), not "Batsy, what" -> "batsywhat".
+        best, span = max((score("".join(norm[i:i + n])), -n) for n in (1, 2))
+        if best >= 0.7:
+            return True, " ".join(words[i - span:]).lstrip(" ,.!?-")
     return False, text

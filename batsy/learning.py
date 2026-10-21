@@ -56,9 +56,11 @@ def notify(text):
     subprocess.Popen(["notify-send", "-a", "Batsy", "Batsy", str(text)])
 def show(what):
     print("__BATSY_SHOW__ " + str(what), flush=True)
+def open_model(path):
+    print("__BATSY_OPEN3D__ " + str(path), flush=True)
 spec = importlib.util.spec_from_file_location("skill", sys.argv[1])
 mod = importlib.util.module_from_spec(spec)
-mod.sh, mod.notify, mod.show = sh, notify, show
+mod.sh, mod.notify, mod.show, mod.open_model = sh, notify, show, open_model
 spec.loader.exec_module(mod)
 result = mod.run(**json.loads(sys.argv[2]))
 print("__BATSY_RESULT__ " + json.dumps("" if result is None else str(result)), flush=True)
@@ -88,7 +90,8 @@ that vary, e.g. "set brightness to {{level}}" or "connect to {{device}}". The us
 after lowercasing and removing punctuation. Keep templates specific enough not to catch unrelated requests.
 - def run(<one keyword argument per slot>) -> str: do the action, then return one short spoken sentence.
 - Run commands with sh(cmd): it runs bash, returns stdout and raises on failure. Use notify(text) for a \
-desktop notification and show(query) to put a picture on screen. Standard library and psutil only. Never call \
+desktop notification, show(query) to put a picture on screen, and open_model(path) to open a 3D model file \
+(STL, OBJ, GLB, 3MF, STEP...) in Batsy's own 3D viewer (never f3d, meshlab or a browser). Standard library and psutil only. Never call \
 subprocess or os.system yourself. Use pkexec for root. Prefer Fedora/GNOME tools: wpctl, brightnessctl, \
 playerctl, nmcli, bluetoothctl, gsettings, gtk-launch, xdg-open, loginctl, powerprofilesctl, flatpak, \
 gnome-extensions. Validate slot values and give a helpful sentence if something isn't found.
@@ -218,6 +221,13 @@ class SkillBook:
                     proc.stdin.flush()
                 elif line.startswith("__BATSY_SHOW__ ") and self.show:
                     threading.Thread(target=self.show, args=(line[15:].strip(),), daemon=True).start()
+                elif line.startswith("__BATSY_OPEN3D__ "):
+                    from batsy.model3d import VIEWER  # the daemon's viewer, so "rotate it" works afterwards
+
+                    reply = VIEWER.open(Path(line[17:].strip()))
+                    if "error" in reply:
+                        proc.kill()
+                        return f"the 3D viewer couldn't open it: {reply['error']}", False
                 elif line.startswith("__BATSY_RESULT__ "):
                     result = json.loads(line[17:])
             proc.wait()
@@ -264,7 +274,7 @@ class SkillBook:
                 if not execute:
                     return {"kind": "skill", "name": existing, "spoken": "", "ok": True}
                 spoken, ok = self.run(existing, restore_case(slots, request), confirm)
-                return {"kind": "skill", "name": existing, "spoken": spoken if ok else
+                return {"kind": "skill", "name": existing, "alias": True, "spoken": spoken if ok else
                         "I tried my existing skill for that, but it failed.", "ok": ok}
             triggers, problem = validate(body)
             rxs = [compile_template(norm_template(t)) for t in triggers]

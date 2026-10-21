@@ -35,17 +35,35 @@ def _sock() -> Path:
 class Viewer3D:
     def __init__(self, on_event=None):
         self.on_event = on_event  # e.g. speak "23.4 millimetres" after a click-to-measure
+        self.host = None  # e.g. Batsy's overlay: a callable that starts the viewer inside it instead of a window
         self.proc: subprocess.Popen | None = None
         self.last_used = 0.0
 
     def is_open(self) -> bool:
-        return self.proc is not None and self.proc.poll() is None
+        if self.proc is not None and self.proc.poll() is None:
+            return True
+        try:  # hosted in the overlay (or started by another Batsy process): is anyone serving the socket?
+            with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
+                s.settimeout(0.5)
+                s.connect(str(_sock()))
+            return True
+        except OSError:
+            return False
 
     def active(self) -> bool:
         """Open and used recently: plain phrases like "rotate it" are meant for the viewer."""
         return self.is_open() and time.time() - self.last_used < 1800
 
     def _start(self) -> None:
+        if self.host is not None:
+            self.host()
+            for _ in range(200):  # VTK takes a few seconds to load the first time
+                try:
+                    self.send({"cmd": "info"}, start=False)
+                    return
+                except OSError:
+                    time.sleep(0.1)
+            raise RuntimeError("the 3D viewer didn't start in the overlay")
         log_f = open(DATA_DIR / "viewer3d.log", "ab")
         self.proc = subprocess.Popen([sys.executable, "-m", "batsy.viewer3d"], stdout=subprocess.PIPE,
                                      stderr=log_f, text=True, start_new_session=True)
@@ -81,7 +99,7 @@ class Viewer3D:
             f.write(json.dumps(cmd) + "\n")
             f.flush()
             reply = json.loads(f.readline() or "{}")
-        self.last_used = time.time()
+        self.last_used = 0.0 if cmd.get("cmd") == "close" else time.time()  # closed: no longer what we're talking about
         return reply
 
     def open(self, path: Path, keep: bool = False) -> dict:
@@ -151,6 +169,8 @@ def parse(n: str) -> dict | None:
         axis = "x" if m.group(2) in ("up", "down", "over") else "z"
         deg = {"left": 90, "right": -90, "up": 90, "down": -90, "over": 180}[m.group(2)]
         return {"cmd": "rotate", "axis": axis, "deg": deg, "say": ""}
+    if re.fullmatch(r"(?:can you |please )?(?:rotate|turn) (?:it|the \w+)(?: (?:a bit|around a bit|again))?(?: please)?", t):
+        return {"cmd": "rotate", "axis": "z", "deg": 90, "say": ""}  # no amount: a quarter turn
     if re.search(r"\b(flip it|flip over|upside down)\b", t):
         return {"cmd": "rotate", "axis": "x", "deg": 180, "say": "Flipped."}
     if re.search(r"\bturn it around\b", t):
@@ -165,9 +185,9 @@ def parse(n: str) -> dict | None:
     if m:
         v = {"side": "right", "isometric": "iso", "3 quarter": "iso", "above": "top", "below": "bottom"}.get(m.group(1), m.group(1))
         return {"cmd": "view", "view": v, "say": ""}
-    m = re.search(r"\bzoom (in|out)\b", t)
+    m = re.search(r"\bzoom (in|out|into)\b", t)
     if m:
-        return {"cmd": "zoom", "factor": 1.6 if m.group(1) == "in" else 0.6, "say": ""}
+        return {"cmd": "zoom", "factor": 0.6 if m.group(1) == "out" else 1.6, "say": ""}
     if re.search(r"\b(look|orbit|move the camera|camera)\b.*\b(left|right|up|down)\b", t):
         d = re.search(r"\b(left|right|up|down)\b", t).group(1)
         return {"cmd": "orbit", "azimuth": {"left": -45, "right": 45}.get(d, 0),
@@ -272,6 +292,13 @@ def speakable(cmd: dict, reply: dict) -> str:
     return say.strip()
 
 
+def spoken_name(path: Path) -> str:
+    """'skoda_top_tether_hook_part2_20260812.stl' -> 'top tether hook': no dates, versions or part numbers."""
+    words = [w for w in re.split(r"[\s_\-.]+", re.sub(r"(?<=[a-z])(?=[A-Z])", " ", path.stem).lower())
+             if w and not re.fullmatch(r"\d+|(?:v|ver|rev|part|pt)\d*", w) and w not in ("final", "copy", "new", "old")]
+    return " ".join(words[-3:]) or "model"
+
+
 def handle(n: str) -> str | None:
     """Zero-AI 3D handling. Returns what to say ('' = silent), or None if this isn't a 3D request."""
     if OPEN.search(n):
@@ -281,7 +308,7 @@ def handle(n: str) -> str | None:
         st = VIEWER.open(path)
         if "error" in st:
             return f"I couldn't open it: {st['error']}"
-        return f"Here's {path.stem.replace('_', ' ')}. It's {_fmt_size(st['size_mm'])}."
+        return f"Here's the {spoken_name(path)}."  # full name and size are on screen
     if not VIEWER.active():
         return None
     cmd = parse(n)

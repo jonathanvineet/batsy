@@ -14,13 +14,14 @@ from batsy import safety, spotify
 from batsy import images
 from batsy.overlay import Overlay
 from batsy.routines import Routines
-from batsy import apps, model3d
+from batsy import apps, calc, model3d
 from batsy.learning import ACTION, NEGATIVE, SkillBook, claude_cli
 from batsy.vocab import get_vocab
 from batsy.config import SOCKET_PATH
 from batsy.tools import ToolContext, build_registry
 from batsy.tools import monitor, music
 from batsy.voice.tts import Speaker
+from batsy.voice.voiceprint import VoicePrint
 
 log = logging.getLogger("batsy")
 
@@ -28,8 +29,22 @@ FILLERS = ["On it.", "One sec.", "Working on it.", "Give me a moment."]
 STOP_WORDS = {"stop", "cancel", "never mind", "nevermind", "shut up", "be quiet", "quiet", "forget it"}
 RESET_PHRASES = {"new conversation", "start over", "fresh start", "clear context", "reset conversation"}
 # Whisper sometimes "hears" these in silence or background noise; never spend tokens on them.
-NOISE_TRANSCRIPTS = {"you", "thank you for watching", "bye", "uh", "um", "hmm", "so", ""}
+NOISE_TRANSCRIPTS = {"you", "thank you for watching", "bye", "uh", "um", "hmm", "so", "what the", "mm hmm", "mhm", ""}
 END_FOLLOWUP = {"thanks", "thank you", "that's all", "thats all", "nothing", "no", "no thanks", "that's it", "ok", "okay"}
+
+
+# "Look at this" with nothing else: put the camera on screen and wait for the question.
+ATTENTION = re.compile(
+    r"^(?:(?:hey|ok|okay|so|now|please|can you|could you|just) )*"
+    r"(?:look|see|check|watch|have a look|take a look|i want to show you|let me show you|can you see|do you see)"
+    r"(?: (?:at|out))?(?: (?:this|that|here|these|those|it|me|something|this one|this thing))?(?: out)?$")
+# Without the wake word, only something shaped like a question or request is for Batsy.
+FOR_BATSY = re.compile(
+    r"^(?:and |also |then |ok |okay |so |now |please |hey )*(?:what|whats|what's|who|whose|where|when|why|how|which|"
+    r"is|are|was|were|can|could|would|will|do|does|did|should|shall|tell|show|open|close|play|pause|stop|skip|set|"
+    r"turn|put|give|find|search|read|make|add|remind|take|look|check|start|run|send|call|explain|describe|translate|"
+    r"calculate|define|spell|let's|lets|i want|i need|let me)\b")
+CLOSE_CAMERA = re.compile(r"\b(close|turn off|stop|hide|shut|exit)\b.*\b(camera|webcam|looking)\b|^stop looking$")
 
 
 def _norm(text: str) -> str:
@@ -60,6 +75,10 @@ class Batsy:
         self.overlay_dismissed = False
         if self.overlay.enabled:
             self.ctx.display = self.overlay.send
+            from batsy.camera_view import FRAME_PATH
+            from batsy.tools import screen
+
+            screen.on_camera = lambda on: self.overlay.send("camera", on=on, path=str(FRAME_PATH))
         self.brain.visual = self.show_visual
         self.routines = Routines(self)
         from batsy import claude_code
@@ -75,6 +94,9 @@ class Batsy:
             self.brain.skills = self.skills
         threading.Thread(target=apps.INDEX.refresh, daemon=True, name="app-index").start()
         model3d.VIEWER.on_event = self._viewer_event
+        if self.overlay.enabled:  # the 3D viewer lives inside the overlay: one process, controlled by voice
+            model3d.VIEWER.host = lambda: self.overlay.send("model3d")
+            self.overlay.on_viewer_event = self._viewer_event
         self._turn_markers: list[tuple[str, str]] = []
         self.saver_on = False
         self.saver_preview_until = 0.0
@@ -132,6 +154,14 @@ class Batsy:
     def _overlay_dismissed(self) -> None:
         self.overlay_dismissed = True
         self.speaker.stop()
+        self._close_camera()
+
+    @staticmethod
+    def _close_camera() -> None:
+        from batsy.tools import screen
+
+        if screen.camera_pid():
+            screen.close_camera()
 
     # --- learned skills ---------------------------------------------------
     def _confirm_now(self, question: str) -> bool:
@@ -323,6 +353,7 @@ class Batsy:
 
     def _reply(self, text: str) -> None:
         """Speak and caption a locally generated reply."""
+        self.last_said = text
         self.speaker.say(text)
         self.overlay.say(text)
 
@@ -427,10 +458,25 @@ class Batsy:
         self.last_raw_text = text.strip()
         if n in STOP_WORDS:
             self.speaker.stop()
+            self._close_camera()
             self.overlay.hide()
             self.routines.capture = None
             return True
         if self._claude_budget_command(n):
+            return True
+        if self._voiceprint_command(n):
+            return True
+        said = calc.answer(text)  # "what is five plus five": instant, no AI
+        if said:
+            self._reply(said)
+            return True
+        if CLOSE_CAMERA.search(n):
+            self._close_camera()
+            self._reply("Okay.")
+            return True
+        if ATTENTION.match(n):
+            said = screen.open_camera(self.cfg)
+            self._reply("Show me." if said.endswith("open.") else said)
             return True
         from batsy import saver
 
@@ -548,6 +594,7 @@ class Batsy:
 
         self.ears = Ears(self.cfg)
         self.stt = Transcriber(self.cfg, self.ears.model)
+        self.voiceprint = VoicePrint(self.cfg)
         ControlServer(self).start()
         self.ears.start()
         self.speaker.say("Batsy online.")
@@ -565,16 +612,25 @@ class Batsy:
             elif follow_up:
                 follow_up = False
                 self.ears.drain()
+                from batsy.tools import screen
+
                 wait = self.routines.follow_up_seconds or (15 if self.tasks.store.pending else None) or \
-                    self.cfg.get("voice.follow_up_seconds")
+                    (30 if screen.camera_pid() or model3d.VIEWER.active() else None) or \
+                    self.cfg.get("voice.follow_up_seconds")  # live camera / 3D model: keep talking to it
                 audio = self._record(wait, self.ears.preroll(0.3), fresh=False)
-                if audio is None:
+                if audio is None or not self.voiceprint.is_owner(audio):
                     self.overlay.done()
                     continue
                 text = self.stt.transcribe(audio)
                 awaiting = self.routines.capturing or self.last_skill or self.tasks.store.pending  # "no" is an answer
                 ignore = NOISE_TRANSCRIPTS if awaiting else END_FOLLOWUP | NOISE_TRANSCRIPTS
-                if _norm(text) in ignore:
+                # Without the wake word, a short "mm-hmm" / "they got this" is you talking to someone else,
+                # unless Batsy just asked you something.
+                asked = getattr(self, "last_said", "").rstrip().endswith("?")
+                for_me = text.rstrip().endswith("?") or FOR_BATSY.match(_norm(text)) or \
+                    (model3d.VIEWER.active() and model3d.parse(_norm(text)) is not None)  # "rotate it", "top view"
+                if _norm(text) in ignore or not (awaiting or asked or for_me):
+                    log.info("follow-up ignored: %r", text)
                     self.overlay.done()
                     continue
                 self.overlay.heard(text)
@@ -599,6 +655,37 @@ class Batsy:
                 continue
             pending_text, aborted = self._voice_turn(text, strip_wake_word)
             follow_up = pending_text is None and not aborted and self.cfg.get("voice.follow_up_seconds") > 0
+
+    def _voiceprint_command(self, n: str) -> bool:
+        """"learn my voice" records you so Batsy ignores other voices (music, TV, itself); "forget my voice" undoes it."""
+        vp = getattr(self, "voiceprint", None)
+        if vp is None or not re.search(r"\b(learn|remember|forget)\b.* my voice\b", n):
+            return False
+        if not vp.available:
+            self._reply("I don't have the voice recognition model yet, so I can't learn your voice.")
+            return True
+        if "forget" in n:
+            vp.forget()
+            self._reply("Okay, I'll answer any voice again.")
+            return True
+        prompts = ["After the beep, tell me what you did today, for a few seconds.",
+                   "Now say something you'd usually ask me.",
+                   "Last one. Count from one to ten."]
+        clips = []
+        for prompt in prompts:
+            self.speaker.say(prompt)
+            self.speaker.wait_idle()
+            self.speaker.chime()
+            self.ears.drain()
+            audio = self.ears.record_utterance(start_timeout=8)
+            if audio is not None and audio.size >= 16000 * 2:
+                clips.append(audio)
+        if len(clips) < 2:
+            self._reply("I didn't hear enough to learn your voice. Say learn my voice to try again.")
+            return True
+        vp.enroll(clips)
+        self._reply("Got it. From now on I'll only answer your voice. Say forget my voice to undo that.")
+        return True
 
     def _record(self, start_timeout: float, preroll: list[bytes], fresh: bool):
         """Record an utterance while animating the overlay: orb follows your voice, words appear live.
@@ -642,12 +729,15 @@ class Batsy:
             import numpy as np
 
             audio = np.frombuffer(b"".join(preroll), dtype=np.int16)
+        if not self.voiceprint.is_owner(audio):
+            self.overlay.hide()
+            return None
         text = self.stt.transcribe(audio)
         found, rest = strip_wake_word(text, self.cfg.get("voice.wake_words"))
         if _norm(rest) in NOISE_TRANSCRIPTS:
             rest = ""
-        if not found and self.stt.engine == "whisper":
-            log.info("wake word not confirmed by whisper (%r); ignoring", text)
+        if not found and self.stt.engine != "vosk":
+            log.info("wake word not confirmed by %s (%r); ignoring", self.stt.engine, text)
             self.overlay.hide()
             return None
         if rest.strip():
@@ -661,6 +751,7 @@ class Batsy:
 
         def say(sentence: str) -> None:
             if not abort.is_set():
+                self.last_said = sentence
                 self.speaker.say(sentence)
                 self.overlay.say(sentence)
 
