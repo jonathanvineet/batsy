@@ -8,6 +8,10 @@ web_tools = true            # web search + fetch
 compact_at_tokens = 50000   # summarise older conversation beyond this
 clear_tool_results_at = 20000  # drop old tool outputs/images beyond this (0 = never)
 
+[spotify]
+client_id = ""              # from developer.spotify.com, then run: batsy spotify-login
+device = "ipad"             # control the Spotify device whose name contains this
+
 [camera]
 name = "lenovo"             # picks the webcam whose name contains this
 # device = 2                # or force /dev/video2

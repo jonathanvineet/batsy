@@ -6,6 +6,7 @@
   batsy doctor     check microphone, models, API key and tools
   batsy reset      archive the conversation and start fresh
   batsy usage      tokens used today / this week / all time
+  batsy spotify-login   connect Batsy to your Spotify account (one time)
 """
 import argparse
 import fcntl
@@ -127,6 +128,14 @@ def cmd_usage(cfg, args) -> None:
               f"| cache write {tot['cache_write']:>9,} | output {tot['out']:>8,}")
 
 
+def cmd_spotify_login(cfg, args) -> None:
+    from batsy.spotify import Spotify, login
+
+    login(cfg)
+    devs = Spotify(cfg).devices()
+    print("Spotify devices online now:", ", ".join(d["name"] for d in devs) or "none (open Spotify on the iPad)")
+
+
 def cmd_doctor(cfg, args) -> None:
     def check(label, ok, hint=""):
         print(f"  [{'ok' if ok else '!!'}] {label}" + ("" if ok else f"  -> {hint}"))
@@ -155,6 +164,18 @@ def cmd_doctor(cfg, args) -> None:
                        ("notify-send", "dnf install libnotify"), ("gnome-screenshot", "dnf install gnome-screenshot"),
                        ("ffmpeg", "dnf install ffmpeg-free"), ("ydotool", "dnf install ydotool (optional)")]:
         check(tool, bool(shutil.which(tool) or os.path.exists(os.path.expanduser(f"~/.local/bin/{tool}"))), hint)
+    from batsy.spotify import Spotify, SpotifyError
+
+    sp = Spotify(cfg)
+    if not sp.ready():
+        check("Spotify", False, "set [spotify] client_id in config.toml, then run: batsy spotify-login")
+    else:
+        try:
+            devs = sp.devices()
+            check(f"Spotify devices: {', '.join(d['name'] for d in devs) or 'none online'}", bool(devs),
+                  "open Spotify on the iPad")
+        except SpotifyError as e:
+            check("Spotify", False, str(e))
     try:
         import cv2  # noqa: F401
         check("opencv (camera window)", True)
@@ -187,9 +208,11 @@ def main() -> None:
     sub.add_parser("doctor", help="check the setup")
     sub.add_parser("reset", help="start a fresh conversation")
     sub.add_parser("usage", help="show token usage")
+    sub.add_parser("spotify-login", help="connect your Spotify account")
     args = parser.parse_args()
 
     cfg = Config.load()
     _setup_logging(args.verbose or args.cmd in (None, "run") and sys.stderr.isatty())
     {"run": cmd_run, None: cmd_run, "chat": cmd_chat, "ask": cmd_ask,
-     "doctor": cmd_doctor, "reset": cmd_reset, "usage": cmd_usage}[args.cmd](cfg, args)
+     "doctor": cmd_doctor, "reset": cmd_reset, "usage": cmd_usage,
+     "spotify-login": cmd_spotify_login}[args.cmd](cfg, args)

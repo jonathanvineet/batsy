@@ -10,11 +10,11 @@ import sys
 import threading
 import time
 
-from batsy import safety
+from batsy import safety, spotify
 from batsy.brain import Brain
 from batsy.config import SOCKET_PATH
 from batsy.tools import ToolContext, build_registry
-from batsy.tools import monitor
+from batsy.tools import monitor, music
 from batsy.voice.tts import Speaker
 
 log = logging.getLogger("batsy")
@@ -153,6 +153,19 @@ class Batsy:
         if n in ("mute", "unmute", "toggle mute"):
             subprocess.run(["wpctl", "set-mute", "@DEFAULT_AUDIO_SINK@", "toggle"])
             return True
+        sp = music.get_spotify(self.cfg)
+        if sp.ready():
+            try:
+                reply = spotify.handle_local(sp, n)
+            except spotify.SpotifyError as e:
+                reply = str(e)
+            except Exception as e:  # network hiccups etc. must not kill the voice loop
+                log.exception("spotify")
+                reply = f"Spotify had a problem: {e}"
+            if reply is not None:
+                if reply:
+                    self.speaker.say(reply)
+                return True
         if n in ("pause", "play", "pause music", "play music", "resume", "resume music"):
             subprocess.run(["playerctl", "play-pause"], stderr=subprocess.DEVNULL)
             return True

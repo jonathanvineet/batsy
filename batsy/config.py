@@ -39,6 +39,11 @@ DEFAULTS = {
         "all_facts_below": 15,     # send every remembered fact while there are this few...
         "max_facts": 8,            # ...otherwise only the most relevant ones
     },
+    "spotify": {
+        "client_id": "",        # from developer.spotify.com (see README)
+        "device": "ipad",       # preferred Spotify Connect device (name contains this)
+        "redirect_port": 8888,  # login callback http://127.0.0.1:8888/callback
+    },
     "camera": {
         "name": "lenovo",       # matched against the V4L2 device name; first camera if none match
         "device": None,         # force /dev/videoN by number

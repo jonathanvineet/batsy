@@ -23,6 +23,9 @@ Log out and back in once so the Arduino serial-port permission (`dialout` group)
 | "Batsy, open the camera" | opens a live window showing your Lenovo webcam (no Claude call, no tokens) |
 | "Batsy, what am I holding?" / "what colour is this?" | grabs one small frame from that window and answers |
 | "Batsy, close the camera" | closes the window |
+| "Batsy, play Blinding Lights by The Weeknd" / "play my Gym playlist" / "play something chill" | plays on your iPad's Spotify (no tokens) |
+| "Batsy, pause" / "next song" / "what's playing?" / "like this song" / "queue Levitating" | Spotify control (no tokens) |
+| "Batsy, play three upbeat songs for my workout, then shuffle" | Claude works it out with the `spotify` tool |
 | "Batsy, what's on my screen?" | takes a screenshot and looks at it |
 | "Batsy, tell me when my build finishes" / "when the website is back up" | background job or monitor that speaks up when it happens |
 | "Batsy, remind me in 20 minutes to check the oven" | timer (survives restarts) |
@@ -36,6 +39,24 @@ Log out and back in once so the Arduino serial-port permission (`dialout` group)
 - **Interrupting:** say "Batsy" while it's talking.
 - **Risky actions** (`rm -rf`, `dnf remove`, shutdown, disk tools, force-push, etc.) are confirmed by voice first. Root commands go through `pkexec`, which shows the normal GNOME password dialog.
 - **Typing:** `batsy chat` (or `batsy ask "..."`) talks to the running assistant through a local socket.
+
+## Spotify on the iPad (one-time setup)
+
+Batsy controls the Spotify app on your iPad through Spotify Connect, using the Spotify Web API. The iPad app can't be controlled directly over the local network, so commands go through Spotify's servers. Being on the same Wi-Fi doesn't matter. **Spotify Premium is required.**
+
+1. Go to <https://developer.spotify.com/dashboard> and click **Create app**. Give it any name, choose **Web API**, and set the redirect URI to `http://127.0.0.1:8888/callback`.
+2. Copy the app's **Client ID** into `~/.config/batsy/config.toml`:
+   ```toml
+   [spotify]
+   client_id = "your-client-id"
+   device = "ipad"
+   ```
+3. Run `batsy spotify-login` on the laptop and approve access in the browser.
+4. Restart Batsy.
+
+**Things to know:**
+- Spotify has to be open on the iPad. iPadOS suspends it after a while when nothing is playing; if Batsy says it can't see the iPad, tap the Spotify app once.
+- iPads don't allow remote volume control. Use the iPad's buttons, or say "volume 40" to change the laptop's volume.
 
 ## Files
 
@@ -67,7 +88,7 @@ Log out and back in once so the Arduino serial-port permission (`dialout` group)
 ## Keeping token use low
 
 - **The camera never streams to Claude.** The window just shows the feed. Batsy sends a single 768px frame (about 450 tokens) only when you ask a question that needs it.
-- **Instant local commands** use no tokens at all: open/close camera, time, date, "volume 40", mute, play/pause, next, stop, new conversation.
+- **Instant local commands** use no tokens at all: open/close camera, time, date, "volume 40", mute, stop, new conversation, and Spotify commands (play X, pause, next, previous, what's playing, like, queue, shuffle).
 - **Local memory.** Each request carries a few hundred tokens of memory, not the whole history. Tool outputs and images are never re-sent after the request that used them; only a one-line note of each action is kept.
 - **Lean context.** Effort defaults to `low`. Tool output is capped. Web search and fetch are limited per question.
 - **Caching.** The system prompt and tools (about 3.3K tokens) are cached for an hour, so repeat questions only pay for the new part.
