@@ -192,7 +192,7 @@ class LocalBrain:
             else:
                 if out.get("spoken"):
                     emit(out["spoken"])
-                if out.get("ok"):
+                if out.get("ok") and not out.get("alias"):
                     emit("Next time that'll be instant.")
                     self.last_skill_run = out["name"]
                     actions.append(f"learned skill {out['name']}")

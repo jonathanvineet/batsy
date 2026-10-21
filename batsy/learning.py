@@ -69,6 +69,14 @@ handle a kind of request locally next time, with no AI at all.
 
 The user said: "{request}"
 {extra}
+Skills Batsy already has (name: what it does | some phrasings):
+{catalog}
+
+If the user's sentence is just another way of asking for one of those skills, don't write new code. Reply with \
+exactly one line: SAME: <skill name> | <template>. The template is the user's sentence, lowercased and without \
+punctuation, with that skill's {{slots}} in place of the parts that vary. Only do this if that skill really does \
+what they asked: "turn off dark mode" is not the same as "turn on dark mode".
+
 If this is not a repeatable action on the laptop (a question, chat, opinion, something to write or explain, or \
 anything whose answer needs thinking each time), reply with "ANSWER:" followed by a spoken answer of at most three \
 short sentences, with no markdown.
@@ -100,7 +108,10 @@ def norm_template(t: str) -> str:
 
 
 def _extract(reply: str) -> tuple[str, str]:
-    """Claude's reply -> ("skill", code) or ("answer", text)."""
+    """Claude's reply -> ("skill", code), ("same", "name | template") or ("answer", text)."""
+    same = re.search(r"^\s*SAME:\s*(.+)$", reply, re.M)
+    if same and "```" not in reply:
+        return "same", same.group(1).strip()
     m = re.search(r"```(?:python)?\n(.*?)```", reply, re.S)
     if m:
         return "skill", m.group(1)
@@ -230,11 +241,22 @@ class SkillBook:
             extra += f"\nThe current skill for this:\n```python\n{previous}\n```\n"
         if complaint:
             extra += f"\nIt went wrong. The user said / the error was: {complaint}\nFix it.\n"
+        catalog = self.catalog(exclude=name)
         for attempt in range(attempts):
-            reply = self.ask_claude(TEACH.format(request=request, extra=extra))
+            reply = self.ask_claude(TEACH.format(request=request, extra=extra, catalog=catalog))
             kind, body = _extract(reply)
             if kind == "answer":
                 return {"kind": "answer", "text": body}
+            if kind == "same":
+                problem, slots, existing = self._alias(body, n)
+                if problem:
+                    extra += f"\nYour SAME reply was rejected: {problem}. Reply again.\n"
+                    continue
+                if not execute:
+                    return {"kind": "skill", "name": existing, "spoken": "", "ok": True}
+                spoken, ok = self.run(existing, slots, confirm)
+                return {"kind": "skill", "name": existing, "spoken": spoken if ok else
+                        "I tried my existing skill for that, but it failed.", "ok": ok}
             triggers, problem = validate(body)
             rxs = [compile_template(norm_template(t)) for t in triggers]
             m = next((rx.match(n) for rx in rxs if rx.match(n)), None)
@@ -263,6 +285,52 @@ class SkillBook:
         self.reload()
         return {"kind": "skill", "name": name or "", "spoken": "I couldn't work out how to do that reliably.",
                 "ok": False}
+
+    def catalog(self, exclude: str | None = None, limit: int = 60) -> str:
+        """One short line per existing skill, so Claude can spot a new phrasing of something already learned."""
+        lines = []
+        for path in sorted(SKILLS_DIR.glob("*.py"))[:limit]:
+            if path.stem == exclude:
+                continue
+            code = path.read_text()
+            triggers, problem = validate(code)
+            if problem:
+                continue
+            try:
+                doc = (ast.get_docstring(ast.parse(code)) or "").splitlines()[0]
+            except (SyntaxError, IndexError):
+                doc = ""
+            lines.append(f"- {path.stem}: {doc} | " + "; ".join(f'"{t}"' for t in triggers[:3]))
+        return "\n".join(lines) or "(none yet)"
+
+    def _alias(self, body: str, n: str) -> tuple[str | None, dict, str]:
+        """Check a 'SAME: name | template' reply. On success, add the template to that skill's TRIGGERS."""
+        name, _, template = (x.strip() for x in body.partition("|"))
+        path = SKILLS_DIR / f"{name}.py"
+        if not path.exists():
+            return f"there is no skill named {name}", {}, name
+        template = norm_template(template.strip('"'))
+        m = compile_template(template).match(n)
+        if not m:
+            return f'the template "{template}" does not match the sentence "{n}"', {}, name
+        code = path.read_text()
+        tree = ast.parse(code)
+        run = next(x for x in tree.body if isinstance(x, ast.FunctionDef) and x.name == "run")
+        params = {a.arg for a in run.args.args + run.args.kwonlyargs}
+        slots = {k: v.strip() for k, v in m.groupdict().items()}
+        if not set(slots) <= params and run.args.kwarg is None:
+            return f"slots {sorted(set(slots) - params)} are not parameters of {name}.run", {}, name
+        node = next(x for x in tree.body if isinstance(x, ast.Assign)
+                    and any(getattr(t, "id", "") == "TRIGGERS" for t in x.targets))
+        triggers = list(ast.literal_eval(node.value))
+        if template not in triggers:
+            triggers.append(template)
+            lines = code.splitlines(keepends=True)
+            new = "TRIGGERS = [\n" + "".join(f"    {t!r},\n" for t in triggers) + "]\n"
+            path.write_text("".join(lines[:node.lineno - 1]) + new + "".join(lines[node.end_lineno:]))
+            self.reload()
+            log.info("taught skill %s a new phrasing: %r", name, template)
+        return None, slots, name
 
     def _name_for(self, trigger: str) -> str:
         base = "_".join(w for w in re.sub(r"\{\w+\}", "", trigger).split() if w not in ("the", "a", "my"))[:40] or "skill"
