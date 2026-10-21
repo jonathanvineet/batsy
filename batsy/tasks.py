@@ -198,7 +198,8 @@ ADD = re.compile(r"^(?:(?:please )?(?:add|track|create|set up|start tracking|kee
                  r"train|cook|water|take out)\b.+)$")
 LEAD = re.compile(r"^(?:i|we) (?:usually |always |normally |like to |try to )?(?:do|work on|have|go to|go for|go|attend)\s+|"
                   r"^(?:i|we) (?:usually |always |normally |like to |try to )?")
-QUESTION = re.compile(r"^(what|when|how|why|where|who|which|do|does|did|is|are|can|could|should)\b")
+QUESTION = re.compile(r"^(what|when|how|why|where|who|which|do|does|did|is|are|can|could|should|set|change|"
+                      r"make|turn|open|close|play|show|put|switch|stop|start|increase|decrease)\b")
 
 
 class TaskTalk:

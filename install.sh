@@ -56,7 +56,7 @@ for f in "$PIPER_VOICE.onnx" "$PIPER_VOICE.onnx.json"; do
 done
 
 say "Pre-loading the speech recognition model"
-"$VENV/bin/python" -c "from faster_whisper import WhisperModel; WhisperModel('small.en', device='cpu', compute_type='int8')" \
+"$VENV/bin/python" -c "from faster_whisper import WhisperModel; WhisperModel('base.en', device='cpu', compute_type='int8')" \
   2>/dev/null || echo "  (skipped)"
 
 say "Installing arduino-cli"
@@ -66,23 +66,24 @@ fi
 ARDUINO="$(command -v arduino-cli || echo "$BIN/arduino-cli")"
 "$ARDUINO" config init --overwrite >/dev/null 2>&1 || true
 "$ARDUINO" config add board_manager.additional_urls https://espressif.github.io/arduino-esp32/package_esp32_index.json >/dev/null 2>&1 || true
-"$ARDUINO" core update-index
-"$ARDUINO" core install arduino:avr
+"$ARDUINO" core update-index || echo "  (couldn't update the board index; run: arduino-cli core update-index)"
+"$ARDUINO" core install arduino:avr || echo "  (couldn't install Arduino AVR boards; run: arduino-cli core install arduino:avr)"
 
 say "Installing the local AI brain (Ollama + qwen2.5:3b, ~2 GB download)"
 if ! command -v ollama >/dev/null; then
   sudo dnf install -y ollama || curl -fsSL https://ollama.com/install.sh | sh
 fi
-sudo systemctl enable --now ollama 2>/dev/null || (ollama serve >/dev/null 2>&1 &)
-sleep 2
-ollama pull qwen2.5:3b
+sudo systemctl enable --now ollama 2>/dev/null || (nohup ollama serve >/dev/null 2>&1 &)
+for _ in $(seq 1 30); do curl -fs http://127.0.0.1:11434/api/tags >/dev/null && break; sleep 1; done
+ollama pull qwen2.5:3b || echo "  (model download failed; run: ollama pull qwen2.5:3b)"
 
-say "Optional: Claude Code for 'ask Claude ...' (uses your Claude Pro plan)"
-if command -v claude >/dev/null; then
-  echo "  Claude Code found. Run 'claude' once and log in with your Pro account if you haven't."
-else
-  echo "  Not installed. To enable: sudo dnf install -y nodejs && npm install -g @anthropic-ai/claude-code && claude"
+say "Installing Claude Code (Batsy's expert brain, runs on your Claude Pro plan)"
+if ! command -v claude >/dev/null && [ ! -x "$BIN/claude" ]; then
+  curl -fsSL https://claude.ai/install.sh | bash \
+    || { sudo dnf install -y nodejs npm && npm install -g --prefix "$HOME/.local" @anthropic-ai/claude-code; } \
+    || echo "  (Claude Code install failed; see https://docs.claude.com/en/docs/claude-code)"
 fi
+echo "  Log in once with your Pro account: run  claude  in a terminal, then type /login if it asks."
 touch "$CONF/env" && chmod 600 "$CONF/env"
 [ -f "$CONF/config.toml" ] || cp "$REPO/packaging/config.example.toml" "$CONF/config.toml"
 
@@ -92,12 +93,13 @@ mkdir -p "$HOME/.config/autostart" "$HOME/.local/share/applications"
 sed "s|@BATSY@|$VENV/bin/batsy|" "$REPO/packaging/batsy.desktop" > "$HOME/.config/autostart/batsy.desktop"
 cp "$HOME/.config/autostart/batsy.desktop" "$HOME/.local/share/applications/batsy.desktop"
 
-say "Done"
-"$VENV/bin/batsy" doctor || true
+say "Checking everything (batsy selftest)"
+"$VENV/bin/batsy" selftest || true
 cat <<EOF
 
-Batsy will start automatically when you log in.
-Start it now:        batsy -v          (say "Batsy" and wait for the chime)
-Type instead:        batsy chat
-Log out and back in once so the Arduino serial permission applies.
+Next steps (also in ~/batsy/SETUP_AND_TEST.md):
+  1. Log out and back in once (Arduino serial permission + PATH).
+  2. Run  claude  once and log in with your Claude Pro account.
+  3. Run  batsy selftest --all  and fix anything marked FAIL.
+  4. Start Batsy:  batsy -v   (it also starts by itself at login). Say "Batsy" and wait for the chime.
 EOF

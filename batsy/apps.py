@@ -93,21 +93,25 @@ class AppIndex:
 INDEX = AppIndex()
 
 
+def _launch(argv: list[str]) -> bool:
+    try:
+        subprocess.Popen(argv, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+        return True
+    except FileNotFoundError:
+        return False
+
+
 def open_target(target: str) -> str | None:
     """Open a folder, website or app. Returns what to say, or None if it doesn't know the target."""
     t = re.sub(r"^(the|my|up)\s+", "", target.strip().lower()).removesuffix(" app").strip()
     if t in FOLDERS:
-        subprocess.Popen(["xdg-open", str(FOLDERS[t])], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        return f"Opening {t}."
+        return f"Opening {t}." if _launch(["xdg-open", str(FOLDERS[t])]) else None
     if t in SITES or re.fullmatch(r"[a-z0-9-]+(\.[a-z0-9-]+)+(/\S*)?", t.replace(" dot ", ".")):
         url = SITES.get(t) or "https://" + t.replace(" dot ", ".")
-        subprocess.Popen(["xdg-open", url], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        return f"Opening {t}."
+        return f"Opening {t}." if _launch(["xdg-open", url]) else None
     app = INDEX.find(t)
     if app:
-        subprocess.Popen(["gtk-launch", app.id], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                         start_new_session=True)
-        return f"Opening {app.name}."
+        return f"Opening {app.name}." if _launch(["gtk-launch", app.id]) else None
     return None
 
 

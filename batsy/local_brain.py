@@ -17,7 +17,7 @@ import urllib.error
 import urllib.request
 from typing import Callable
 
-from batsy.brain import SpeechChunker
+from batsy.speech import SpeechChunker
 from batsy.config import WORKSPACE
 from batsy.memory_store import get_store
 from batsy.tools import ToolRegistry, truncate
@@ -110,8 +110,13 @@ class LocalBrain:
         self.tools = [
             {"type": "function", "function": {"name": name, "description": desc,
                                               "parameters": {"type": "object", "properties": props, "required": req}}}
-            for name, (desc, props, req) in LOCAL_TOOLS.items() if name in registry.tools
+            for name, (desc, props, req) in LOCAL_TOOLS.items()
+            if name in registry.tools or name in ("ask_claude", "look")  # these two are handled by the brain itself
         ]
+        self._claude_installed = bool(shutil.which("claude")) and cfg.get("local.auto_claude")
+        self.skills = None            # SkillBook, set by the app
+        self.last_skill_run: str | None = None
+        self.last_doc = None          # (path, time) of the file worked on last, for follow-ups
         threading.Thread(target=self._warm_up, daemon=True, name="warm-up").start()
 
     @property

@@ -252,6 +252,11 @@ def main() -> None:
         if args[0] == "open" and VIEWER.proc:  # started from a terminal: keep the window until it's closed
             VIEWER.proc.wait()
         return
+    if len(sys.argv) > 1 and sys.argv[1] == "selftest":  # `batsy selftest [--gui --voice --claude --arduino --all]`
+        from batsy import selftest
+
+        selftest.main(sys.argv[2:])
+        return
     if len(sys.argv) > 1 and sys.argv[1] == "saver":  # `batsy saver get|set|preview`
         from batsy import saver
 

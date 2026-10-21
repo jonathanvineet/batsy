@@ -12,7 +12,6 @@ import time
 
 from batsy import safety, spotify
 from batsy import images
-from batsy.brain import Brain
 from batsy.overlay import Overlay
 from batsy.routines import Routines
 from batsy import apps, model3d
@@ -44,7 +43,9 @@ class Batsy:
         self.speaker = Speaker(cfg, enabled=speak)
         self.ctx = ToolContext(cfg, announce=self.announce, confirm=self._confirm)
         self.registry = build_registry(self.ctx)
-        if cfg.get("brain.engine") == "claude":
+        if cfg.get("brain.engine") == "claude":  # optional: Claude API with your own key (pay per use)
+            from batsy.brain import Brain
+
             self.brain = Brain(cfg, self.registry)
         else:
             from batsy.local_brain import LocalBrain
@@ -147,6 +148,9 @@ class Batsy:
         return self._confirm(question)
 
     def _run_skill(self, name: str, slots: dict, request: str) -> None:
+        from batsy.learning import restore_case
+
+        slots = restore_case(slots, request)  # matching is lowercase; skills get "Jonathan", not "jonathan"
         spoken, ok = self.skills.run(name, slots, self._confirm_now)
         if ok:
             if spoken:
@@ -205,8 +209,25 @@ class Batsy:
         if self.overlay.enabled:
             self.overlay.image(path, caption)
         else:
-            subprocess.Popen(["xdg-open", str(path)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            self._open(str(path))
         return caption
+
+    def _tool(self, argv: list[str]) -> None:
+        """Run a desktop helper (wpctl, playerctl...); say so instead of crashing if it isn't installed."""
+        try:
+            subprocess.run(argv, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=10)
+        except FileNotFoundError:
+            self._reply(f"I need {argv[0]} for that. Run batsy doctor to see what's missing.")
+
+    def _open(self, path) -> None:
+        """Open a file or URL in its default app."""
+        for opener in (["xdg-open"], ["gio", "open"]):
+            try:
+                subprocess.Popen([*opener, str(path)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                return
+            except FileNotFoundError:
+                continue
+        log.warning("no xdg-open/gio to open %s", path)
 
     def ask_user(self, question: str) -> None:
         """Ask something out of the blue and listen for the answer without needing the wake word."""
@@ -257,7 +278,7 @@ class Batsy:
         if path.suffix.lower() in model3d.MODEL_EXTS:  # a model Claude made or edited: show it in the viewer
             model3d.VIEWER.open(path)
             return path.name
-        subprocess.Popen(["xdg-open", str(path)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        self._open(str(path))
         if self.overlay.enabled and path.suffix.lower() in docs.PDF | docs.IMAGES:
             try:
                 self.overlay.image(docs.render(path, 1) if path.suffix.lower() in docs.PDF else path, path.name)
@@ -271,7 +292,7 @@ class Batsy:
         if self.overlay.enabled:
             self.overlay.image(path, caption)
         else:
-            subprocess.Popen(["xdg-open", str(path)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            self._open(str(path))
 
     def pull_up(self, subject: str, speak: bool = True) -> str | None:
         """Picture + accurate facts card for a person/place/thing. Returns the resolved name."""
@@ -291,7 +312,7 @@ class Batsy:
         else:
             print(f"\n[{d['title']}]\n{body}\n{d['url']}")
             if d["image"]:
-                subprocess.Popen(["xdg-open", d["image"]], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                self._open(d["image"])
         if speak:
             self._reply(d["spoken"])
         return d["title"]
@@ -409,8 +430,6 @@ class Batsy:
             self.overlay.hide()
             self.routines.capture = None
             return True
-        if self.tasks.handle(n, text):  # chores/projects: check-in answers, "I do laundry every Sunday"...
-            return True
         if self._claude_budget_command(n):
             return True
         from batsy import saver
@@ -419,6 +438,8 @@ class Batsy:
         if said is not None:
             if said:
                 self._reply(said)
+            return True
+        if self.tasks.handle(n, text):  # chores/projects: check-in answers, "I do laundry every Sunday"...
             return True
         if self._skill_feedback(n, text):
             return True
@@ -494,10 +515,10 @@ class Batsy:
             return True
         m = re.fullmatch(r"(set )?(the )?volume (to )?(\d{1,3})( percent)?", n)
         if m:
-            subprocess.run(["wpctl", "set-volume", "@DEFAULT_AUDIO_SINK@", f"{min(int(m.group(4)), 100)}%"])
+            self._tool(["wpctl", "set-volume", "@DEFAULT_AUDIO_SINK@", f"{min(int(m.group(4)), 100)}%"])
             return True
         if n in ("mute", "unmute", "toggle mute"):
-            subprocess.run(["wpctl", "set-mute", "@DEFAULT_AUDIO_SINK@", "toggle"])
+            self._tool(["wpctl", "set-mute", "@DEFAULT_AUDIO_SINK@", "toggle"])
             return True
         sp = music.get_spotify(self.cfg)
         if sp.ready():
@@ -513,10 +534,10 @@ class Batsy:
                     self._reply(reply)
                 return True
         if n in ("pause", "play", "pause music", "play music", "resume", "resume music"):
-            subprocess.run(["playerctl", "play-pause"], stderr=subprocess.DEVNULL)
+            self._tool(["playerctl", "play-pause"])
             return True
         if n in ("next", "next song", "next track", "skip"):
-            subprocess.run(["playerctl", "next"], stderr=subprocess.DEVNULL)
+            self._tool(["playerctl", "next"])
             return True
         return False
 

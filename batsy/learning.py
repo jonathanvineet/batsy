@@ -101,6 +101,15 @@ def norm(text: str) -> str:
     return re.sub(r"\s+", " ", re.sub(r"[^a-z0-9' ]", "", text.lower())).strip()
 
 
+def restore_case(slots: dict, request: str) -> dict:
+    """Matching happens on lowercase text; hand skills the words as the user said them ("Jonathan")."""
+    out = {}
+    for k, v in slots.items():
+        m = re.search(re.escape(v).replace(r"\ ", r"[\s,.!?]+"), request, re.I)
+        out[k] = m.group(0) if m else v
+    return out
+
+
 def norm_template(t: str) -> str:
     """Normalise a trigger like norm() but keep its {slots}."""
     parts = re.split(r"(\{\w+\})", t.lower())
@@ -254,7 +263,7 @@ class SkillBook:
                     continue
                 if not execute:
                     return {"kind": "skill", "name": existing, "spoken": "", "ok": True}
-                spoken, ok = self.run(existing, slots, confirm)
+                spoken, ok = self.run(existing, restore_case(slots, request), confirm)
                 return {"kind": "skill", "name": existing, "spoken": spoken if ok else
                         "I tried my existing skill for that, but it failed.", "ok": ok}
             triggers, problem = validate(body)
@@ -272,7 +281,7 @@ class SkillBook:
             if not execute:  # already done this time (by the local AI): first real use is the test
                 self._saved(skill, request)
                 return {"kind": "skill", "name": skill, "spoken": "", "ok": True}
-            spoken, ok = self.run(skill, {k: v.strip() for k, v in m.groupdict().items()}, confirm)
+            spoken, ok = self.run(skill, restore_case({k: v.strip() for k, v in m.groupdict().items()}, request), confirm)
             if ok:
                 self._saved(skill, request)
                 return {"kind": "skill", "name": skill, "spoken": spoken, "ok": True}

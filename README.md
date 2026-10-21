@@ -10,7 +10,7 @@ cd batsy
 batsy -v              # start it now; it also starts automatically at login
 ```
 
-Log out and back in once so the Arduino serial-port permission (`dialout` group) applies. Run `batsy doctor` to check the setup.
+Log out and back in once so the Arduino serial-port permission (`dialout` group) applies. Run `claude` once and log in with your Claude Pro account. Then run `batsy selftest --all`, which checks every part and says how to fix anything that fails. **The full step-by-step setup and test checklist is in [SETUP_AND_TEST.md](SETUP_AND_TEST.md).**
 
 ## Using it
 
