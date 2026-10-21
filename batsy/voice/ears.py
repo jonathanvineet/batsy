@@ -101,9 +101,17 @@ class Ears:
         n = int(seconds * FRAMES_PER_SEC)
         return list(self.history)[-n:]
 
+    def live_recognizer(self):
+        """A full-vocabulary recognizer for showing words on screen as they're spoken."""
+        from vosk import KaldiRecognizer
+
+        return KaldiRecognizer(self.model, RATE)
+
     def record_utterance(self, start_timeout: float, preroll: list[bytes] | None = None,
-                         end_silence: float = 0.9, max_seconds: float = 30) -> np.ndarray | None:
-        """Record until the speaker goes quiet. Returns int16 samples, or None if nobody spoke."""
+                         end_silence: float = 0.9, max_seconds: float = 30,
+                         on_frame=None) -> np.ndarray | None:
+        """Record until the speaker goes quiet. Returns int16 samples, or None if nobody spoke.
+        on_frame(frame, level, speaking) is called for every frame (drives the overlay)."""
         frames = list(preroll or [])
         thresh = self.threshold()
         started, silent, waited, total = False, 0, 0, 0
@@ -113,7 +121,10 @@ class Ears:
                 continue
             frames.append(frame)
             total += 1
-            loud = rms(frame) > thresh
+            level = rms(frame)
+            loud = level > thresh
+            if on_frame:
+                on_frame(frame, level / (thresh * 6), started or loud)
             if not started:
                 if loud:
                     started, silent = True, 0

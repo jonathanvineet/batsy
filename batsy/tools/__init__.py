@@ -28,6 +28,7 @@ class ToolContext:
     confirm: Callable[[str], bool]           # ask the user yes/no, blocks
     abort: threading.Event = field(default_factory=threading.Event)
     flags: dict = field(default_factory=dict)  # e.g. {"restart": True, "new_conversation": True}
+    display: Callable[..., None] | None = None  # overlay.send(cmd, **kw) when the screen overlay is running
 
 
 @dataclass
@@ -107,9 +108,9 @@ class ToolRegistry:
 
 
 def build_registry(ctx: ToolContext) -> ToolRegistry:
-    from batsy.tools import arduino, files, memory, monitor, music, screen, shell, skills, system
+    from batsy.tools import arduino, display, files, memory, monitor, music, screen, shell, skills, system
 
     reg = ToolRegistry(ctx)
-    for mod in (shell, files, system, screen, arduino, music, monitor, memory, skills):
+    for mod in (shell, files, system, screen, display, arduino, music, monitor, memory, skills):
         mod.register(reg)
     return reg

@@ -44,6 +44,13 @@ DEFAULTS = {
         "device": "ipad",       # preferred Spotify Connect device (name contains this)
         "redirect_port": 8888,  # login callback http://127.0.0.1:8888/callback
     },
+    "overlay": {
+        "enabled": True,              # full-screen Batsy view while you talk to it
+        "linger_seconds": 6,          # stay up this long after a spoken-only answer
+        "linger_media_seconds": 30,   # ...or after showing a picture / card
+        "live_words": True,           # show your words as you speak (local Vosk, no tokens)
+        "qt_platform": "",            # e.g. "xcb" to force XWayland if the window won't come to the front
+    },
     "camera": {
         "name": "lenovo",       # matched against the V4L2 device name; first camera if none match
         "device": None,         # force /dev/videoN by number

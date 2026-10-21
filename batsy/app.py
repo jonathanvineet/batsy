@@ -11,7 +11,9 @@ import threading
 import time
 
 from batsy import safety, spotify
+from batsy import images
 from batsy.brain import Brain
+from batsy.overlay import Overlay
 from batsy.config import SOCKET_PATH
 from batsy.tools import ToolContext, build_registry
 from batsy.tools import monitor, music
@@ -44,7 +46,20 @@ class Batsy:
         self.confirm_request: dict | None = None
         self.ears = None
         self.stt = None
+        self.overlay = Overlay(cfg, on_dismiss=self._overlay_dismissed, enabled=voice)
+        self.overlay_dismissed = False
+        if self.overlay.enabled:
+            self.ctx.display = self.overlay.send
         monitor.start_background(self.ctx)
+
+    def _overlay_dismissed(self) -> None:
+        self.overlay_dismissed = True
+        self.speaker.stop()
+
+    def _reply(self, text: str) -> None:
+        """Speak and caption a locally generated reply."""
+        self.speaker.say(text)
+        self.overlay.say(text)
 
     # --- shared plumbing --------------------------------------------------
     def announce(self, text: str) -> None:
@@ -129,22 +144,38 @@ class Batsy:
         n = _norm(text)
         if n in STOP_WORDS:
             self.speaker.stop()
+            self.overlay.hide()
             return True
         if n in RESET_PHRASES:
             self.brain.reset()
-            self.speaker.say("Fresh start. I still remember the long-term stuff.")
+            self._reply("Fresh start. I still remember the long-term stuff.")
             return True
         if re.fullmatch(r"(please )?(open|start|show|turn on)( up)?( the| my)? (camera|webcam)( please)?", n):
-            self.speaker.say(screen.open_camera(self.cfg))
+            self._reply(screen.open_camera(self.cfg))
             return True
         if re.fullmatch(r"(please )?(close|stop|hide|turn off)( the| my)? (camera|webcam)( please)?", n):
-            self.speaker.say(screen.close_camera())
+            self._reply(screen.close_camera())
+            return True
+        m = re.fullmatch(r"(show me|pull up|display|let me see|show)( a| an| some| the)? (picture|photo|image|pic)s? of (.+)", n)
+        if m:
+            try:
+                path, caption = images.find_image(m.group(4))
+                if self.overlay.enabled:
+                    self.overlay.image(path, caption)
+                else:
+                    subprocess.Popen(["xdg-open", str(path)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                self._reply(f"Here's {caption}." if caption else "Here you go.")
+            except LookupError:
+                self._reply(f"I couldn't find a picture of {m.group(4)}.")
+            except Exception as e:
+                log.exception("image lookup")
+                self._reply(f"Picture search failed: {e}")
             return True
         if re.fullmatch(r"what('s| is) the time( now)?|what time is it( now)?", n):
-            self.speaker.say(time.strftime("It's %-I:%M %p."))
+            self._reply(time.strftime("It's %-I:%M %p."))
             return True
         if re.fullmatch(r"what('s| is) (the date|today's date)|what day is (it|today)", n):
-            self.speaker.say(time.strftime("It's %A, %B %-d."))
+            self._reply(time.strftime("It's %A, %B %-d."))
             return True
         m = re.fullmatch(r"(set )?(the )?volume (to )?(\d{1,3})( percent)?", n)
         if m:
@@ -164,7 +195,7 @@ class Batsy:
                 reply = f"Spotify had a problem: {e}"
             if reply is not None:
                 if reply:
-                    self.speaker.say(reply)
+                    self._reply(reply)
                 return True
         if n in ("pause", "play", "pause music", "play music", "resume", "resume music"):
             subprocess.run(["playerctl", "play-pause"], stderr=subprocess.DEVNULL)
@@ -194,13 +225,15 @@ class Batsy:
             elif follow_up:
                 follow_up = False
                 self.ears.drain()
-                audio = self.ears.record_utterance(start_timeout=self.cfg.get("voice.follow_up_seconds"),
-                                                   preroll=self.ears.preroll(0.3))
+                audio = self._record(self.cfg.get("voice.follow_up_seconds"), self.ears.preroll(0.3), fresh=False)
                 if audio is None:
+                    self.overlay.done()
                     continue
                 text = self.stt.transcribe(audio)
                 if _norm(text) in END_FOLLOWUP | NOISE_TRANSCRIPTS:
+                    self.overlay.done()
                     continue
+                self.overlay.heard(text)
             else:
                 frame = self.ears.read(0.5)
                 if frame is None or not self.ears.wake_hit(frame):
@@ -209,22 +242,55 @@ class Batsy:
                 if text is None:
                     continue
                 if not text:
-                    self.speaker.say("Yes?")
+                    self._reply("Yes?")
                     self.speaker.wait_idle()
                     follow_up = True
                     continue
 
             if self.local_command(text):
+                self.speaker.wait_idle()
+                self.overlay.done()
+                follow_up = self.cfg.get("voice.follow_up_seconds") > 0 and _norm(text) not in STOP_WORDS
                 continue
             pending_text, aborted = self._voice_turn(text, strip_wake_word)
             follow_up = pending_text is None and not aborted and self.cfg.get("voice.follow_up_seconds") > 0
+
+    def _record(self, start_timeout: float, preroll: list[bytes], fresh: bool):
+        """Record an utterance while animating the overlay: orb follows your voice, words appear live.
+        fresh=True (after the wake word) opens the overlay at once; follow-ups open it only once you speak."""
+        live = self.ears.live_recognizer() if self.overlay.enabled and self.cfg.get("overlay.live_words") else None
+        state = {"shown": False, "partial": "", "n": 0}
+        if fresh:
+            self.overlay_dismissed = False
+            self.overlay.listen(fresh=True)
+            state["shown"] = True
+
+        def on_frame(frame, level, speaking):
+            if not self.overlay.enabled:
+                return
+            if not state["shown"]:
+                if not speaking or self.overlay_dismissed:
+                    return
+                self.overlay.listen()
+                state["shown"] = True
+            state["n"] += 1
+            if state["n"] % 2 == 0:  # ~10 updates/s is plenty
+                self.overlay.level(min(1.0, level))
+            if live is not None:
+                live.AcceptWaveform(frame)
+                text = json.loads(live.PartialResult()).get("partial", "")
+                if text and text != state["partial"]:
+                    state["partial"] = text
+                    self.overlay.partial(text)
+
+        return self.ears.record_utterance(start_timeout=start_timeout, preroll=preroll, on_frame=on_frame)
 
     def _listen_after_wake(self, strip_wake_word) -> str | None:
         """Record the command that follows the wake word. None = false alarm, '' = wake word only."""
         self.speaker.stop()
         self.speaker.chime()
         preroll = self.ears.preroll(2.0)
-        audio = self.ears.record_utterance(start_timeout=5, preroll=preroll)
+        audio = self._record(5, preroll, fresh=True)
         if audio is None:
             # they said just the wake word and waited; check the pre-roll really contained it
             import numpy as np
@@ -236,7 +302,10 @@ class Batsy:
             rest = ""
         if not found and self.stt.engine == "whisper":
             log.info("wake word not confirmed by whisper (%r); ignoring", text)
+            self.overlay.hide()
             return None
+        if rest.strip():
+            self.overlay.heard(rest.strip())
         return rest.strip()
 
     def _voice_turn(self, text: str, strip_wake_word) -> tuple[str | None, bool]:
@@ -247,6 +316,7 @@ class Batsy:
         def say(sentence: str) -> None:
             if not abort.is_set():
                 self.speaker.say(sentence)
+                self.overlay.say(sentence)
 
         def work():
             try:
@@ -257,6 +327,7 @@ class Batsy:
             finally:
                 done.set()
 
+        self.overlay.think()
         threading.Thread(target=work, daemon=True, name="turn").start()
         self.ears.drain()
         barge_in = self.cfg.get("voice.barge_in")
@@ -278,6 +349,7 @@ class Batsy:
                 if not new_text or self.local_command(new_text):
                     return None, True
                 return new_text, True
+        self.overlay.done()
         return None, abort.is_set()
 
 
