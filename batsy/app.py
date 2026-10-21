@@ -80,6 +80,8 @@ class Batsy:
 
             screen.on_camera = lambda on: self.overlay.send("camera", on=on, path=str(FRAME_PATH))
         self.brain.visual = self.show_visual
+        if self.overlay.enabled:
+            self.brain.status = lambda text: self.overlay.send("status", text=text)
         self.routines = Routines(self)
         from batsy import claude_code
         from batsy.tasks import TaskTalk
@@ -181,6 +183,7 @@ class Batsy:
         from batsy.learning import restore_case
 
         slots = restore_case(slots, request)  # matching is lowercase; skills get "Jonathan", not "jonathan"
+        self.overlay.send("status", text=f"Running skill · {name.replace('_', ' ')}")
         spoken, ok = self.skills.run(name, slots, self._confirm_now)
         if ok:
             if spoken:
@@ -621,6 +624,7 @@ class Batsy:
                 if audio is None or not self.voiceprint.is_owner(audio):
                     self.overlay.done()
                     continue
+                self.overlay.send("status", text="Transcribing")
                 text = self.stt.transcribe(audio)
                 awaiting = self.routines.capturing or self.last_skill or self.tasks.store.pending  # "no" is an answer
                 ignore = NOISE_TRANSCRIPTS if awaiting else END_FOLLOWUP | NOISE_TRANSCRIPTS
@@ -732,6 +736,7 @@ class Batsy:
         if not self.voiceprint.is_owner(audio):
             self.overlay.hide()
             return None
+        self.overlay.send("status", text="Transcribing")
         text = self.stt.transcribe(audio)
         found, rest = strip_wake_word(text, self.cfg.get("voice.wake_words"))
         if _norm(rest) in NOISE_TRANSCRIPTS:

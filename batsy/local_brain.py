@@ -194,8 +194,12 @@ class LocalBrain:
             calls = self._calls_in_text(content)
         return content, calls
 
+    def status(self, text: str) -> None:
+        """What Batsy is doing right now, for the overlay ("Asking Claude"...). Replaced by the voice app."""
+
     def _quick(self, text: str) -> str | None:
         """Fast answer with a tiny prompt and no tools. None = the small model passed (needs the full path)."""
+        self.status("Thinking · local model")
         recent = self.memory.build_context(text, self.cfg, recent=1, related=0)[-400:]
         messages = [{"role": "system", "content": QUICK_SYSTEM.format(user=os.environ.get("BATSY_USER_NAME") or getpass.getuser())},
                     {"role": "user", "content": (f"{recent}\n\n" if recent else "") + text}]
@@ -273,6 +277,7 @@ class LocalBrain:
             from batsy import claude_code
             from batsy.saver import SAVER_BRIEF, load
 
+            self.status("Redesigning the screensaver · Claude")
             answer = claude_code.run(SAVER_BRIEF.format(request=text, spec=json.dumps(load())), "redesigning screensaver",
                                      args=["--allowedTools", "Bash(batsy saver:*)"], timeout=300)
             chunker = SpeechChunker(emit, on_marker)
@@ -308,6 +313,7 @@ class LocalBrain:
             if not self.registry.ctx.confirm(f"Just to check, you want me to {text.strip().rstrip('.?!')}?"):
                 return self._finish(source, text, spoken, actions, abort)
             emit("One sec.")  # usually an existing skill said differently; only new ones are "learned"
+            self.status("Checking my skills · Claude")
             out = self.skills.learn(text, self.registry.ctx.confirm)
             if out["kind"] == "answer":
                 emit(out["text"])
@@ -334,6 +340,7 @@ class LocalBrain:
 
         for _ in range(m["max_steps"]):
             chunker = SpeechChunker(emit, on_marker)
+            self.status("Thinking · local model")
             try:
                 result = self._stream(messages, chunker, abort)
             except urllib.error.URLError as e:
@@ -367,6 +374,7 @@ class LocalBrain:
                     break
                 if on_tool:
                     on_tool(name)
+                self.status(f"Running {name.replace('_', ' ')}")
                 out, is_error = self.registry.execute(name, args) if name in LOCAL_TOOLS else (f"No tool {name}.", True)
                 out = out if isinstance(out, str) else "done"
                 actions.append(f"{name} {json.dumps(args)[:80]} -> {'ERROR ' if is_error else ''}{out.strip()[:60]}")
@@ -434,6 +442,7 @@ class LocalBrain:
             note = "unreadable locally"
         self.last_doc = (path, time.time())
         actions.append(f"worked on file {path}")
+        self.status("Reading the document · Claude")
         answer = ask_claude_docs(text, path, docs.info(path), note, context)
         chunker = SpeechChunker(emit, on_marker)
         chunker.feed(answer)
@@ -445,6 +454,7 @@ class LocalBrain:
         emit("Let me work on that.")
         if on_tool:
             on_tool("3d")
+        self.status("Working on the 3D model · Claude")
         answer = ask_claude_3d(text, context)
         actions.append("3D work by Claude")
         chunker = SpeechChunker(emit, on_marker)
@@ -456,6 +466,7 @@ class LocalBrain:
         from batsy.tools.screen import capture
 
         img = WORKSPACE / ".vision" / f"{source}.jpg"
+        self.status("Looking through the camera" if source == "webcam" else "Reading the screen")
         err = capture(source, img, self.cfg)
         if err:
             emit(f"I couldn't see the {source}: {err[:120]}")
@@ -469,6 +480,7 @@ class LocalBrain:
         if on_tool:
             on_tool("ask_claude")
         log.info("routing to Claude: %s", request[:120])
+        self.status("Asking Claude" if "(Read the image" not in request else "Asking Claude about what I see")
         answer = ask_claude(request, context)
         chunker = SpeechChunker(emit, on_marker)
         chunker.feed(answer)

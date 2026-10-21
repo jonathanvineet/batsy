@@ -20,7 +20,7 @@ SPEC_FILE = DATA_DIR / "screensaver.json"
 STYLES = ["aurora", "stars", "waves", "orb", "minimal"]
 ACCENTS = {"purple": "#d646ff", "blue": "#4f9dff", "cyan": "#38e1ff", "green": "#43e08a", "red": "#ff4d5e",
            "orange": "#ff9d3a", "pink": "#ff5fbf", "gold": "#f5c542", "yellow": "#ffe14d", "white": "#f0f0f0",
-           "teal": "#2fd4b5"}
+           "teal": "#2fd4b5", "batman": "#ffc20e"}
 WIDGETS = {  # type: (default title, column span)
     "clock": ("", 3), "claude_budget": ("Claude", 2), "local_tokens": ("Local AI · today", 1),
     "running": ("Running now", 1), "waiting": ("Waiting for you", 1), "upcoming": ("Coming up", 1),
@@ -58,13 +58,13 @@ def load() -> dict:
             return json.loads(SPEC_FILE.read_text())
         except ValueError:
             pass
-    return {"theme": {"style": "aurora", "accent": ACCENTS["purple"]}, "widgets": PRESETS["default"],
+    return {"theme": {"style": "stars", "accent": ACCENTS["batman"]}, "widgets": PRESETS["default"],
             "auto_adapt": True}
 
 
 def save(spec: dict) -> None:
     spec.setdefault("theme", {}).setdefault("style", "aurora")
-    spec["theme"].setdefault("accent", ACCENTS["purple"])
+    spec["theme"].setdefault("accent", ACCENTS["batman"])
     spec["widgets"] = [w for w in spec.get("widgets", []) if w.get("type") in WIDGETS]
     SPEC_FILE.write_text(json.dumps(spec, indent=1))
 

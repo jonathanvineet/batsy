@@ -25,7 +25,8 @@ from batsy.config import SOCKET_PATH, WORKSPACE
 
 SOCK = SOCKET_PATH.parent / f"batsy-3d-{os.getuid()}.sock"
 OUT = WORKSPACE / "3d"
-PALETTE = ["#b9a7ff", "#7fd4ff", "#ffb86b", "#7dffb0", "#ff7fbf", "#ffe57f", "#c0c0c0", "#ff8080"]
+# Batman: bat-signal yellow first, then steel and gunmetal tones so several parts stay distinguishable.
+PALETTE = ["#ffc20e", "#c9ced8", "#e8a317", "#8a93a6", "#fff1b8", "#5c6578", "#ffdd66", "#a7aebb"]
 COLORS = {"red": "#ff5a5a", "green": "#5adf7a", "blue": "#5a9bff", "yellow": "#ffe15a", "orange": "#ffa64d",
           "purple": "#b07cff", "pink": "#ff7cc8", "white": "#f2f2f2", "black": "#222222", "grey": "#a0a0a0",
           "gray": "#a0a0a0", "silver": "#c8c8d0", "gold": "#e6c35a", "cyan": "#5ae6e6", "brown": "#a0704a"}
@@ -66,8 +67,8 @@ class Viewer(QMainWindow):
         if host is None:
             self.setCentralWidget(self.plotter.interactor)
         p = self.plotter
-        p.set_background("#100d1c", top="#2b2244")
-        p.add_axes(color="white")
+        p.set_background("#050609", top="#1c2029")
+        p.add_axes(color="#9aa3b2")
         p.enable_anti_aliasing()
         self.models: dict[str, Model] = {}
         self.dims_on, self.grid_on, self.style, self.opacity = True, True, "solid", 1.0
@@ -168,7 +169,7 @@ class Viewer(QMainWindow):
                 span = float(max(size[0], size[1]) * 1.8 + 1)
                 plane = pv.Plane(center=((lo[0] + hi[0]) / 2, (lo[1] + hi[1]) / 2, lo[2] - 0.01), i_size=span,
                                  j_size=span, i_resolution=20, j_resolution=20)
-                self.extra_actors.append(p.add_mesh(plane, style="wireframe", color="#6b5fa8", opacity=0.35,
+                self.extra_actors.append(p.add_mesh(plane, style="wireframe", color="#3a4150", opacity=0.45,
                                                     line_width=1, pickable=False))
             if self.dims_on:
                 off = float(max(size) * 0.08 + 0.5)
@@ -179,11 +180,12 @@ class Viewer(QMainWindow):
                 ]
                 for a_, b_, title in rulers:
                     if np.linalg.norm(np.subtract(b_, a_)) > 1e-6:
-                        self.extra_actors.append(p.add_ruler(a_, b_, title=title, number_labels=3,
-                                                             font_size_factor=0.7, label_color="white",
-                                                             tick_color="white"))
+                        ruler = p.add_ruler(a_, b_, title=title, number_labels=2, show_labels=False,
+                                            font_size_factor=0.8, label_color="#ffc20e", tick_color="#ffc20e")
+                        ruler.GetTitleTextProperty().SetColor(1.0, 0.76, 0.055)  # VTK colours titles separately
+                        self.extra_actors.append(ruler)
                 self.extra_actors.append(p.add_mesh(pv.Box(bounds=(lo[0], hi[0], lo[1], hi[1], lo[2], hi[2])),
-                                                    style="wireframe", color="#ff7cc8", opacity=0.5,
+                                                    style="wireframe", color="#ffc20e", opacity=0.22,
                                                     line_width=1, pickable=False))
         self._hud()
         if reset_camera:
@@ -199,7 +201,7 @@ class Viewer(QMainWindow):
         if self.last_measure is not None:
             lines.append(f"measured: {self.last_measure:.2f} mm")
         lines.append(self.message)
-        self.plotter.add_text("\n".join(lines), position="upper_left", font_size=10, color="white", name="hud")
+        self.plotter.add_text("\n".join(lines), position="upper_left", font_size=10, color="#e8eaf0", name="hud")
 
     def _stats(self, m: Model, material: str = "pla", infill: float = 1.0) -> dict:
         mm = m.mesh()
@@ -228,7 +230,7 @@ class Viewer(QMainWindow):
             if not c.get("keep"):
                 self.models.clear()
                 self.plotter.clear_actors()
-                self.plotter.add_axes(color="white")
+                self.plotter.add_axes(color="#9aa3b2")
             name = c.get("name") or Path(path).stem
             self.models[name] = Model(name, path, mesh, PALETTE[len(self.models) % len(PALETTE)])
             self.message = f"Loaded {Path(path).name}"

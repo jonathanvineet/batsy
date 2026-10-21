@@ -6,25 +6,59 @@ Commands in:  {"cmd": "listen"} {"cmd": "level", "v": 0..1} {"cmd": "partial", "
               {"cmd": "saver", "stats": {...}, "next": "..."}  (screensaver; any mouse/key input ends it)
               {"cmd": "camera", "on": bool, "path"}  (live camera feed from batsy.camera_view's frame file)
               {"cmd": "model3d"}  (host the 3D viewer in this window; it then takes commands on its own socket)
+              {"cmd": "status", "text"}  (what Batsy is doing right now: "Asking Claude", "Running skill"...)
 Events out:   {"event": "dismissed"}  (Esc / click / Space)
               {"event": "measured", "mm"}  (3D viewer click-to-measure)
 """
 import json
 import math
 import os
+import random
 import sys
 import threading
 import time
 
 from PySide6.QtCore import QObject, QPointF, QRectF, Qt, QTimer, Signal
-from PySide6.QtGui import (QColor, QFont, QFontMetrics, QGuiApplication, QPainter, QPainterPath, QPen, QPixmap,
-                           QRadialGradient, QTextOption)
+from PySide6.QtGui import (QColor, QFont, QFontMetrics, QGuiApplication, QLinearGradient, QPainter, QPainterPath,
+                           QPen, QPixmap, QPolygonF, QRadialGradient, QTextOption)
 from PySide6.QtWidgets import QApplication, QWidget
 
 from batsy.camera_view import FLASH_PATH
 
-ACCENT = {"listen": QColor(214, 70, 255), "think": QColor(70, 200, 255), "speak": QColor(150, 110, 255),
-          "idle": QColor(120, 110, 160)}
+# Gotham at night: near-black, steel greys, bat-signal yellow.
+YELLOW = QColor(255, 194, 14)
+STEEL = QColor(150, 158, 174)
+TEXT = QColor(234, 236, 242)
+INK = QColor(5, 6, 9)
+ACCENT = {"listen": QColor(255, 210, 50), "think": QColor(255, 168, 0), "speak": YELLOW, "idle": QColor(110, 118, 134)}
+HEAD_FONT = "Nimbus Sans Narrow"  # condensed caps for labels and titles
+BODY_FONT = "Cantarell"
+STATE_LABEL = {"listen": "Listening", "think": "Thinking", "speak": "Speaking", "idle": ""}
+
+
+def _bat_path() -> QPainterPath:
+    """A bat in flight, wingspan 2 units, centred on (0, 0); y grows downwards. Right half, mirrored."""
+    def curve(a, ctrl, b, n=6):  # sampled quadratic: the scalloped trailing edge of the wing
+        return [((1 - t) ** 2 * a[0] + 2 * (1 - t) * t * ctrl[0] + t * t * b[0],
+                 (1 - t) ** 2 * a[1] + 2 * (1 - t) * t * ctrl[1] + t * t * b[1]) for t in (i / n for i in range(1, n + 1))]
+
+    right = [(0.0, -0.17), (0.06, -0.31), (0.10, -0.15), (0.22, -0.19), (0.48, -0.30), (0.78, -0.31), (1.0, -0.17),
+             (0.93, -0.02), (0.88, 0.12)]
+    for ctrl, end in [((0.80, 0.0), (0.70, 0.04)), ((0.64, 0.10), (0.55, 0.17)), ((0.48, 0.05), (0.38, 0.12)),
+                      ((0.30, 0.20), (0.22, 0.28)), ((0.14, 0.15), (0.0, 0.42))]:
+        right += curve(right[-1], ctrl, end)
+    outline = right + [(-x, y) for x, y in reversed(right[1:-1])]
+    return _polygon_path(outline)
+
+
+def _polygon_path(points) -> QPainterPath:
+    path = QPainterPath()
+    path.addPolygon(QPolygonF([QPointF(x, y) for x, y in points]))
+    path.closeSubpath()
+    return path
+
+
+BAT = _bat_path()
 
 
 class Bridge(QObject):
@@ -54,6 +88,15 @@ class Overlay(QWidget):
         self.camera_path: str | None = None  # live camera feed while set
         self.camera_mtime = 0.0
         self.cam_timer = QTimer(self, interval=100, timeout=self._camera_frame)
+        self.status = ""  # what Batsy is doing right now (shown with a seconds counter)
+        self.status_t0 = time.time()
+        rng = random.Random(7)  # a fixed Gotham skyline: (x, width, height) as fractions of the screen
+        self.skyline, x = [], 0.0
+        while x < 1.0:
+            bw = rng.uniform(0.025, 0.07)
+            self.skyline.append((x, bw, rng.uniform(0.04, 0.15) * (1.5 if rng.random() < 0.12 else 1)))
+            x += bw + rng.uniform(0.0, 0.006)
+        self.windows = [(rng.random(), rng.random(), rng.random()) for _ in range(160)]
         self.viewer = None  # batsy.viewer3d.Viewer drawing into this window, created on first use
         self.model_on = False
         # 3D unused for a while: quit, so Batsy restarts the overlay without VTK's few hundred MB.
@@ -78,6 +121,13 @@ class Overlay(QWidget):
             return
         if cmd in ("listen", "think", "say", "image", "card", "hide"):
             self._leave_saver()
+        if cmd == "status":
+            text = m.get("text", "")
+            if text != self.status:
+                self.status, self.status_t0 = text, time.time()
+            self._appear()
+        elif cmd in ("say", "done", "hide") or (cmd == "listen" and m.get("fresh")):
+            self.status = ""
         if cmd == "listen":
             self.hide_timer.stop()
             if m.get("fresh"):
@@ -245,27 +295,40 @@ class Overlay(QWidget):
         if self.saver is not None:
             self._paint_saver(p, w, h)
             return
-        p.fillRect(self.rect(), QColor(6, 5, 14, int(225 * self.fade)))
+        self._gotham(p, w, h)
         p.setOpacity(self.fade)
 
-        has_media = self.image is not None or self.card is not None or (self.model_on and not self.camera_path)
-        orb_c = QPointF(w * 0.08 + 40, h * 0.1 + 30) if has_media else QPointF(w / 2, h * 0.40)
-        orb_r = 46 if has_media else min(w, h) * 0.11
-        self._orb(p, orb_c, orb_r)
+        model = self.model_on and not self.camera_path
+        has_media = self.image is not None or self.card is not None or model
+        sig_c = QPointF(w * 0.08 + 30, h * 0.1 + 24) if has_media else QPointF(w / 2, h * 0.36)
+        sig_r = 42 if has_media else min(w, h) * 0.12
+        self._signal(p, sig_c, sig_r)
+        if has_media:  # status beside the small emblem
+            self._status(p, QPointF(sig_c.x() - sig_r - 10, sig_c.y() + sig_r + 18), center=False)
+        else:
+            self._status(p, QPointF(w / 2, sig_c.y() + sig_r * 1.45 + 18))
 
         text_w = w * 0.70
-        y = (h * 0.40 + orb_r + 50) if not has_media else h * 0.80
+        y = (sig_c.y() + sig_r * 1.45 + 72) if not has_media else h * 0.80
         if not has_media:
             line = self.heard or self.partial
             if line:
-                col = QColor(235, 235, 245) if self.heard else QColor(170, 165, 190)
+                col = STEEL if self.heard else QColor(STEEL.red(), STEEL.green(), STEEL.blue(), 150)
                 y = self._text(p, f"“{line}”" if self.heard else line, QRectF((w - text_w) / 2, y, text_w, 200),
-                               22, col, italic=not self.heard) + 24
+                               20, col, italic=not self.heard) + 22
             if self.answer:
-                self._text(p, self.answer, QRectF((w - text_w) / 2, y, text_w, h - y - 40), 30, QColor(255, 255, 255))
+                self._text(p, self.answer, QRectF((w - text_w) / 2, y, text_w, h - y - 40), 30, TEXT)
         else:
             top = h * 0.07
-            if self.image is not None and self.card is not None:  # side by side: picture left, card right
+            if model:  # frame around the 3D view (the view itself is a child widget drawn on top)
+                r = QRectF(w * 0.17, h * 0.06, w * 0.71, h * 0.72).adjusted(-3, -3, 3, 3)
+                p.setPen(QPen(QColor(YELLOW.red(), YELLOW.green(), YELLOW.blue(), 110), 1.5))
+                p.setBrush(Qt.NoBrush)
+                p.drawRect(r)
+                self._text(p, "SAY: ROTATE IT · TOP VIEW · ZOOM IN · DIMENSIONS · CLOSE THE MODEL",
+                           QRectF(r.left(), r.bottom() + 6, r.width(), 20), 10, STEEL, family=HEAD_FONT,
+                           spacing=2.0)
+            elif self.image is not None and self.card is not None:  # side by side: picture left, card right
                 self._image(p, QRectF(w * 0.06, top, w * 0.52, h * 0.68))
                 self._card(p, QRectF(w * 0.61, top + h * 0.04, w * 0.33, h * 0.60))
             elif self.image is not None:
@@ -274,10 +337,78 @@ class Overlay(QWidget):
                 self._card(p, QRectF(w * 0.18, top, w * 0.64, h * 0.68))
             sub = self.answer or self.heard or self.partial
             if sub:
-                self._text(p, sub, QRectF(w * 0.12, h * 0.80, w * 0.76, h * 0.18), 24, QColor(255, 255, 255),
-                           center=True)
-        p.setOpacity(0.35 * self.fade)
-        self._text(p, "Esc to close", QRectF(0, h - 34, w - 24, 24), 11, QColor(200, 200, 220), align=Qt.AlignRight)
+                self._text(p, sub, QRectF(w * 0.12, h * 0.83, w * 0.76, h * 0.15), 22, TEXT, center=True)
+        p.setOpacity(0.5 * self.fade)
+        self._text(p, "ESC TO CLOSE", QRectF(0, h - 30, w - 24, 20), 10, STEEL, align=Qt.AlignRight,
+                   family=HEAD_FONT, spacing=2.0)
+
+    def _gotham(self, p: QPainter, w: int, h: int) -> None:
+        """Night sky over a dark skyline, with a searchlight beam while Batsy is busy."""
+        a = self.fade
+        sky = QLinearGradient(0, 0, 0, h)
+        sky.setColorAt(0, QColor(10, 12, 18, int(240 * a)))
+        sky.setColorAt(0.7, QColor(5, 6, 9, int(240 * a)))
+        sky.setColorAt(1, QColor(2, 2, 4, int(245 * a)))
+        p.fillRect(self.rect(), sky)
+        t = time.time() - self.t0
+        if self.state in ("think", "listen", "speak"):  # searchlight from the rooftops up to the signal
+            sway = 0.04 * math.sin(t * (1.6 if self.state == "think" else 0.5))
+            base = QPointF(w * (0.62 + sway), h)
+            tip_l, tip_r = QPointF(w * (0.38 + sway * 2), 0), QPointF(w * (0.62 + sway * 2), 0)
+            beam = QLinearGradient(base, QPointF(w / 2, 0))
+            beam.setColorAt(0, QColor(255, 214, 90, int(40 * a)))
+            beam.setColorAt(1, QColor(255, 214, 90, 0))
+            p.setPen(Qt.NoPen)
+            p.setBrush(beam)
+            p.drawPolygon(QPolygonF([QPointF(base.x() - w * 0.01, h), tip_l, tip_r, QPointF(base.x() + w * 0.01, h)]))
+        p.setPen(Qt.NoPen)
+        for i, (x, bw, bh) in enumerate(self.skyline):  # buildings
+            p.setBrush(QColor(12, 14, 20, int(255 * a)))
+            p.drawRect(QRectF(x * w, h * (1 - bh), bw * w, h * bh + 1))
+        for wx, wy, lit in self.windows:  # a few lit windows
+            x = wx * w
+            b = next(((bx, bw, bh) for bx, bw, bh in self.skyline if bx * w <= x < (bx + bw) * w), None)
+            if b is None or lit < 0.55:
+                continue
+            y = h * (1 - b[2] * (0.1 + 0.85 * wy))
+            p.setBrush(QColor(255, 200, 80, int((22 + 40 * (lit - 0.55)) * a)))
+            p.drawRect(QRectF(x, y, 3, 4))
+
+    def _status(self, p: QPainter, at: QPointF, center: bool = True) -> None:
+        """'ASKING CLAUDE · 12s' with a spinner: always visible, so a long wait is never a mystery."""
+        label = self.status or STATE_LABEL.get(self.state, "")
+        if not label:
+            return
+        busy = bool(self.status) or self.state == "think"
+        secs = int(time.time() - self.status_t0) if self.status else 0
+        text = label.upper() + (f"  ·  {secs}s" if busy and secs >= 2 else "")
+        f = QFont(HEAD_FONT, 13)
+        f.setBold(True)
+        f.setLetterSpacing(QFont.AbsoluteSpacing, 2.2)
+        tw = QFontMetrics(f).horizontalAdvance(text)
+        pad, spin_w, hgt = 16, (26 if busy else 12), 34
+        width = tw + pad * 2 + spin_w
+        x = at.x() - width / 2 if center else at.x()
+        r = QRectF(x, at.y(), width, hgt)
+        col = ACCENT.get(self.state, YELLOW) if not self.status else YELLOW
+        p.setPen(QPen(QColor(col.red(), col.green(), col.blue(), 150), 1.2))
+        p.setBrush(QColor(10, 11, 15, 230))
+        p.drawRoundedRect(r, hgt / 2, hgt / 2)
+        t = time.time() - self.t0
+        cy = r.center().y()
+        if busy:  # three bars rising in turn
+            for k in range(3):
+                hh = 6 + 8 * (0.5 + 0.5 * math.sin(t * 7 - k * 0.9))
+                p.setPen(Qt.NoPen)
+                p.setBrush(col)
+                p.drawRoundedRect(QRectF(r.left() + pad + k * 6, cy - hh / 2, 3.5, hh), 1.5, 1.5)
+        else:  # a steady dot
+            p.setPen(Qt.NoPen)
+            p.setBrush(col)
+            p.drawEllipse(QPointF(r.left() + pad + 3, cy), 3.5, 3.5)
+        p.setFont(f)
+        p.setPen(TEXT)
+        p.drawText(QRectF(r.left() + pad + spin_w, r.top(), tw + 4, hgt), Qt.AlignVCenter | Qt.AlignLeft, text)
 
     def _panel(self, p: QPainter, r: QRectF, title: str) -> QRectF:
         p.setPen(QPen(QColor(255, 255, 255, 28), 1.2))
@@ -325,7 +456,7 @@ class Overlay(QWidget):
                 p.setBrush(Qt.NoBrush)
                 p.drawPath(path)
         elif style == "orb":
-            self._orb(p, QPointF(w * 0.5 + 40 * math.sin(t / 30), h * 0.5 + 30 * math.cos(t / 40)), min(w, h) * 0.18)
+            self._signal(p, QPointF(w * 0.5 + 40 * math.sin(t / 30), h * 0.5 + 30 * math.cos(t / 40)), min(w, h) * 0.18)
 
     def _glow(self, p: QPainter, r: QRectF, accent: QColor, t: float) -> None:
         a = int(90 + 80 * math.sin(t * 3))
@@ -483,50 +614,60 @@ class Overlay(QWidget):
         p.setOpacity(0.4 * self.fade)
         self._text(p, "Say “Batsy” anytime", QRectF(dx, h - 40, w, 22), 12, QColor(200, 200, 220))
 
-    def _orb(self, p: QPainter, c: QPointF, r: float) -> None:
+    def _signal(self, p: QPainter, c: QPointF, r: float) -> None:
+        """The bat-signal: a yellow disc with a bat, pulsing to your voice, sweeping while thinking."""
         t = time.time() - self.t0
         col = ACCENT.get(self.state, ACCENT["idle"])
         if self.state == "listen":
-            pulse = 1 + 0.55 * self.smooth + 0.03 * math.sin(t * 3)
+            pulse = 1 + 0.35 * self.smooth + 0.02 * math.sin(t * 3)
         elif self.state == "speak":
-            pulse = 1 + 0.08 * math.sin(t * 5) + 0.04 * math.sin(t * 11)
-        elif self.state == "think":
-            pulse = 1 + 0.04 * math.sin(t * 2)
+            pulse = 1 + 0.03 * math.sin(t * 6) + 0.02 * math.sin(t * 13)
         else:
-            pulse = 1 + 0.02 * math.sin(t * 1.5)
+            pulse = 1 + 0.015 * math.sin(t * 1.5)
         R = r * pulse
-        for i in range(3, 0, -1):  # glow
-            g = QRadialGradient(c, R * (1 + i * 0.55))
-            g.setColorAt(0, QColor(col.red(), col.green(), col.blue(), 50 // i))
+        p.setPen(Qt.NoPen)
+        for i in range(3, 0, -1):  # halo
+            g = QRadialGradient(c, R * (1 + i * 0.6))
+            g.setColorAt(0, QColor(col.red(), col.green(), col.blue(), (70 if self.state != "idle" else 25) // i))
             g.setColorAt(1, QColor(col.red(), col.green(), col.blue(), 0))
             p.setBrush(g)
-            p.setPen(Qt.NoPen)
-            p.drawEllipse(c, R * (1 + i * 0.55), R * (1 + i * 0.55))
-        g = QRadialGradient(QPointF(c.x() - R * 0.3, c.y() - R * 0.35), R * 1.3)
-        g.setColorAt(0, QColor(255, 255, 255, 235))
-        g.setColorAt(0.35, col.lighter(130))
-        g.setColorAt(1, col.darker(220))
-        p.setBrush(g)
+            p.drawEllipse(c, R * (1 + i * 0.6), R * (1 + i * 0.6))
+        disc = QRadialGradient(QPointF(c.x(), c.y() - R * 0.15), R * 1.05)
+        disc.setColorAt(0, col.lighter(135))
+        disc.setColorAt(0.75, col)
+        disc.setColorAt(1, col.darker(170))
+        p.setBrush(disc)
         p.drawEllipse(c, R, R)
-        if self.state == "think":  # orbiting arcs
-            pen = QPen(QColor(col.red(), col.green(), col.blue(), 200), max(2.0, r * 0.05))
-            pen.setCapStyle(Qt.RoundCap)
+        p.save()  # the bat, slightly wider than tall like the real signal
+        p.translate(c)
+        p.scale(R * 0.82, R * 0.82)
+        p.setBrush(QColor(8, 8, 10))
+        p.drawPath(BAT)
+        p.restore()
+        p.setBrush(Qt.NoBrush)
+        p.setPen(QPen(QColor(0, 0, 0, 160), max(1.5, R * 0.04)))
+        p.drawEllipse(c, R, R)
+        if self.state == "think":  # a searchlight sweeping around the signal
+            pen = QPen(QColor(col.red(), col.green(), col.blue(), 220), max(2.0, r * 0.05))
+            pen.setCapStyle(Qt.FlatCap)
             p.setPen(pen)
-            p.setBrush(Qt.NoBrush)
-            for k in range(3):
-                rr = R * (1.25 + 0.18 * k)
-                start = int((t * (120 + 60 * k) + k * 120) % 360 * 16)
-                p.drawArc(QRectF(c.x() - rr, c.y() - rr, 2 * rr, 2 * rr), start, 70 * 16)
+            for k in range(2):
+                rr = R * (1.22 + 0.16 * k)
+                start = int(((t * (160 - 50 * k)) + k * 180) % 360 * 16)
+                p.drawArc(QRectF(c.x() - rr, c.y() - rr, 2 * rr, 2 * rr), start, 55 * 16)
         if self.state == "listen":  # level ring
-            p.setPen(QPen(QColor(255, 255, 255, int(60 + 150 * self.smooth)), 2))
-            p.setBrush(Qt.NoBrush)
-            rr = R * (1.15 + 0.35 * self.smooth)
+            p.setPen(QPen(QColor(col.red(), col.green(), col.blue(), int(70 + 170 * self.smooth)), 2))
+            rr = R * (1.12 + 0.3 * self.smooth)
             p.drawEllipse(c, rr, rr)
 
-    def _text(self, p, text, rect, size, color, italic=False, center=True, align=None) -> float:
-        f = QFont()
+    def _text(self, p, text, rect, size, color, italic=False, center=True, align=None, family=BODY_FONT,
+              bold=False, spacing=0.0) -> float:
+        f = QFont(family)
         f.setPointSize(size)
         f.setItalic(italic)
+        f.setBold(bold)
+        if spacing:
+            f.setLetterSpacing(QFont.AbsoluteSpacing, spacing)
         p.setFont(f)
         p.setPen(color)
         opt = QTextOption(align if align is not None else (Qt.AlignHCenter if center else Qt.AlignLeft))
@@ -541,27 +682,31 @@ class Overlay(QWidget):
         y = area.top() + (area.height() - pix.height()) / 2
         target = QRectF(x, y, pix.width(), pix.height())
         path = QPainterPath()
-        path.addRoundedRect(target, 18, 18)
+        path.addRoundedRect(target, 6, 6)
         p.save()
         p.setClipPath(path)
         p.drawPixmap(target.toRect(), pix)
         p.restore()
         snapping = self.camera_path is not None and self.caption.startswith("Looking")
-        p.setPen(QPen(ACCENT["think"], 6) if snapping else QPen(QColor(255, 255, 255, 40), 1.5))
+        p.setPen(QPen(YELLOW, 6) if snapping else QPen(QColor(YELLOW.red(), YELLOW.green(), YELLOW.blue(), 110), 1.5))
         p.setBrush(Qt.NoBrush)
-        p.drawRoundedRect(target, 18, 18)
+        p.drawRoundedRect(target, 6, 6)
         if self.caption:
-            self._text(p, self.caption, QRectF(x, y + pix.height() + 8, pix.width(), 30), 13, QColor(190, 185, 210))
+            self._text(p, self.caption.upper(), QRectF(x, y + pix.height() + 10, pix.width(), 24), 11, STEEL,
+                       family=HEAD_FONT, spacing=2.0)
 
     def _card(self, p: QPainter, area: QRectF) -> None:
         title, body = self.card
-        p.setPen(QPen(QColor(255, 255, 255, 40), 1.5))
-        p.setBrush(QColor(255, 255, 255, 18))
-        p.drawRoundedRect(area, 22, 22)
-        inner = area.adjusted(40, 34, -40, -34)
-        y = self._text(p, title, inner, 30, QColor(255, 255, 255), center=False) + 18 if title else inner.top()
-        self._text(p, body, QRectF(inner.left(), y, inner.width(), inner.bottom() - y), 20, QColor(225, 222, 240),
-                   center=False)
+        p.setPen(QPen(QColor(255, 255, 255, 22), 1))
+        p.setBrush(QColor(12, 14, 19, 235))
+        p.drawRoundedRect(area, 6, 6)
+        p.setPen(Qt.NoPen)
+        p.setBrush(YELLOW)
+        p.drawRect(QRectF(area.left(), area.top() + 18, 5, area.height() - 36))
+        inner = area.adjusted(40, 30, -40, -30)
+        y = (self._text(p, title.upper(), inner, 26, YELLOW, center=False, family=HEAD_FONT, bold=True, spacing=1.5)
+             + 16) if title else inner.top()
+        self._text(p, body, QRectF(inner.left(), y, inner.width(), inner.bottom() - y), 19, TEXT, center=False)
 
 
 def _fmt(n: int) -> str:
