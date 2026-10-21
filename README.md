@@ -51,6 +51,22 @@ When you say "Batsy", the screen fades to a dark Batsy view:
 
 The overlay closes by itself a few seconds after the answer, or 30 seconds after showing a picture. Esc, Space or a click closes it straight away. Turn it off with `[overlay] enabled = false`. If GNOME keeps it behind other windows, set `qt_platform = "xcb"`.
 
+## Routines (no tokens)
+
+- **"Good morning"**: Batsy says good morning and reads you that day's plan. The plan also appears as a card on screen.
+- **"Good night"**: Batsy asks *"Anything you have on Monday, October 5?"*. Answer in your own words, one thing at a time. Say "no" or "that's it" when you're done, and the plans are saved for that day. **Times before 5 AM still count as the night before.** Going to bed at 3 AM on 5 October asks about 5 October, the day you'll wake into. Change the cutoff with `[routines] day_starts_at`.
+- **Anytime:** "add dentist on Friday at 4" or "what do I have this week?" works too. Claude uses the same local agenda for these, so they do cost tokens.
+- **Your own presets:** say "Batsy, make a routine: when I say *study mode*, pause notifications, play my lofi playlist and say good luck". Or add one to `config.toml`:
+  ```toml
+  [routines.custom.study]
+  phrases = ["study mode", "focus time"]
+  say = "Study mode on. Good luck."
+  commands = ["gsettings set org.gnome.desktop.notifications show-banners false"]
+  spotify = "my Lofi playlist"
+  ```
+  After that, saying the phrase runs the preset instantly with no tokens.
+- Optional: `morning_extra = "today's weather in Chennai in one line"` adds a Claude answer to the morning briefing.
+
 ## Spotify on the iPad (one-time setup)
 
 Batsy controls the Spotify app on your iPad through Spotify Connect, using the Spotify Web API. The iPad app can't be controlled directly over the local network, so commands go through Spotify's servers. Being on the same Wi-Fi doesn't matter. **Spotify Premium is required.**

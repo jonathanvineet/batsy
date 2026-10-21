@@ -44,6 +44,11 @@ DEFAULTS = {
         "device": "ipad",       # preferred Spotify Connect device (name contains this)
         "redirect_port": 8888,  # login callback http://127.0.0.1:8888/callback
     },
+    "routines": {
+        "day_starts_at": 5,   # before this hour it's still "tonight": good night at 3 AM asks about today's date
+        "morning_extra": "",  # optional Claude prompt after the morning briefing, e.g. "weather in Chennai today, one line"
+        "custom": {},         # presets, see README
+    },
     "overlay": {
         "enabled": True,              # full-screen Batsy view while you talk to it
         "linger_seconds": 6,          # stay up this long after a spoken-only answer

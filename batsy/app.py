@@ -14,6 +14,7 @@ from batsy import safety, spotify
 from batsy import images
 from batsy.brain import Brain
 from batsy.overlay import Overlay
+from batsy.routines import Routines
 from batsy.config import SOCKET_PATH
 from batsy.tools import ToolContext, build_registry
 from batsy.tools import monitor, music
@@ -51,6 +52,8 @@ class Batsy:
         if self.overlay.enabled:
             self.ctx.display = self.overlay.send
         self.brain.visual = self.show_visual
+        self.routines = Routines(self)
+        self.last_raw_text = ""
         monitor.start_background(self.ctx)
 
     def _overlay_dismissed(self) -> None:
@@ -77,6 +80,10 @@ class Batsy:
         else:
             subprocess.Popen(["xdg-open", str(path)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         return caption
+
+    def speak_brief(self, prompt: str) -> None:
+        """Run a short Claude request from a routine and speak the answer (costs tokens)."""
+        self.run_turn(prompt, "routine", self._reply, threading.Event(), self._confirm_console)
 
     def _reply(self, text: str) -> None:
         """Speak and caption a locally generated reply."""
@@ -164,9 +171,13 @@ class Batsy:
         from batsy.tools import screen
 
         n = _norm(text)
+        self.last_raw_text = text.strip()
         if n in STOP_WORDS:
             self.speaker.stop()
             self.overlay.hide()
+            self.routines.capture = None
+            return True
+        if self.routines.handle(n):
             return True
         if n in RESET_PHRASES:
             self.brain.reset()
@@ -237,12 +248,14 @@ class Batsy:
             elif follow_up:
                 follow_up = False
                 self.ears.drain()
-                audio = self._record(self.cfg.get("voice.follow_up_seconds"), self.ears.preroll(0.3), fresh=False)
+                wait = self.routines.follow_up_seconds or self.cfg.get("voice.follow_up_seconds")
+                audio = self._record(wait, self.ears.preroll(0.3), fresh=False)
                 if audio is None:
                     self.overlay.done()
                     continue
                 text = self.stt.transcribe(audio)
-                if _norm(text) in END_FOLLOWUP | NOISE_TRANSCRIPTS:
+                ignore = NOISE_TRANSCRIPTS if self.routines.capturing else END_FOLLOWUP | NOISE_TRANSCRIPTS
+                if _norm(text) in ignore:
                     self.overlay.done()
                     continue
                 self.overlay.heard(text)
@@ -262,7 +275,8 @@ class Batsy:
             if self.local_command(text):
                 self.speaker.wait_idle()
                 self.overlay.done()
-                follow_up = self.cfg.get("voice.follow_up_seconds") > 0 and _norm(text) not in STOP_WORDS
+                follow_up = (self.cfg.get("voice.follow_up_seconds") > 0 or self.routines.capturing) \
+                    and _norm(text) not in STOP_WORDS
                 continue
             pending_text, aborted = self._voice_turn(text, strip_wake_word)
             follow_up = pending_text is None and not aborted and self.cfg.get("voice.follow_up_seconds") > 0

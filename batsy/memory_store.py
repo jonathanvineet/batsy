@@ -44,6 +44,8 @@ class MemoryStore:
                     user TEXT, reply TEXT, actions TEXT);
                 CREATE TABLE IF NOT EXISTS facts (id TEXT PRIMARY KEY, t REAL, fact TEXT);
                 CREATE TABLE IF NOT EXISTS state (key TEXT PRIMARY KEY, value TEXT);
+                CREATE TABLE IF NOT EXISTS agenda (id INTEGER PRIMARY KEY, day TEXT, text TEXT, t REAL);
+                CREATE INDEX IF NOT EXISTS agenda_day ON agenda(day);
             """)
             try:
                 self.db.executescript("""
@@ -140,6 +142,24 @@ class MemoryStore:
             like = " OR ".join("fact LIKE ?" for _ in terms)
             return self.db.execute(f"SELECT * FROM facts WHERE {like} LIMIT ?",
                                    (*[f"%{t}%" for t in terms], limit)).fetchall()
+
+    # --- agenda (plans per day, filled by the good-night routine or the agenda tool) --------------
+    def add_agenda(self, day: str, text: str) -> int:
+        with self.lock, self.db:
+            return self.db.execute("INSERT INTO agenda (day, text, t) VALUES (?,?,?)", (day, text, time.time())).lastrowid
+
+    def agenda_for(self, day: str) -> list[sqlite3.Row]:
+        with self.lock:
+            return self.db.execute("SELECT * FROM agenda WHERE day = ? ORDER BY id", (day,)).fetchall()
+
+    def agenda_range(self, start: str, end: str) -> list[sqlite3.Row]:
+        with self.lock:
+            return self.db.execute("SELECT * FROM agenda WHERE day BETWEEN ? AND ? ORDER BY day, id",
+                                   (start, end)).fetchall()
+
+    def remove_agenda(self, item_id: int) -> bool:
+        with self.lock, self.db:
+            return self.db.execute("DELETE FROM agenda WHERE id = ?", (item_id,)).rowcount > 0
 
     # --- the context block sent with each request -------------------------
     def build_context(self, text: str, cfg) -> str:
