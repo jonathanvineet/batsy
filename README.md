@@ -68,6 +68,28 @@ The overlay closes by itself a few seconds after the answer, or 30 seconds after
 - **Current pictures and technical diagrams:** Batsy searches the live web too (DuckDuckGo images, no key needed), so "ESP32 pinout", "HC-SR04 wiring diagram" or "latest iPhone" find up-to-date images, not old Wikipedia photos. Results from trusted electronics sites (Random Nerd Tutorials, Adafruit, SparkFun, Espressif…) rank higher. Stock-photo watermarks and image-scraping sites rank lower. For technical images, the best guess appears in about 2 seconds while **Claude Code looks at the top 4 candidates in the background**. If it finds a more correct, readable one, the picture on screen is swapped.
 - **The right picture, not the top search hit:** Batsy first works out exactly what you mean, so "jaguar animal" gives the animal and not the car. It then compares the article's editor-chosen image with high-resolution Wikimedia Commons photos. Images Wikipedia rates as featured or quality score highest, and wrong matches, tiny images and odd shapes score lowest. Specifics like "at night" or "interior" are taken into account. The facts come from the encyclopedia summary, not a search snippet.
 
+## 3D models
+
+"Open this 3D model" / "show me the gear STL" opens the most recent model, or the one you named, in **Batsy 3D**. It's a dark viewer window with a floor grid, colour-coded dimension rulers drawn in 3D (X, Y, Z in mm) and a live size readout. It handles STL, OBJ, PLY, GLB/GLTF, 3MF and OFF, plus STEP if the extra converter installs.
+
+**Instant voice controls, no AI:**
+- **Rotate and view:** "rotate it 90 degrees around X" · "turn it right" · "flip it over" · "spin it" / "stop spinning" · "top / front / side / back / bottom / isometric view" · "zoom in/out" · "reset"
+- **Move and resize:** "move it up 5 mm" · "make it 50 mm tall" · "scale it 150 percent" · "mirror it along Y" · "centre it" · "put it on the bed"
+- **Measure:**
+  - "show / hide the dimensions" · "how big / tall / wide is it?"
+  - "how much will it weigh in PETG?" (also PLA, ABS, resin, aluminium and more) · "what's the volume?" · "is it watertight?"
+  - "measure": click two points and Batsy says the distance
+- **Look inside:** "cross-section along Y at 30 percent" (shows the cut size) · "explode it" (separates the parts) · "wireframe" / "x-ray" / "show edges" · "colour it red"
+- **Save:** "save it as an OBJ" writes to `~/Batsy/3d/` with your changes applied.
+
+**Everything else goes to Claude Code**, which can see the viewer through screenshots, control it, and create or edit geometry in Python (trimesh and manifold3d, in millimetres). For example:
+- "Is this printable?" checks watertightness, walls, overhangs and fit on a 220 × 220 × 250 mm bed.
+- "What is this part?"
+- "Add two M3 mounting holes 30 mm apart."
+- "Design a phone stand 80 mm wide."
+
+New or edited models are saved next to the original and shown in the viewer. Your original file is never changed.
+
 ## Files: PDFs, images, documents
 
 Talk about any file on the laptop: PDF, PNG/JPG/other images, DOCX, text or code.

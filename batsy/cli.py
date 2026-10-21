@@ -15,6 +15,7 @@ import os
 import shutil
 import sys
 import threading
+from pathlib import Path
 
 from batsy.config import CONFIG_DIR, DATA_DIR, MODELS_DIR, Config
 
@@ -233,6 +234,24 @@ def cmd_doctor(cfg, args) -> None:
 
 
 def main() -> None:
+    if len(sys.argv) > 1 and sys.argv[1] == "3d":  # `batsy 3d ...`: drive the 3D viewer (used by Claude Code)
+        import json
+
+        from batsy.model3d import VIEWER, find_model
+
+        Config.load()
+        args = sys.argv[2:] or ["info"]
+        if args[0] == "open":
+            path = Path(args[1]).expanduser() if len(args) > 1 else find_model("this model")
+            reply = VIEWER.open(path) if path else {"error": "no model found"}
+        elif args[0] == "cmd":
+            reply = VIEWER.send(json.loads(args[1]))
+        else:
+            reply = VIEWER.send({"cmd": args[0]})
+        print(json.dumps(reply, indent=1))
+        if args[0] == "open" and VIEWER.proc:  # started from a terminal: keep the window until it's closed
+            VIEWER.proc.wait()
+        return
     if len(sys.argv) > 1 and sys.argv[1] == "doc":  # `batsy doc ...`: document tools (used by Claude Code)
         from batsy import docs
 

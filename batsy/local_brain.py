@@ -78,6 +78,14 @@ VISION = re.compile(
 SCREEN_WORDS = re.compile(r"\b(screen|window|page|tab|error|message|browser|code)\b")
 
 
+# While a model is in the viewer, these are about it (anything the local phrase parser didn't handle).
+THREE_D_TALK = re.compile(r"\b(it|this|that|model|part|mesh|print|printable|hole|holes|wall|walls|fillet|chamfer|"
+                          r"thread|screw|mount|base|edge|corner|face|support|overhang|infill|tolerance|fit|design|"
+                          r"add|cut|extrude|combine|join|subtract|engrave|text|logo|what is|why|how)\b")
+DESIGN = re.compile(r"\b(design|model|make|create|build|generate|draw)\b.*\b(3d|three d|stl|printable|"
+                    r"to print|for printing|3d print|enclosure|bracket|mount|stand|holder|case|box|gear|knob)\b")
+
+
 def vision_source(text: str) -> str | None:
     t = text.lower().strip(" ?.!")
     if not VISION.search(t):
@@ -183,6 +191,13 @@ class LocalBrain:
 
         from batsy import docs
         from batsy.learning import ACTION, norm
+
+        from batsy import model3d
+
+        if self.claude_ok and (model3d.VIEWER.active() and THREE_D_TALK.search(text.lower())
+                               or DESIGN.search(text.lower())):
+            self._claude_3d(text, context, emit, on_marker, on_tool, actions)
+            return self._finish(source, text, spoken, actions, abort)
 
         doc = self._doc_target(text)
         if doc is not None:
@@ -320,6 +335,17 @@ class LocalBrain:
         chunker.flush()
         self.memory.set_document_summary(str(path), answer[:600])
 
+    def _claude_3d(self, text, context, emit, on_marker, on_tool, actions) -> None:
+        """Claude Code works on 3D: it can see the viewer, drive it, and create or edit models in code."""
+        emit("Let me work on that.")
+        if on_tool:
+            on_tool("3d")
+        answer = ask_claude_3d(text, context)
+        actions.append("3D work by Claude")
+        chunker = SpeechChunker(emit, on_marker)
+        chunker.feed(answer)
+        chunker.flush()
+
     def _look(self, source, question, context, emit, on_marker, on_tool, actions) -> None:
         """One frame from the camera window (or a screenshot) -> Claude Code looks at it and answers."""
         from batsy.tools.screen import capture
@@ -403,6 +429,54 @@ def ask_claude_docs(request: str, path, info: dict, note: str, context: str = ""
                            cwd=OUT_DIR, capture_output=True, text=True, timeout=timeout, env=env)
     except subprocess.TimeoutExpired:
         return "That took too long. Try a smaller part of the file."
+    return (p.stdout.strip() or p.stderr.strip() or "Claude didn't answer.")[:3000]
+
+
+THREE_D_BRIEF = """You are the 3D engineer behind Batsy, a voice assistant on the user's Fedora laptop. The user said: \
+"{request}"
+
+Batsy's 3D viewer (a window on their screen) state: {state}
+Tools (run with Bash):
+  batsy 3d info                    loaded models: size, bounds, volume, mass, watertight, parts
+  batsy 3d screenshot              PNG of the viewer: Read it to see exactly what the user sees
+  batsy 3d cmd 'JSON'              drive the viewer. Commands: load {{path, keep}}, view {{view: top|bottom|front|\
+back|left|right|iso}}, rotate {{axis, deg}}, move {{dx, dy, dz}}, scale {{factor | to_mm + axis}}, mirror {{axis}}, \
+center, drop, style {{style: solid|wireframe|edges|xray|opaque}}, color {{color}}, dims {{on}}, section {{axis, at 0-1}}, \
+explode, measure, spin {{on}}, zoom {{factor}}, export {{format, path}}, message {{text}} (shown in the viewer)
+To create or change geometry, write and run Python with {python}. trimesh, manifold3d (booleans, extrusions, \
+fillets via offsets), numpy and scipy are available; work in millimetres. Save results in {out_dir}, then load them \
+into the viewer (keep=true to show next to the original). Never overwrite the user's original file.
+For printability questions, check watertightness, wall thickness, overhangs and the size against a typical \
+220 x 220 x 250 mm printer bed.
+Final reply: two or three spoken sentences, no markdown. Add [[card: Title | line; line]] for key numbers.
+{context}"""
+
+
+def ask_claude_3d(request: str, context: str = "", timeout: int = 900) -> str:
+    import sys
+
+    from batsy.model3d import VIEWER
+    from batsy.viewer3d import OUT
+
+    exe = shutil.which("claude")
+    if not exe:
+        return "Claude Code isn't installed."
+    OUT.mkdir(parents=True, exist_ok=True)
+    try:
+        state = json.dumps(VIEWER.send({"cmd": "info"})) if VIEWER.is_open() else "closed (load a file to open it)"
+    except OSError:
+        state = "not responding"
+    prompt = THREE_D_BRIEF.format(request=request, state=state[:3000], python=sys.executable, out_dir=OUT,
+                                  context=context)
+    env = dict(os.environ, PATH=f"{os.path.dirname(sys.executable)}:{os.path.expanduser('~/.local/bin')}:"
+                                f"{os.environ.get('PATH', '')}")
+    try:
+        p = subprocess.run([exe, "-p", prompt, "--output-format", "text", "--permission-mode", "acceptEdits",
+                            "--add-dir", str(OUT), "--add-dir", os.path.expanduser("~"),
+                            "--allowedTools", f"Read,Write,Edit,Glob,Grep,Bash(batsy 3d:*),Bash({sys.executable}:*)"],
+                           cwd=OUT, capture_output=True, text=True, timeout=timeout, env=env)
+    except subprocess.TimeoutExpired:
+        return "That design took too long. Try a simpler version first."
     return (p.stdout.strip() or p.stderr.strip() or "Claude didn't answer.")[:3000]
 
 

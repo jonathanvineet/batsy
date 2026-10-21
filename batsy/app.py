@@ -15,7 +15,7 @@ from batsy import images
 from batsy.brain import Brain
 from batsy.overlay import Overlay
 from batsy.routines import Routines
-from batsy import apps
+from batsy import apps, model3d
 from batsy.learning import ACTION, NEGATIVE, SkillBook, claude_cli
 from batsy.vocab import get_vocab
 from batsy.config import SOCKET_PATH
@@ -67,6 +67,7 @@ class Batsy:
         if hasattr(self.brain, "skills"):
             self.brain.skills = self.skills
         threading.Thread(target=apps.INDEX.refresh, daemon=True, name="app-index").start()
+        model3d.VIEWER.on_event = self._viewer_event
         self._turn_markers: list[tuple[str, str]] = []
         self.saver_on = False
         self.overlay.on_saver_exit = self._saver_exited
@@ -181,6 +182,10 @@ class Batsy:
             subprocess.Popen(["xdg-open", str(path)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         return caption
 
+    def _viewer_event(self, ev: dict) -> None:
+        if ev.get("event") == "measured":
+            self._reply(f"{ev['mm']:.1f} millimetres.")
+
     def open_result(self, path_str: str) -> str | None:
         """A file Batsy made (marked-up PDF, edited image...): open it and preview it on screen."""
         from pathlib import Path
@@ -191,6 +196,9 @@ class Batsy:
         if not path.exists():
             log.warning("result file missing: %s", path)
             return None
+        if path.suffix.lower() in model3d.MODEL_EXTS:  # a model Claude made or edited: show it in the viewer
+            model3d.VIEWER.open(path)
+            return path.name
         subprocess.Popen(["xdg-open", str(path)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         if self.overlay.enabled and path.suffix.lower() in docs.PDF | docs.IMAGES:
             try:
@@ -346,6 +354,15 @@ class Batsy:
         if self._skill_feedback(n, text):
             return True
         if self.routines.handle(n):
+            return True
+        try:
+            said = model3d.handle(n)  # 3D viewer: open models, rotate, views, dimensions... (no AI)
+        except Exception as e:
+            log.exception("3d viewer")
+            said = f"The 3D viewer had a problem: {e}"
+        if said is not None:
+            if said:
+                self._reply(said)
             return True
         m = re.match(r"(?:(?:please|can you|could you) )?(open|launch|start|run) (.+)", n)
         if m and not re.search(r"\b(camera|webcam)\b", m.group(2)):

@@ -38,6 +38,9 @@ echo "  using $($PY --version)"
 "$VENV/bin/pip" install -q sounddevice vosk opencv-python ddgs pymupdf pytesseract python-docx
 "$VENV/bin/pip" install -q PySide6 || echo "  PySide6 failed to install; the full-screen overlay will be off."
 "$VENV/bin/pip" install -q piper-tts || echo "  piper-tts failed to install; Batsy will speak with espeak-ng."
+"$VENV/bin/pip" install -q pyvista pyvistaqt trimesh manifold3d scipy networkx shapely \
+  || echo "  3D viewer libraries failed to install; the 3D viewer will be off."
+"$VENV/bin/pip" install -q cascadio || echo "  (STEP file support not available; STL/OBJ/3MF/GLB still work)"
 "$VENV/bin/pip" install -q faster-whisper || echo "  faster-whisper failed to install; Batsy will use Vosk for speech recognition."
 
 say "Downloading wake-word model ($VOSK_MODEL)"
