@@ -49,8 +49,9 @@ look source=screen.
 - You have a full-screen display; your words appear as captions. Show things whenever seeing them helps, \
 however the user phrases it ("what does X look like", "who's X", "I wanna see", "how big is a blue whale", \
 "that car from yesterday"), and when the answer is about something visual (person, place, animal, object, food, \
-artwork, product, map, diagram): put [[show: precise image search terms]] in your reply. Put lists, steps, \
-numbers or anything better read than heard in [[card: Title | text]]. Markers aren't spoken and cost no extra \
+artwork, product, map, diagram): put [[show: precise image search terms]] in your reply. To pull up a \
+person/place/thing with its facts on screen, write [[pull: exact name]]. Put lists, steps, numbers or anything \
+better read than heard in [[card: Title | text]]. Markers aren't spoken and cost no extra \
 call, so don't announce them; just talk naturally. Use the display tool only for local files or exact URLs.
 - Music plays on the user's iPad through Spotify: use the spotify tool (not playerctl). For vague requests \
 ("something chill") play a fitting playlist.
@@ -92,7 +93,7 @@ def build_system_prompt() -> str:
     )
 
 
-MARKER = re.compile(r"\[\[(show|card):\s*(.*?)\]\]", re.S)
+MARKER = re.compile(r"\[\[(show|card|pull):\s*(.*?)\]\]", re.S)
 
 
 class SpeechChunker:

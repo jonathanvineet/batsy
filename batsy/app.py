@@ -15,6 +15,7 @@ from batsy import images
 from batsy.brain import Brain
 from batsy.overlay import Overlay
 from batsy.routines import Routines
+from batsy.vocab import get_vocab
 from batsy.config import SOCKET_PATH
 from batsy.tools import ToolContext, build_registry
 from batsy.tools import monitor, music
@@ -58,6 +59,8 @@ class Batsy:
             self.ctx.display = self.overlay.send
         self.brain.visual = self.show_visual
         self.routines = Routines(self)
+        self.vocab = get_vocab()
+        self._turn_markers: list[tuple[str, str]] = []
         self.saver_on = False
         self.overlay.on_saver_exit = self._saver_exited
         if self.overlay.enabled and cfg.get("overlay.screensaver_minutes") > 0:
@@ -98,6 +101,9 @@ class Batsy:
     def show_visual(self, kind: str, arg: str) -> str | None:
         """Put a picture ([[show: query]]) or a text card ([[card: Title | text]]) on screen.
         Returns the picture's caption, or None if nothing was found."""
+        self._turn_markers.append((kind, arg))
+        if kind == "pull":
+            return self.pull_up(arg, speak=False)
         if kind == "card":
             title, _, body = arg.partition("|")
             if self.overlay.enabled:
@@ -115,6 +121,28 @@ class Batsy:
         else:
             subprocess.Popen(["xdg-open", str(path)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         return caption
+
+    def pull_up(self, subject: str, speak: bool = True) -> str | None:
+        """Picture + accurate facts card for a person/place/thing. Returns the resolved name."""
+        try:
+            d = images.pull_up(subject)
+        except Exception as e:
+            log.warning("pull up %r failed: %s", subject, e)
+            if speak:
+                self._reply(f"I couldn't find {subject}.")
+            return None
+        body = "\n".join(filter(None, [d["description"], d["facts"]]))
+        if self.overlay.enabled:
+            if d["image"]:
+                self.overlay.image(d["image"], d["caption"])
+            self.overlay.card(d["title"], body)
+        else:
+            print(f"\n[{d['title']}]\n{body}\n{d['url']}")
+            if d["image"]:
+                subprocess.Popen(["xdg-open", d["image"]], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        if speak:
+            self._reply(d["spoken"])
+        return d["title"]
 
     def speak_brief(self, prompt: str) -> None:
         """Run a short Claude request from a routine and speak the answer (costs tokens)."""
@@ -179,12 +207,25 @@ class Batsy:
 
         with self.turn_lock:
             self.confirm_handler = confirm
+            self._turn_markers = []
             try:
                 reply = self.brain.ask(text, source, say, abort, on_tool)
             finally:
                 self.confirm_handler = self._confirm_console
+            self._learn_phrase(text)
         self._apply_flags()
         return reply
+
+    def _learn_phrase(self, text: str) -> None:
+        """If the AI showed something for a phrasing we didn't know, remember that phrasing."""
+        shows = [(k, a) for k, a in self._turn_markers if k in ("show", "pull")]
+        n = _norm(text)
+        if len(shows) != 1 or self.vocab.match(n):
+            return
+        kind, subject = shows[0]
+        learned = self.vocab.learn(n, "pullup" if kind == "pull" else "picture", subject)
+        if learned:
+            log.info("learned new phrase: %r -> %s", learned, kind)
 
     def _apply_flags(self) -> None:
         flags = self.ctx.flags
@@ -233,10 +274,14 @@ class Batsy:
         if re.fullmatch(r"(please )?(close|stop|hide|turn off)( the| my)? (camera|webcam)( please)?", n):
             self._reply(screen.close_camera())
             return True
-        m = re.fullmatch(r"(show me|pull up|display|let me see|show)( a| an| some| the)? (picture|photo|image|pic)s? of (.+)", n)
-        if m:  # fast path for the plainest phrasing; anything else is understood by Claude
-            caption = self.show_visual("show", m.group(4))
-            self._reply(f"Here's {caption}." if caption else f"I couldn't find a picture of {m.group(4)}.")
+        hit = self.vocab.match(n)  # your phrases for "show me" / "pull up", including learned ones
+        if hit:
+            intent, subject = hit
+            if intent == "pullup":
+                self.pull_up(subject)
+            else:
+                caption = self.show_visual("show", subject)
+                self._reply(f"Here's {caption}." if caption else f"I couldn't find a picture of {subject}.")
             return True
         if re.fullmatch(r"what('s| is) the time( now)?|what time is it( now)?", n):
             self._reply(time.strftime("It's %-I:%M %p."))

@@ -6,6 +6,7 @@ the slow part on CPU), few compact tools, short tool outputs, and replies stream
 """
 import getpass
 import json
+import re
 import logging
 import os
 import shutil
@@ -28,9 +29,11 @@ conversation: warm, quick, natural, usually one or two short sentences. No lists
 speech-to-text, so guess sensibly at misheard words.
 Use tools to actually do things on the laptop, then confirm in a few words. Open apps with run_shell \
 background=true (e.g. gtk-launch firefox, xdg-open URL). Music plays on the iPad: use spotify.
-To show a picture of something, write [[show: search words]] in your reply. To put a list or steps on screen, \
-write [[card: Title | line one; line two]]. Those markers are not spoken.
-If a request needs deep thinking or long code, say they can say "ask Claude" followed by the request.
+Whenever the user wants to see something, however they phrase it, write [[show: exact name of the thing]] for a \
+picture, or [[pull: exact name]] to put a person, place or thing on screen with its facts. For a list or steps \
+write [[card: Title | line one; line two]]. Markers are not spoken.
+If a request needs real expertise, careful reasoning, code, or you are not sure of the facts, call ask_claude \
+with the full request instead of answering yourself.
 Earlier conversation and things you remember come before [Now ...] in the message."""
 
 # Compact tool set for the small model: (description, properties, required). Executed by the normal registry.
@@ -52,7 +55,20 @@ LOCAL_TOOLS = {
     "remember": ("Save a lasting fact about the user.", {"fact": {"type": "string"}}, ["fact"]),
     "camera": ("Open or close the live camera window.",
                {"action": {"type": "string", "enum": ["open", "close"]}}, ["action"]),
+    "ask_claude": ("Hand a hard request to Claude (expert answers, code, careful reasoning). Claude replies to the user.",
+                   {"request": {"type": "string"}}, ["request"]),
 }
+
+# Requests that a 3B model would fumble: route straight to Claude without asking the small model first.
+COMPLEX = re.compile(
+    r"\b(write|code|coding|program|script|sketch|debug|function|algorithm|compile error|error message|"
+    r"explain (why|how|the difference)|step by step|compare|difference between|pros and cons|analy[sz]e|"
+    r"summari[sz]e|essay|email|letter|report|cover letter|resume|plan (a|my|the)|itinerary|design|calculate|"
+    r"solve|prove|derive|translate|strategy|optimi[sz]e|review my|in detail|detailed|research)\b")
+
+
+def is_complex(text: str) -> bool:
+    return bool(COMPLEX.search(text.lower())) or len(text.split()) > 22
 
 
 class LocalBrain:
@@ -147,6 +163,10 @@ class LocalBrain:
             if self.visual and not abort.is_set():
                 threading.Thread(target=self.visual, args=(kind, arg), daemon=True).start()
 
+        if self.claude_ok and is_complex(text):
+            self._claude(text, context, emit, on_marker, on_tool, actions)
+            return self._finish(source, text, spoken, actions, abort)
+
         for _ in range(m["max_steps"]):
             chunker = SpeechChunker(emit, on_marker)
             try:
@@ -162,6 +182,7 @@ class LocalBrain:
             messages.append({"role": "assistant", "content": content, **({"tool_calls": calls} if calls else {})})
             if not calls:
                 break
+            handed_off = False
             for call in calls:
                 fn = call.get("function", {})
                 name, args = fn.get("name", ""), fn.get("arguments") or {}
@@ -170,6 +191,10 @@ class LocalBrain:
                         args = json.loads(args)
                     except ValueError:
                         args = {}
+                if name == "ask_claude" and self.claude_ok:
+                    self._claude(args.get("request") or text, context, emit, on_marker, on_tool, actions)
+                    handed_off = True
+                    break
                 if on_tool:
                     on_tool(name)
                 out, is_error = self.registry.execute(name, args) if name in LOCAL_TOOLS else (f"No tool {name}.", True)
@@ -177,26 +202,49 @@ class LocalBrain:
                 actions.append(f"{name} {json.dumps(args)[:80]} -> {'ERROR ' if is_error else ''}{out.strip()[:60]}")
                 # every character here must be re-read by a slow CPU: keep it short
                 messages.append({"role": "tool", "tool_name": name, "content": truncate(out, m["tool_result_chars"])})
-            if abort.is_set():
+            if abort.is_set() or handed_off:
                 break
+        return self._finish(source, text, spoken, actions, abort)
+
+    def _finish(self, source, text, spoken, actions, abort) -> str:
         reply = " ".join(spoken)
         self.memory.add_exchange(source, text, reply + (" (interrupted)" if abort.is_set() else ""), actions)
         return reply
+
+    def _claude(self, request, context, emit, on_marker, on_tool, actions) -> None:
+        """Answer with Claude Code on the user's Pro plan; its reply goes straight to speech and screen."""
+        if on_tool:
+            on_tool("ask_claude")
+        log.info("routing to Claude: %s", request[:120])
+        answer = ask_claude(request, context)
+        chunker = SpeechChunker(emit, on_marker)
+        chunker.feed(answer)
+        chunker.flush()
+        actions.append("answered by Claude")
 
     def reset(self) -> None:
         with self.lock:
             self.memory.new_session()
 
 
-def ask_claude(prompt: str, timeout: int = 180) -> str:
-    """Hand one request to Claude Code (official CLI, user's Pro plan). Only used when the user says 'ask Claude'."""
+CLAUDE_BRIEF = """You are the expert brain behind Batsy, a voice assistant on the user's Fedora laptop. Your reply is \
+spoken aloud: two to four natural sentences, no markdown or lists in the spoken part. Be precise and correct.
+To put something on their screen, add markers (not spoken): [[show: exact name]] for the best picture of a thing, \
+[[pull: exact name]] for a person/place/thing with its facts, [[card: Title | line; line]] for steps, lists, \
+numbers or code summaries. Put any code or files under {workspace} and just say where.
+{context}
+User: {request}"""
+
+
+def ask_claude(prompt: str, context: str = "", timeout: int = 240) -> str:
+    """One request to Claude Code (the official CLI, on the user's Pro plan)."""
     exe = shutil.which("claude")
     if not exe:
         return "Claude Code isn't installed. Run: npm install -g @anthropic-ai/claude-code, then claude to log in."
-    full = (f"{prompt}\n\nYou're answering through a voice assistant: reply in at most three short spoken sentences. "
-            f"If you write code or files, put them under {WORKSPACE} and just say where.")
+    full = CLAUDE_BRIEF.format(workspace=WORKSPACE, context=context, request=prompt)
     try:
-        p = subprocess.run([exe, "-p", full, "--output-format", "text", "--permission-mode", "acceptEdits"],
+        p = subprocess.run([exe, "-p", full, "--output-format", "text", "--permission-mode", "acceptEdits",
+                            "--allowedTools", "Read,Write,Edit,Glob,Grep,Bash(arduino-cli:*)"],
                            cwd=WORKSPACE, capture_output=True, text=True, timeout=timeout)
     except subprocess.TimeoutExpired:
         return "Claude took too long to answer."

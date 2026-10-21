@@ -51,6 +51,12 @@ When you say "Batsy", the screen fades to a dark Batsy view:
 
 The overlay closes by itself a few seconds after the answer, or 30 seconds after showing a picture. Esc, Space or a click closes it straight away. Turn it off with `[overlay] enabled = false`. If GNOME keeps it behind other windows, set `qt_platform = "xcb"`.
 
+## Showing and pulling up things
+
+- **Your usual phrases work instantly, with no AI:** "pull up connections for Nikola Tesla", "pull up the Taj Mahal", "show me a picture of a capybara", "what does a quokka look like". **Pull up** shows the best picture with an accurate facts card and speaks the first line. **Picture** shows just the picture.
+- **Say it any other way** ("gimme a quick look at the Golden Gate Bridge", "throw everything on Marie Curie on the screen") and the AI works out what you meant. Batsy then **learns that phrasing**, so next time it's instant. Plain questions like "what is…" or "who's…" are never learned as show phrases. `batsy vocab` lists the phrases, and `batsy vocab --forget "phrase {x}"` removes one.
+- **The right picture, not the top search hit:** Batsy first works out exactly what you mean, so "jaguar animal" gives the animal and not the car. It then compares the article's editor-chosen image with high-resolution Wikimedia Commons photos. Images Wikipedia rates as featured or quality score highest, and wrong matches, tiny images and odd shapes score lowest. Specifics like "at night" or "interior" are taken into account. The facts come from the encyclopedia summary, not a search snippet.
+
 ## Screensaver: token usage
 
 After 3 minutes with no keyboard or mouse activity, as long as Batsy isn't doing anything, the screen fades to a dark screensaver showing:
@@ -110,7 +116,7 @@ Batsy controls the Spotify app on your iPad through Spotify Connect, using the S
 ## The brain: local and free (with Claude on request)
 
 - **Default: a local AI.** `qwen2.5:3b` runs in Ollama on the laptop. It's free, works offline and has no limits. It's tuned for 8 GB of RAM and real back-and-forth conversation: the model stays loaded, its instructions are tiny (about 200 tokens), memory is short, tool output is trimmed, and replies are spoken as they stream. On a typical laptop CPU, expect the first words about 1–3 seconds after you stop talking.
-- **"Ask Claude …"** sends just that one request to Claude Code on your **Claude Pro** plan. Use it for hard questions or real code, for example "ask Claude to write an Arduino sketch for a line follower". Nothing else touches your Pro allowance. One-time setup: `npm install -g @anthropic-ai/claude-code`, then run `claude` and log in.
+- **Complex requests go to Claude automatically,** through Claude Code on your **Claude Pro** plan. That covers code, Arduino sketches, "explain why…", comparisons, plans, writing and long questions. The local AI also hands off anything it isn't sure about. Everything else stays local and free. Saying "ask Claude…" still forces it. Turn the automatic hand-off off with `[local] auto_claude = false`. One-time setup: `npm install -g @anthropic-ai/claude-code`, then run `claude` and log in.
 - **Faster but simpler:** `[local] model = "qwen2.5:1.5b"`. **Smarter but slower:** `"llama3.2:3b"` or a 7B model if you get more RAM.
 - **Have a Claude API key?** Set `[brain] engine = "claude"` to use the full Claude agent instead.
 - The no-token local commands (music, routines, camera, time, volume, "show me a picture of X") work the same with either brain.

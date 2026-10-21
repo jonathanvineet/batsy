@@ -29,6 +29,7 @@ DEFAULTS = {
         "related_exchanges": 1,
         "tool_result_chars": 1500,
         "max_steps": 5,
+        "auto_claude": True,       # send complex requests to Claude Code (your Pro plan) automatically
     },
     "claude": {
         "model": "claude-opus-5-5",
