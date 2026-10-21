@@ -6,7 +6,7 @@ A voice assistant for your Fedora laptop, powered by Claude. Say **"Batsy"** and
 
 ```bash
 cd batsy
-./install.sh          # asks for your sudo password and your Claude API key
+./install.sh          # asks for your sudo password; installs the local AI (no API key needed)
 batsy -v              # start it now; it also starts automatically at login
 ```
 
@@ -50,6 +50,17 @@ When you say "Batsy", the screen fades to a dark Batsy view:
 - **Details** (lists, steps, numbers) appear on a text card, from a hidden `[[card: Title | text]]` note, instead of being read aloud.
 
 The overlay closes by itself a few seconds after the answer, or 30 seconds after showing a picture. Esc, Space or a click closes it straight away. Turn it off with `[overlay] enabled = false`. If GNOME keeps it behind other windows, set `qt_platform = "xcb"`.
+
+## Screensaver: token usage
+
+After 3 minutes with no keyboard or mouse activity, as long as Batsy isn't doing anything, the screen fades to a dark screensaver showing:
+- a big clock and the date
+- three tiles: **This session** (since Batsy started), **Today** and **Last 7 days**, each with total tokens, estimated cost and request count, plus a bar split into cached, new input and output
+- today's plan, if you have one
+
+Move the mouse or press a key to close it, or just say "Batsy". The layout drifts slowly so nothing burns into the screen. Change the delay with `[overlay] screensaver_minutes` (0 turns it off). GNOME blanks the screen after 5 minutes by default, so raise that in Settings → Power if you want the screensaver to stay up longer.
+
+These are Batsy's own API tokens, the same numbers `batsy usage` prints. Your claude.ai plan limits aren't available through the API.
 
 ## Routines (no tokens)
 
@@ -96,11 +107,19 @@ Batsy controls the Spotify app on your iPad through Spotify Connect, using the S
 | `~/.local/share/batsy/batsy.log` | log: what it heard, said and ran |
 | `~/Batsy/` | Batsy's workspace (Arduino sketches in `~/Batsy/arduino/`) |
 
+## The brain: local and free (with Claude on request)
+
+- **Default: a local AI.** `qwen2.5:3b` runs in Ollama on the laptop. It's free, works offline and has no limits. It's tuned for 8 GB of RAM and real back-and-forth conversation: the model stays loaded, its instructions are tiny (about 200 tokens), memory is short, tool output is trimmed, and replies are spoken as they stream. On a typical laptop CPU, expect the first words about 1–3 seconds after you stop talking.
+- **"Ask Claude …"** sends just that one request to Claude Code on your **Claude Pro** plan. Use it for hard questions or real code, for example "ask Claude to write an Arduino sketch for a line follower". Nothing else touches your Pro allowance. One-time setup: `npm install -g @anthropic-ai/claude-code`, then run `claude` and log in.
+- **Faster but simpler:** `[local] model = "qwen2.5:1.5b"`. **Smarter but slower:** `"llama3.2:3b"` or a 7B model if you get more RAM.
+- **Have a Claude API key?** Set `[brain] engine = "claude"` to use the full Claude agent instead.
+- The no-token local commands (music, routines, camera, time, volume, "show me a picture of X") work the same with either brain.
+
 ## How it works
 
 - **Wake word:** Vosk (offline) spots "Batsy" continuously. Whisper then confirms it, which filters out false alarms.
 - **Speech-to-text:** faster-whisper `small.en` running locally (falls back to Vosk).
-- **Brain:** Claude Opus 5.5 with streaming, adaptive thinking, prompt caching, server-side compaction and refusal fallbacks. Web search and fetch are on.
+- **Brain:** a local Ollama model by default; Claude Code (Pro) when you say "ask Claude"; or the Claude API agent (Opus 5.5) if you have a key.
 - **Voice:** Piper `en_GB-alan-medium`, local and neural (falls back to espeak-ng). Replies are spoken sentence by sentence as they stream in.
 - **Tools:** `batsy/tools/`: shell and background jobs, files, system status, screen and webcam, Arduino (`arduino-cli`), timers and monitors, memory, and self-written skills.
 

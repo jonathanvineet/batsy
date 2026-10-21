@@ -3,6 +3,7 @@
 Commands in:  {"cmd": "listen"} {"cmd": "level", "v": 0..1} {"cmd": "partial", "text"} {"cmd": "heard", "text"}
               {"cmd": "think"} {"cmd": "say", "text"} {"cmd": "image", "path", "caption"}
               {"cmd": "card", "title", "text"} {"cmd": "done", "linger": s} {"cmd": "hide"}
+              {"cmd": "saver", "stats": {...}, "next": "..."}  (screensaver; any mouse/key input ends it)
 Events out:   {"event": "dismissed"}  (Esc / click / Space)
 """
 import json
@@ -41,12 +42,29 @@ class Overlay(QWidget):
         self.caption = ""
         self.fade = 0.0
         self.t0 = time.time()
+        self.saver: dict | None = None  # stats while in screensaver mode
+        self.saver_next = ""
+        self.mouse_origin = None
         self.hide_timer = QTimer(self, singleShot=True, timeout=self._dismiss)
         self.anim = QTimer(self, interval=33, timeout=self._tick)
 
     # --- commands ---------------------------------------------------------
     def handle(self, m: dict) -> None:
         cmd = m.get("cmd")
+        if cmd == "saver":
+            first = self.saver is None
+            self.saver, self.saver_next = m.get("stats", {}), m.get("next", "")
+            if first:
+                self.hide_timer.stop()
+                self.state = "idle"
+                self.mouse_origin = None
+                self.setMouseTracking(True)
+                self.setCursor(Qt.BlankCursor)
+                self._appear()
+            self.update()
+            return
+        if cmd in ("listen", "think", "say", "image", "card", "hide"):
+            self._leave_saver()
         if cmd == "listen":
             self.hide_timer.stop()
             if m.get("fresh"):
@@ -92,7 +110,27 @@ class Overlay(QWidget):
             self.activateWindow()
             self.anim.start()
 
+    def _leave_saver(self) -> None:
+        if self.saver is not None:
+            self.saver = None
+            self.setMouseTracking(False)
+            self.unsetCursor()
+
+    def mouseMoveEvent(self, e):
+        if self.saver is None:
+            return
+        pos = e.position()
+        if self.mouse_origin is None:
+            self.mouse_origin = pos
+        elif abs(pos.x() - self.mouse_origin.x()) + abs(pos.y() - self.mouse_origin.y()) > 12:
+            self._dismiss()
+
     def _dismiss(self, notify: bool = True) -> None:
+        was_saver = self.saver is not None
+        self._leave_saver()
+        if was_saver and notify:
+            print(json.dumps({"event": "saver_exit"}), flush=True)
+            notify = False
         self.hide()
         self.anim.stop()
         self.state = "idle"
@@ -100,7 +138,7 @@ class Overlay(QWidget):
             print(json.dumps({"event": "dismissed"}), flush=True)
 
     def keyPressEvent(self, e):
-        if e.key() in (Qt.Key_Escape, Qt.Key_Space, Qt.Key_Q):
+        if self.saver is not None or e.key() in (Qt.Key_Escape, Qt.Key_Space, Qt.Key_Q):
             self._dismiss()
 
     def mousePressEvent(self, e):
@@ -117,6 +155,9 @@ class Overlay(QWidget):
         p.setRenderHint(QPainter.Antialiasing)
         p.setRenderHint(QPainter.SmoothPixmapTransform)
         w, h = self.width(), self.height()
+        if self.saver is not None:
+            self._paint_saver(p, w, h)
+            return
         p.fillRect(self.rect(), QColor(6, 5, 14, int(225 * self.fade)))
         p.setOpacity(self.fade)
 
@@ -150,6 +191,61 @@ class Overlay(QWidget):
                            center=True)
         p.setOpacity(0.35 * self.fade)
         self._text(p, "Esc to close", QRectF(0, h - 34, w - 24, 24), 11, QColor(200, 200, 220), align=Qt.AlignRight)
+
+    def _paint_saver(self, p: QPainter, w: int, h: int) -> None:
+        t = time.time() - self.t0
+        p.fillRect(self.rect(), QColor(3, 2, 8, int(255 * self.fade)))
+        p.setOpacity(self.fade)
+        # everything drifts slowly so nothing burns into the panel
+        dx, dy = 40 * math.sin(t / 47), 30 * math.sin(t / 61)
+        self._orb(p, QPointF(w * 0.5 + dx * 3, h * 0.30 + dy * 2), min(w, h) * 0.05)
+        clock = time.strftime("%H:%M")
+        self._text(p, clock, QRectF(dx, h * 0.12 + dy, w, 160), 96, QColor(240, 236, 255))
+        date = time.strftime("%A, %B ") + str(int(time.strftime("%d")))
+        self._text(p, date, QRectF(dx, h * 0.12 + 150 + dy, w, 40), 20, QColor(170, 160, 205))
+
+        tiles = [("This session", "session"), ("Today", "today"), ("Last 7 days", "week")]
+        tw, th, gap = min(340, w * 0.26), 170, 28
+        x0 = (w - (3 * tw + 2 * gap)) / 2 + dx
+        y0 = h * 0.52 + dy
+        for i, (label, key) in enumerate(tiles):
+            st = self.saver.get(key, {})
+            r = QRectF(x0 + i * (tw + gap), y0, tw, th)
+            p.setPen(QPen(QColor(255, 255, 255, 30), 1.2))
+            p.setBrush(QColor(255, 255, 255, 12))
+            p.drawRoundedRect(r, 20, 20)
+            inner = r.adjusted(24, 18, -24, -16)
+            self._text(p, label.upper(), QRectF(inner.left(), inner.top(), inner.width(), 22), 11,
+                       QColor(170, 160, 205), center=False)
+            self._text(p, _fmt(st.get("tokens", 0)) + " tokens", QRectF(inner.left(), inner.top() + 28, inner.width(), 56),
+                       30, QColor(255, 255, 255), center=False)
+            sub = f"≈ ${st.get('cost', 0):.2f} · {st.get('requests', 0)} requests"
+            self._text(p, sub, QRectF(inner.left(), inner.top() + 86, inner.width(), 24), 13,
+                       QColor(200, 195, 225), center=False)
+            total = max(1, st.get("tokens", 0))
+            bar = QRectF(inner.left(), inner.bottom() - 10, inner.width(), 6)
+            parts = [(st.get("cache_read", 0), QColor(90, 200, 255)), (st.get("in", 0) + st.get("cache_write", 0),
+                     QColor(200, 90, 255)), (st.get("out", 0), QColor(255, 255, 255))]
+            x = bar.left()
+            p.setPen(Qt.NoPen)
+            for val, col in parts:
+                seg = bar.width() * val / total
+                if seg > 0.5:
+                    p.setBrush(col)
+                    p.drawRoundedRect(QRectF(x, bar.top(), max(seg - 2, 1), bar.height()), 3, 3)
+                    x += seg
+        legend_y = y0 + th + 18
+        for i, (name, col) in enumerate([("cached", QColor(90, 200, 255)), ("new input", QColor(200, 90, 255)),
+                                         ("output", QColor(255, 255, 255))]):
+            lx = w / 2 - 170 + i * 120 + dx
+            p.setPen(Qt.NoPen)
+            p.setBrush(col)
+            p.drawEllipse(QPointF(lx, legend_y + 9), 4, 4)
+            self._text(p, name, QRectF(lx + 10, legend_y, 100, 20), 11, QColor(170, 160, 205), center=False)
+        if self.saver_next:
+            self._text(p, self.saver_next, QRectF(dx, h * 0.86 + dy, w, 30), 15, QColor(200, 195, 225))
+        p.setOpacity(0.4 * self.fade)
+        self._text(p, "Say “Batsy” anytime", QRectF(dx, h - 50, w, 24), 12, QColor(200, 200, 220))
 
     def _orb(self, p: QPainter, c: QPointF, r: float) -> None:
         t = time.time() - self.t0
@@ -229,6 +325,14 @@ class Overlay(QWidget):
         y = self._text(p, title, inner, 30, QColor(255, 255, 255), center=False) + 18 if title else inner.top()
         self._text(p, body, QRectF(inner.left(), y, inner.width(), inner.bottom() - y), 20, QColor(225, 222, 240),
                    center=False)
+
+
+def _fmt(n: int) -> str:
+    if n >= 1_000_000:
+        return f"{n / 1e6:.2f}M"
+    if n >= 1000:
+        return f"{n / 1e3:.1f}K"
+    return str(n)
 
 
 def main() -> None:

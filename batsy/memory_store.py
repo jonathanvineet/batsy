@@ -162,8 +162,12 @@ class MemoryStore:
             return self.db.execute("DELETE FROM agenda WHERE id = ?", (item_id,)).rowcount > 0
 
     # --- the context block sent with each request -------------------------
-    def build_context(self, text: str, cfg) -> str:
-        m = cfg.get("memory")
+    def build_context(self, text: str, cfg, recent: int | None = None, related: int | None = None) -> str:
+        m = dict(cfg.get("memory"))
+        if recent is not None:
+            m["recent_exchanges"] = recent
+        if related is not None:
+            m["related_exchanges"] = related
         parts = []
 
         facts = self.all_facts()

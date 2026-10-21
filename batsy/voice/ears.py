@@ -108,11 +108,12 @@ class Ears:
         return KaldiRecognizer(self.model, RATE)
 
     def record_utterance(self, start_timeout: float, preroll: list[bytes] | None = None,
-                         end_silence: float = 0.9, max_seconds: float = 30,
+                         end_silence: float | None = None, max_seconds: float = 30,
                          on_frame=None) -> np.ndarray | None:
         """Record until the speaker goes quiet. Returns int16 samples, or None if nobody spoke.
         on_frame(frame, level, speaking) is called for every frame (drives the overlay)."""
         frames = list(preroll or [])
+        end_silence = end_silence or self.cfg.get("voice.end_silence")
         thresh = self.threshold()
         started, silent, waited, total = False, 0, 0, 0
         while total < max_seconds * FRAMES_PER_SEC:

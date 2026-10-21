@@ -41,7 +41,12 @@ class Batsy:
         self.speaker = Speaker(cfg, enabled=speak)
         self.ctx = ToolContext(cfg, announce=self.announce, confirm=self._confirm)
         self.registry = build_registry(self.ctx)
-        self.brain = Brain(cfg, self.registry)
+        if cfg.get("brain.engine") == "claude":
+            self.brain = Brain(cfg, self.registry)
+        else:
+            from batsy.local_brain import LocalBrain
+
+            self.brain = LocalBrain(cfg, self.registry)
         self.turn_lock = threading.Lock()
         self.confirm_handler = self._confirm_console
         self.confirm_request: dict | None = None
@@ -53,8 +58,38 @@ class Batsy:
             self.ctx.display = self.overlay.send
         self.brain.visual = self.show_visual
         self.routines = Routines(self)
+        self.saver_on = False
+        self.overlay.on_saver_exit = self._saver_exited
+        if self.overlay.enabled and cfg.get("overlay.screensaver_minutes") > 0:
+            threading.Thread(target=self._saver_loop, daemon=True, name="screensaver").start()
         self.last_raw_text = ""
         monitor.start_background(self.ctx)
+
+    def _saver_exited(self) -> None:
+        self.saver_on = False
+
+    def _saver_loop(self) -> None:
+        """Show the token-usage screensaver while the user is away and Batsy has nothing to do."""
+        from batsy import idle, usage
+        from batsy.memory_store import get_store
+
+        after_ms = self.cfg.get("overlay.screensaver_minutes") * 60_000
+        last_refresh = 0.0
+        while True:
+            time.sleep(5)
+            away = idle.idle_ms()
+            if away is None:
+                continue
+            busy = self.turn_lock.locked() or not self.speaker.idle() or \
+                time.time() - self.overlay.last_active < self.cfg.get("overlay.linger_media_seconds") + 5
+            if self.saver_on and away < 3000:
+                self.saver_on = False
+                self.overlay.hide()
+            elif not busy and away >= after_ms and (not self.saver_on or time.time() - last_refresh > 30):
+                items = get_store().agenda_for(time.strftime("%Y-%m-%d"))
+                nxt = ("Today: " + " · ".join(i["text"].rstrip(".") for i in items[:3])) if items else ""
+                self.overlay.saver(usage.stats(), nxt)
+                self.saver_on, last_refresh = True, time.time()
 
     def _overlay_dismissed(self) -> None:
         self.overlay_dismissed = True
@@ -179,6 +214,15 @@ class Batsy:
             return True
         if self.routines.handle(n):
             return True
+        m = re.match(r"(?:hey |ok )?ask (?:claude|cloud|clawed|claud)(?: to| about| if| whether)?[,\s]+(.+)", text.strip(" .!?"), re.I)
+        if m:  # the only path that touches the Pro plan: explicit, one request
+            from batsy.local_brain import ask_claude
+
+            self._reply("Asking Claude.")
+            answer = ask_claude(m.group(1))
+            self.brain.memory.add_exchange("claude", text, answer, ["asked Claude Code"])
+            self._reply(answer)
+            return True
         if n in RESET_PHRASES:
             self.brain.reset()
             self._reply("Fresh start. I still remember the long-term stuff.")
@@ -287,6 +331,7 @@ class Batsy:
         live = self.ears.live_recognizer() if self.overlay.enabled and self.cfg.get("overlay.live_words") else None
         state = {"shown": False, "partial": "", "n": 0}
         if fresh:
+            self.saver_on = False  # the wake word takes over the screen from the screensaver
             self.overlay_dismissed = False
             self.overlay.listen(fresh=True)
             state["shown"] = True

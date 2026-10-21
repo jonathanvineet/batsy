@@ -18,6 +18,8 @@ class Overlay:
         self.proc: subprocess.Popen | None = None
         self.lock = threading.Lock()
         self.has_media = False
+        self.last_active = 0.0  # last time Batsy used the overlay for a conversation
+        self.on_saver_exit = None
         if self.enabled:
             self._start()
 
@@ -50,10 +52,16 @@ class Overlay:
                 continue
             if ev.get("event") == "dismissed" and self.on_dismiss:
                 self.on_dismiss()
+            elif ev.get("event") == "saver_exit" and self.on_saver_exit:
+                self.on_saver_exit()
 
     def send(self, cmd: str, **kw) -> None:
         if not self.enabled:
             return
+        if cmd != "saver":
+            import time
+
+            self.last_active = time.time()
         with self.lock:
             if self.proc is None or self.proc.poll() is not None:
                 log.warning("overlay process exited; restarting")
@@ -101,3 +109,6 @@ class Overlay:
 
     def hide(self) -> None:
         self.send("hide")
+
+    def saver(self, stats: dict, next_text: str = "") -> None:
+        self.send("saver", stats=stats, next=next_text)

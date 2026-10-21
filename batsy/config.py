@@ -18,6 +18,18 @@ SOCKET_PATH = Path(os.environ.get("XDG_RUNTIME_DIR", "/tmp")) / f"batsy-{os.getu
 SOURCE_DIR = Path(__file__).resolve().parent
 
 DEFAULTS = {
+    # "local" = free model on this laptop via Ollama (default); "claude" = Claude API (needs an API key)
+    "brain": {"engine": "local"},
+    "local": {
+        "url": "http://127.0.0.1:11434",
+        "model": "qwen2.5:3b",     # fast on 8 GB RAM; "llama3.2:3b" or "qwen2.5:1.5b" (faster, simpler) also work
+        "keep_alive": "2h",        # keep the model loaded so replies start instantly
+        "context": 4096,
+        "recent_exchanges": 4,     # short memory keeps the CPU's prompt reading fast
+        "related_exchanges": 1,
+        "tool_result_chars": 1500,
+        "max_steps": 5,
+    },
     "claude": {
         "model": "claude-opus-5-5",
         # low = fewest thinking tokens and fastest replies; "medium"/"high" for heavy coding sessions
@@ -54,6 +66,7 @@ DEFAULTS = {
         "linger_seconds": 6,          # stay up this long after a spoken-only answer
         "linger_media_seconds": 30,   # ...or after showing a picture / card
         "live_words": True,           # show your words as you speak (local Vosk, no tokens)
+        "screensaver_minutes": 3,     # token-usage screensaver after this long idle (0 = off)
         "qt_platform": "",            # e.g. "xcb" to force XWayland if the window won't come to the front
     },
     "camera": {
@@ -66,7 +79,8 @@ DEFAULTS = {
         "wake_words": ["batsy", "bat see", "bats see", "betsy", "batsie", "bitsy", "patsy"],
         "vosk_model": "vosk-model-small-en-us-0.15",
         "stt_engine": "auto",  # auto | whisper | vosk
-        "whisper_model": "small.en",  # tiny.en / base.en are faster, small.en more accurate
+        "whisper_model": "base.en",  # fast on CPU; small.en is more accurate but slower
+        "end_silence": 0.7,          # seconds of quiet that mean you've finished talking
         "tts_engine": "auto",  # auto | piper | espeak
         "piper_voice": "en_GB-alan-medium",
         "follow_up_seconds": 6,

@@ -62,15 +62,21 @@ ARDUINO="$(command -v arduino-cli || echo "$BIN/arduino-cli")"
 "$ARDUINO" core update-index
 "$ARDUINO" core install arduino:avr
 
-say "Claude API key"
-if [ ! -f "$CONF/env" ] || ! grep -q ANTHROPIC_API_KEY "$CONF/env"; then
-  read -rsp "Paste your Claude API key (sk-ant-...): " KEY; echo
-  umask 077
-  printf 'ANTHROPIC_API_KEY=%s\n' "$KEY" > "$CONF/env"
-  chmod 600 "$CONF/env"
-else
-  echo "  already set in $CONF/env"
+say "Installing the local AI brain (Ollama + qwen2.5:3b, ~2 GB download)"
+if ! command -v ollama >/dev/null; then
+  sudo dnf install -y ollama || curl -fsSL https://ollama.com/install.sh | sh
 fi
+sudo systemctl enable --now ollama 2>/dev/null || (ollama serve >/dev/null 2>&1 &)
+sleep 2
+ollama pull qwen2.5:3b
+
+say "Optional: Claude Code for 'ask Claude ...' (uses your Claude Pro plan)"
+if command -v claude >/dev/null; then
+  echo "  Claude Code found. Run 'claude' once and log in with your Pro account if you haven't."
+else
+  echo "  Not installed. To enable: sudo dnf install -y nodejs && npm install -g @anthropic-ai/claude-code && claude"
+fi
+touch "$CONF/env" && chmod 600 "$CONF/env"
 [ -f "$CONF/config.toml" ] || cp "$REPO/packaging/config.example.toml" "$CONF/config.toml"
 
 say "Adding the batsy command and autostart"

@@ -30,6 +30,8 @@ def _setup_logging(verbose: bool) -> None:
 
 
 def _require_key() -> None:
+    if Config.load().get("brain.engine") != "claude":
+        return  # local brain needs no key
     if not (os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("ANTHROPIC_AUTH_TOKEN")):
         sys.exit(f"No Claude API key. Put ANTHROPIC_API_KEY=sk-ant-... in {CONFIG_DIR / 'env'} (chmod 600).")
 
@@ -112,20 +114,13 @@ def cmd_reset(cfg, args) -> None:
 
 
 def cmd_usage(cfg, args) -> None:
-    import json
-    import time
-    from batsy.brain import USAGE_FILE
+    from batsy import usage
 
-    if not USAGE_FILE.exists():
-        print("No usage recorded yet.")
-        return
-    rows = [json.loads(l) for l in USAGE_FILE.read_text().splitlines() if l.strip()]
-    for label, since in (("today", time.mktime(time.strptime(time.strftime("%Y-%m-%d"), "%Y-%m-%d"))),
-                         ("last 7 days", time.time() - 7 * 86400), ("all time", 0)):
-        sel = [r for r in rows if r["t"] >= since]
-        tot = {k: sum(r[k] for r in sel) for k in ("in", "out", "cache_read", "cache_write")}
-        print(f"{label:12} {len(sel):5} requests | input {tot['in']:>9,} | cached read {tot['cache_read']:>10,} "
-              f"| cache write {tot['cache_write']:>9,} | output {tot['out']:>8,}")
+    st = usage.stats()
+    for label, key in (("today", "today"), ("last 7 days", "week"), ("all time", "all")):
+        t = st[key]
+        print(f"{label:12} {t['requests']:5} requests | {t['tokens']:>10,} tokens (input {t['in']:,}, cached "
+              f"{t['cache_read']:,}, cache write {t['cache_write']:,}, output {t['out']:,}) | ≈ ${t['cost']:.2f}")
 
 
 def cmd_spotify_login(cfg, args) -> None:
@@ -141,8 +136,22 @@ def cmd_doctor(cfg, args) -> None:
         print(f"  [{'ok' if ok else '!!'}] {label}" + ("" if ok else f"  -> {hint}"))
 
     print("Batsy doctor")
-    check("Claude API key", bool(os.environ.get("ANTHROPIC_API_KEY")), f"add ANTHROPIC_API_KEY to {CONFIG_DIR / 'env'}")
-    print(f"  model: {cfg.get('claude.model')} (effort {cfg.get('claude.effort')})")
+    if cfg.get("brain.engine") == "claude":
+        check("Claude API key", bool(os.environ.get("ANTHROPIC_API_KEY")), f"add ANTHROPIC_API_KEY to {CONFIG_DIR / 'env'}")
+        print(f"  model: {cfg.get('claude.model')} (effort {cfg.get('claude.effort')})")
+    else:
+        import json
+        import urllib.request
+
+        try:
+            with urllib.request.urlopen(cfg.get("local.url") + "/api/tags", timeout=3) as r:
+                names = [m["name"] for m in json.loads(r.read()).get("models", [])]
+            check(f"local model {cfg.get('local.model')} (Ollama)", any(n.startswith(cfg.get("local.model")) for n in names),
+                  f"ollama pull {cfg.get('local.model')}")
+        except Exception:
+            check("Ollama running", False, "sudo systemctl enable --now ollama")
+        check("Claude Code for 'ask Claude' (optional, uses your Pro plan)", bool(shutil.which("claude")),
+              "npm install -g @anthropic-ai/claude-code, then run claude once to log in")
     try:
         import sounddevice as sd
 
