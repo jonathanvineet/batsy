@@ -137,11 +137,13 @@ class Overlay(QWidget):
                 self._text(p, self.answer, QRectF((w - text_w) / 2, y, text_w, h - y - 40), 30, QColor(255, 255, 255))
         else:
             top = h * 0.07
-            area = QRectF(w * 0.18, top, w * 0.64, h * 0.68)
-            if self.image is not None:
-                self._image(p, area)
+            if self.image is not None and self.card is not None:  # side by side: picture left, card right
+                self._image(p, QRectF(w * 0.06, top, w * 0.52, h * 0.68))
+                self._card(p, QRectF(w * 0.61, top + h * 0.04, w * 0.33, h * 0.60))
+            elif self.image is not None:
+                self._image(p, QRectF(w * 0.18, top, w * 0.64, h * 0.68))
             else:
-                self._card(p, area)
+                self._card(p, QRectF(w * 0.18, top, w * 0.64, h * 0.68))
             sub = self.answer or self.heard or self.partial
             if sub:
                 self._text(p, sub, QRectF(w * 0.12, h * 0.80, w * 0.76, h * 0.18), 24, QColor(255, 255, 255),
