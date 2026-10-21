@@ -46,9 +46,12 @@ no re-reading what you already know.
 - Camera: `camera open` shows the live feed in a window. Look at it (look source=webcam) only when the user asks \
 something about what it shows, once per question; never comment on the feed unprompted. Screen questions: \
 look source=screen.
-- The screen shows a full-screen Batsy view with your words as captions. For "show me / pull up / let me \
-see X" call display (image_query for a picture of something, image_path for the user's files, title+text for \
-details better read than heard), then say one short line.
+- You have a full-screen display; your words appear as captions. Show things whenever seeing them helps, \
+however the user phrases it ("what does X look like", "who's X", "I wanna see", "how big is a blue whale", \
+"that car from yesterday"), and when the answer is about something visual (person, place, animal, object, food, \
+artwork, product, map, diagram): put [[show: precise image search terms]] in your reply. Put lists, steps, \
+numbers or anything better read than heard in [[card: Title | text]]. Markers aren't spoken and cost no extra \
+call, so don't announce them; just talk naturally. Use the display tool only for local files or exact URLs.
 - Music plays on the user's iPad through Spotify: use the spotify tool (not playerctl). For vague requests \
 ("something chill") play a fitting playlist.
 - Arduino: write_sketch, compile, fix until it builds, upload, read serial to confirm. Workspace: {workspace}.
@@ -89,14 +92,28 @@ def build_system_prompt() -> str:
     )
 
 
-class SpeechChunker:
-    """Turns streamed text into speakable sentences, skipping code blocks."""
+MARKER = re.compile(r"\[\[(show|card):\s*(.*?)\]\]", re.S)
 
-    def __init__(self, emit: Callable[[str], None]):
-        self.emit, self.buf, self.in_code = emit, "", False
+
+class SpeechChunker:
+    """Turns streamed text into speakable sentences, skipping code blocks.
+
+    Inline visual markers ([[show: query]], [[card: Title | text]]) are cut out of the speech and handed
+    to on_marker as soon as they're complete, so pictures appear while Batsy is still talking and
+    without an extra tool round trip."""
+
+    def __init__(self, emit: Callable[[str], None], on_marker: Callable[[str, str], None] | None = None):
+        self.emit, self.on_marker, self.buf, self.in_code = emit, on_marker, "", False
+
+    def _pull_markers(self) -> None:
+        while (m := MARKER.search(self.buf)):
+            if self.on_marker:
+                self.on_marker(m.group(1), m.group(2).strip())
+            self.buf = self.buf[:m.start()] + self.buf[m.end():]
 
     def feed(self, text: str) -> None:
         self.buf += text
+        self._pull_markers()
         while True:
             if self.in_code:
                 end = self.buf.find("```")
@@ -104,9 +121,11 @@ class SpeechChunker:
                     return
                 self.buf, self.in_code = self.buf[end + 3:], False
                 continue
-            fence = self.buf.find("```")
+            pending = self.buf.find("[[")  # a marker still streaming in: don't speak past it
+            region = self.buf if pending < 0 else self.buf[:pending]
+            fence = region.find("```")
             # first sentence boundary that yields a chunk long enough not to sound choppy
-            m = next((b for b in re.finditer(r"(?<=[.!?:;])\s+|\n+", self.buf)
+            m = next((b for b in re.finditer(r"(?<=[.!?:;])\s+|\n+", region)
                       if b.start() >= 25 or "\n" in b.group()), None)
             if fence >= 0 and (m is None or fence < m.start()):
                 self._say(self.buf[:fence])
@@ -118,8 +137,9 @@ class SpeechChunker:
             self.buf = self.buf[m.end():]
 
     def flush(self) -> None:
+        self._pull_markers()
         if not self.in_code:
-            self._say(self.buf)
+            self._say(self.buf.split("[[", 1)[0])  # drop an unfinished marker
         self.buf, self.in_code = "", False
 
     def _say(self, text: str) -> None:
@@ -139,6 +159,7 @@ class Brain:
         self.messages: list[dict] = []  # the current request's tool loop only; rebuilt every request
         self.system = build_system_prompt()
         self.lock = threading.Lock()
+        self.visual: Callable[[str, str], None] | None = None  # set by the app: shows [[show:]] / [[card:]]
         self.clear_tool_results = cfg.get("claude.clear_tool_results_at") > 0
 
     def note_announcement(self, text: str) -> None:
@@ -218,8 +239,13 @@ class Brain:
             spoken.append(sentence)
             say(sentence)
 
+        def on_marker(kind: str, arg: str) -> None:
+            actions.append(f"showed {kind}: {arg[:60]}")
+            if self.visual and not abort.is_set():
+                threading.Thread(target=self.visual, args=(kind, arg), daemon=True).start()
+
         for _ in range(self.cfg.get("claude.max_steps")):
-            chunker = SpeechChunker(emit)
+            chunker = SpeechChunker(emit, on_marker)
             try:
                 final = self._stream_once(chunker, abort)
             except anthropic.AuthenticationError:

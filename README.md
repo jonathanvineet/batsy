@@ -40,6 +40,17 @@ Log out and back in once so the Arduino serial-port permission (`dialout` group)
 - **Risky actions** (`rm -rf`, `dnf remove`, shutdown, disk tools, force-push, etc.) are confirmed by voice first. Root commands go through `pkexec`, which shows the normal GNOME password dialog.
 - **Typing:** `batsy chat` (or `batsy ask "..."`) talks to the running assistant through a local socket.
 
+## Full-screen mode
+
+When you say "Batsy", the screen fades to a dark Batsy view:
+- **While you talk,** a glowing orb follows your voice and your words appear live. This is local and uses no tokens.
+- **While it works,** the orb spins.
+- **When it answers,** the reply appears as big captions while it speaks.
+- **Pictures without special phrases.** Ask in any words: "what does a capybara look like", "who's the CEO of Nvidia", "how big is a blue whale", "I wanna see that bridge in Prague". Claude decides when a picture helps and adds a hidden `[[show: …]]` note to its reply. Batsy cuts the note out of the speech, finds one picture (Wikipedia, then Openverse) and puts it on screen while still talking. There's no extra request to Claude, and Claude never has to see the picture.
+- **Details** (lists, steps, numbers) appear on a text card, from a hidden `[[card: Title | text]]` note, instead of being read aloud.
+
+The overlay closes by itself a few seconds after the answer, or 30 seconds after showing a picture. Esc, Space or a click closes it straight away. Turn it off with `[overlay] enabled = false`. If GNOME keeps it behind other windows, set `qt_platform = "xcb"`.
+
 ## Spotify on the iPad (one-time setup)
 
 Batsy controls the Spotify app on your iPad through Spotify Connect, using the Spotify Web API. The iPad app can't be controlled directly over the local network, so commands go through Spotify's servers. Being on the same Wi-Fi doesn't matter. **Spotify Premium is required.**

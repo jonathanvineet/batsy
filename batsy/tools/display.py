@@ -9,11 +9,9 @@ from batsy import images
 def register(reg):
     @reg.tool(
         "display",
-        "Show something full-screen on the user's display. Use when they say show me / pull up / let me see. "
-        "image_query: Batsy finds and shows one fitting photo (you do not see it; it costs nothing). "
-        "image_path / image_url: show a specific local file or URL. title+text: a card for details worth "
-        "reading rather than hearing (lists, steps, numbers). Your spoken reply is captioned automatically, "
-        "so don't repeat it in text.",
+        "Show a specific local image file (image_path, e.g. from ~/Pictures) or exact image URL full-screen. "
+        "For pictures of things in general, and text cards, use the inline [[show: ...]] / [[card: ...]] "
+        "markers instead (no extra round trip).",
         {
             "image_query": {"type": "string", "description": "what to find a picture of, e.g. 'Eiffel Tower at night'"},
             "image_path": {"type": "string"},

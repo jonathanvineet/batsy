@@ -50,11 +50,33 @@ class Batsy:
         self.overlay_dismissed = False
         if self.overlay.enabled:
             self.ctx.display = self.overlay.send
+        self.brain.visual = self.show_visual
         monitor.start_background(self.ctx)
 
     def _overlay_dismissed(self) -> None:
         self.overlay_dismissed = True
         self.speaker.stop()
+
+    def show_visual(self, kind: str, arg: str) -> str | None:
+        """Put a picture ([[show: query]]) or a text card ([[card: Title | text]]) on screen.
+        Returns the picture's caption, or None if nothing was found."""
+        if kind == "card":
+            title, _, body = arg.partition("|")
+            if self.overlay.enabled:
+                self.overlay.card(title.strip(), body.strip())
+            else:
+                print(f"\n[{title.strip()}]\n{body.strip()}")
+            return title.strip()
+        try:
+            path, caption = images.find_image(arg)
+        except Exception as e:
+            log.warning("no picture for %r: %s", arg, e)
+            return None
+        if self.overlay.enabled:
+            self.overlay.image(path, caption)
+        else:
+            subprocess.Popen(["xdg-open", str(path)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        return caption
 
     def _reply(self, text: str) -> None:
         """Speak and caption a locally generated reply."""
@@ -157,19 +179,9 @@ class Batsy:
             self._reply(screen.close_camera())
             return True
         m = re.fullmatch(r"(show me|pull up|display|let me see|show)( a| an| some| the)? (picture|photo|image|pic)s? of (.+)", n)
-        if m:
-            try:
-                path, caption = images.find_image(m.group(4))
-                if self.overlay.enabled:
-                    self.overlay.image(path, caption)
-                else:
-                    subprocess.Popen(["xdg-open", str(path)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                self._reply(f"Here's {caption}." if caption else "Here you go.")
-            except LookupError:
-                self._reply(f"I couldn't find a picture of {m.group(4)}.")
-            except Exception as e:
-                log.exception("image lookup")
-                self._reply(f"Picture search failed: {e}")
+        if m:  # fast path for the plainest phrasing; anything else is understood by Claude
+            caption = self.show_visual("show", m.group(4))
+            self._reply(f"Here's {caption}." if caption else f"I couldn't find a picture of {m.group(4)}.")
             return True
         if re.fullmatch(r"what('s| is) the time( now)?|what time is it( now)?", n):
             self._reply(time.strftime("It's %-I:%M %p."))
