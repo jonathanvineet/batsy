@@ -28,7 +28,11 @@ sudo usermod -aG dialout "$USER" || true
 
 say "Creating Python environment in $VENV"
 mkdir -p "$DATA/models" "$CONF" "$BIN"
-python3 -m venv "$VENV"
+# Speech/voice libraries ship wheels for 3.12 first; newer Fedora defaults to a newer Python.
+sudo dnf install -y python3.12 python3.12-devel >/dev/null 2>&1 || true
+PY="$(command -v python3.12 || command -v python3)"
+echo "  using $($PY --version)"
+[ -x "$VENV/bin/python" ] || "$PY" -m venv "$VENV"
 "$VENV/bin/pip" install -q --upgrade pip wheel
 "$VENV/bin/pip" install -q -e "$REPO"
 "$VENV/bin/pip" install -q sounddevice vosk opencv-python
