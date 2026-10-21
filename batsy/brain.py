@@ -1,11 +1,11 @@
-"""The thinking part: a Claude agent loop with persistent, append-only conversation memory."""
+"""The thinking part: a Claude agent loop. Memory is local (memory_store); each request carries only a
+small context block, and messages within one request's tool loop are append-only."""
 import getpass
 import json
 import logging
 import os
 import platform
 import re
-import shutil
 import threading
 import time
 from typing import Callable
@@ -14,13 +14,11 @@ import anthropic
 
 from batsy.config import DATA_DIR, SOURCE_DIR, WORKSPACE
 from batsy.tools import ToolRegistry
-from batsy.tools import memory as memory_tool
+from batsy.memory_store import get_store
 from batsy.tools import skills as skills_tool
 
 log = logging.getLogger("batsy.brain")
 
-HISTORY_FILE = DATA_DIR / "history.json"
-ARCHIVE_DIR = DATA_DIR / "archive"
 BETAS = ["compact-2026-01-12"]
 CLEAR_BETA = "context-management-2025-06-27"
 USAGE_FILE = DATA_DIR / "usage.jsonl"
@@ -35,8 +33,7 @@ Talking
 - Replies are spoken by TTS: 1-3 short sentences, no markdown/lists/emoji/URLs. Never read code or logs aloud; \
 put code in files and say where.
 - Input is speech transcripts; infer mistranscriptions ("our dino" = Arduino). Ask only if a wrong guess is costly.
-- Don't say your own name (it's the wake word). Messages start with [time · channel]; "[Batsy announced]" lines \
-are alerts you spoke since the last message.
+- Don't say your own name (it's the wake word).
 
 Acting
 - Do things, don't explain how. Act, check briefly, report. Risky shell commands are voice-confirmed \
@@ -53,13 +50,14 @@ look source=screen.
 - "Tell me when..." = add_monitor / set_timer / background job. Use web_search for current facts.
 
 Memory and self-improvement
-- This conversation persists across restarts. Use `remember` for lasting facts about {user}, unprompted when clear.
+- Memory is stored locally. Each message comes with what you remember, the recent conversation (with [did: ...] \
+notes of the actions you took) and possibly related older exchanges, then [Now ...] and the request. Treat that as \
+your memory. Use `recall` only if something you need is missing. Use `remember` for lasting facts about {user} \
+(hardware, projects, preferences), unprompted when clear.
 - To learn a new ability: create_skill, test with run_skill, fix until it works. Your source is {source}; edit \
 only when asked, carefully, then restart_self.
 
 Machine: {host} · {distro} · {desktop} · Python {python}
-Memory:
-{memory}
 Skills:
 {skills}
 """
@@ -82,50 +80,8 @@ def build_system_prompt() -> str:
         distro=_distro(),
         desktop=os.environ.get("XDG_CURRENT_DESKTOP", "unknown") + "/" + os.environ.get("XDG_SESSION_TYPE", "?"),
         python=platform.python_version(),
-        memory=memory_tool.as_prompt(),
         skills=skills_tool.list_skills(),
     )
-
-
-class History:
-    """The conversation, persisted after every change. Only ever appended to: rewriting earlier turns
-    would invalidate the model's preserved thinking."""
-
-    def __init__(self, path=HISTORY_FILE):
-        self.path = path
-        self.messages: list[dict] = []
-        if path.exists():
-            try:
-                self.messages = json.loads(path.read_text())
-            except ValueError:
-                log.warning("history file unreadable; archiving and starting fresh")
-                self.archive()
-        self._repair()
-
-    def _repair(self) -> None:
-        # A crash between a tool call and its result leaves dangling tool_use blocks; answer them.
-        if self.messages and self.messages[-1]["role"] == "assistant":
-            pending = [b for b in self.messages[-1]["content"] if b.get("type") == "tool_use"]
-            if pending:
-                self.append({"role": "user", "content": [
-                    {"type": "tool_result", "tool_use_id": b["id"], "is_error": True,
-                     "content": "Interrupted: Batsy restarted before this ran."} for b in pending
-                ]})
-
-    def append(self, message: dict) -> None:
-        self.messages.append(message)
-        self.save()
-
-    def save(self) -> None:
-        tmp = self.path.with_suffix(".tmp")
-        tmp.write_text(json.dumps(self.messages))
-        os.replace(tmp, self.path)
-
-    def archive(self) -> None:
-        ARCHIVE_DIR.mkdir(parents=True, exist_ok=True)
-        if self.path.exists():
-            shutil.move(self.path, ARCHIVE_DIR / f"history-{time.strftime('%Y%m%d-%H%M%S')}.json")
-        self.messages = []
 
 
 class SpeechChunker:
@@ -174,14 +130,14 @@ class Brain:
         self.cfg = cfg
         self.registry = registry
         self.client = anthropic.Anthropic()
-        self.history = History()
+        self.memory = get_store()
+        self.messages: list[dict] = []  # the current request's tool loop only; rebuilt every request
         self.system = build_system_prompt()
         self.lock = threading.Lock()
-        self.notes: list[str] = []  # announcements made since the last user message
         self.clear_tool_results = cfg.get("claude.clear_tool_results_at") > 0
 
     def note_announcement(self, text: str) -> None:
-        self.notes.append(text)
+        self.memory.add_exchange("alert", "", text, [])
 
     def _request_kwargs(self) -> dict:
         c = self.cfg.get("claude")
@@ -207,10 +163,11 @@ class Brain:
         kwargs = dict(
             model=model,
             max_tokens=c["max_tokens"],
-            system=[{"type": "text", "text": self.system}],
+            # tools + system are identical every request: cache them for an hour
+            system=[{"type": "text", "text": self.system, "cache_control": {"type": "ephemeral", "ttl": c["cache_ttl"]}}],
             tools=tools,
             output_config={"effort": c["effort"]},
-            cache_control={"type": "ephemeral", "ttl": c["cache_ttl"]},
+            cache_control={"type": "ephemeral"},  # 5 min: covers the steps of one tool loop
             context_management={"edits": edits},
             betas=betas,
         )
@@ -228,7 +185,7 @@ class Brain:
             f.write(json.dumps(row) + "\n")
 
     def _stream_once(self, chunker: SpeechChunker, abort: threading.Event):
-        with self.client.beta.messages.stream(messages=self.history.messages, **self._request_kwargs()) as stream:
+        with self.client.beta.messages.stream(messages=self.messages, **self._request_kwargs()) as stream:
             for event in stream:
                 if abort.is_set():
                     return None
@@ -246,10 +203,10 @@ class Brain:
 
     def _ask(self, text, source, say, abort, on_tool) -> str:
         stamp = time.strftime("%Y-%m-%d %H:%M %a")
-        notes = "".join(f"[Batsy announced] {n}\n" for n in self.notes)
-        self.notes.clear()
-        self.history.append({"role": "user", "content": [{"type": "text", "text": f"{notes}[{stamp} · {source}] {text}"}]})
-
+        context = self.memory.build_context(text, self.cfg)
+        prompt = f"{context}\n\n[Now {stamp} · {source}] {text}" if context else f"[Now {stamp} · {source}] {text}"
+        self.messages = [{"role": "user", "content": [{"type": "text", "text": prompt}]}]
+        actions: list[str] = []
         spoken: list[str] = []
 
         def emit(sentence: str) -> None:
@@ -285,7 +242,7 @@ class Brain:
             if final is None:  # interrupted
                 break
             chunker.flush()
-            self.history.append({"role": "assistant", "content": [b.to_dict() for b in final.content]})
+            self.messages.append({"role": "assistant", "content": [b.to_dict() for b in final.content]})
 
             if final.stop_reason == "refusal":
                 emit("I can't help with that one.")
@@ -307,13 +264,28 @@ class Brain:
                         on_tool(tu.name)
                     log.info("tool %s %s", tu.name, json.dumps(tu.input)[:300])
                     content, is_error = self.registry.execute(tu.name, tu.input)
+                    actions.append(_action_note(tu.name, tu.input, content, is_error))
                 results.append({"type": "tool_result", "tool_use_id": tu.id, "content": content, "is_error": is_error})
-            self.history.append({"role": "user", "content": results})
+            self.messages.append({"role": "user", "content": results})
             if abort.is_set():
                 break
+        reply = " ".join(spoken) + (" (interrupted)" if abort.is_set() else "")
+        self.memory.add_exchange(source, text, reply, actions)
         return " ".join(spoken)
 
     def reset(self) -> None:
+        """'New conversation': the recent transcript starts empty; older exchanges stay searchable."""
         with self.lock:
-            self.history.archive()
+            self.memory.new_session()
             self.system = build_system_prompt()
+
+
+def _action_note(name: str, args: dict, content, is_error: bool) -> str:
+    """One short line per tool call, so the next request knows what was done without the full output."""
+    key = next((str(args[k]) for k in ("command", "path", "sketch", "name", "fact", "source", "action")
+                if args.get(k)), "")
+    if name == "arduino" and args.get("sketch"):
+        key = f"{args.get('action')} {args['sketch']}"
+    text = content if isinstance(content, str) else "image"
+    first = next((ln.strip() for ln in text.splitlines() if ln.strip()), "")
+    return f"{name} {' '.join(key.split())[:80]} -> {'ERROR ' if is_error else ''}{first[:70]}"

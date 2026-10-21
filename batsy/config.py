@@ -26,10 +26,18 @@ DEFAULTS = {
         "web_tools": True,
         "max_steps": 25,
         # token savers
-        "compact_at_tokens": 50000,    # summarise older conversation past this size (API minimum 50000)
-        "clear_tool_results_at": 20000,  # drop old tool outputs/images from context past this size
+        # (memory is local, so these only matter inside one long multi-step request)
+        "compact_at_tokens": 50000,    # summarise past this size (API minimum 50000)
+        "clear_tool_results_at": 20000,  # drop old tool outputs/images past this size
         "keep_tool_results": 3,        # ...but keep the most recent few
         "cache_ttl": "1h",             # voice use is bursty; a 1h cache survives the gaps between questions
+    },
+    "memory": {
+        "recent_exchanges": 6,     # last N back-and-forths sent with each request
+        "recent_minutes": 180,     # ...if they happened within this window
+        "related_exchanges": 3,    # older exchanges found by local search
+        "all_facts_below": 15,     # send every remembered fact while there are this few...
+        "max_facts": 8,            # ...otherwise only the most relevant ones
     },
     "camera": {
         "name": "lenovo",       # matched against the V4L2 device name; first camera if none match

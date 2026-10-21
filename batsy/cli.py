@@ -103,11 +103,11 @@ def cmd_ask(cfg, args) -> None:
 
 def cmd_reset(cfg, args) -> None:
     from batsy.app import ask_daemon
-    from batsy.brain import History
+    from batsy.memory_store import get_store
 
     if not ask_daemon("new conversation"):
-        History().archive()
-    print("Conversation archived. Long-term memory kept.")
+        get_store().new_session()
+    print("Fresh conversation. Everything stays stored locally and searchable.")
 
 
 def cmd_usage(cfg, args) -> None:

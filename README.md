@@ -31,7 +31,8 @@ Log out and back in once so the Arduino serial-port permission (`dialout` group)
 | "Batsy, new conversation" | clears the conversation (long-term memory is kept) |
 | "Batsy, stop" | stops talking |
 
-- **Follow-ups:** after Batsy answers, it listens for about 6 seconds, so you can just keep talking without saying "Batsy" again. The whole conversation is saved and survives restarts. Long histories are compacted automatically.
+- **Follow-ups:** after Batsy answers, it listens for about 6 seconds, so you can just keep talking without saying "Batsy" again.
+- **Memory is local.** Everything is stored in SQLite on your laptop. Each request sends Claude only a short context block: your saved facts, the last 6 exchanges with one-line notes of what Batsy did, and up to 3 older exchanges found by a local full-text search. The full conversation is never sent, so requests stay small and fast however long you use it.
 - **Interrupting:** say "Batsy" while it's talking.
 - **Risky actions** (`rm -rf`, `dnf remove`, shutdown, disk tools, force-push, etc.) are confirmed by voice first. Root commands go through `pkexec`, which shows the normal GNOME password dialog.
 - **Typing:** `batsy chat` (or `batsy ask "..."`) talks to the running assistant through a local socket.
@@ -42,8 +43,7 @@ Log out and back in once so the Arduino serial-port permission (`dialout` group)
 |---|---|
 | `~/.config/batsy/env` | `ANTHROPIC_API_KEY=...` (chmod 600) |
 | `~/.config/batsy/config.toml` | settings: model, effort, wake words, voice, thresholds (see `packaging/config.example.toml`) |
-| `~/.local/share/batsy/history.json` | the conversation; old ones go to `archive/` |
-| `~/.local/share/batsy/memory.json` | long-term facts |
+| `~/.local/share/batsy/memory.db` | local memory (SQLite): every exchange, the actions taken, and remembered facts |
 | `~/.local/share/batsy/skills/` | skills Batsy wrote for itself |
 | `~/.local/share/batsy/batsy.log` | log: what it heard, said and ran |
 | `~/Batsy/` | Batsy's workspace (Arduino sketches in `~/Batsy/arduino/`) |
@@ -68,7 +68,8 @@ Log out and back in once so the Arduino serial-port permission (`dialout` group)
 
 - **The camera never streams to Claude.** The window just shows the feed. Batsy sends a single 768px frame (about 450 tokens) only when you ask a question that needs it.
 - **Instant local commands** use no tokens at all: open/close camera, time, date, "volume 40", mute, play/pause, next, stop, new conversation.
-- **Lean context.** Effort defaults to `low`. Tool output is capped. Old tool results and images are dropped from context once it passes 20K tokens, and history past 50K is summarised. Web search and fetch are limited per question.
+- **Local memory.** Each request carries a few hundred tokens of memory, not the whole history. Tool outputs and images are never re-sent after the request that used them; only a one-line note of each action is kept.
+- **Lean context.** Effort defaults to `low`. Tool output is capped. Web search and fetch are limited per question.
 - **Caching.** The system prompt and tools (about 3.3K tokens) are cached for an hour, so repeat questions only pay for the new part.
 - **No false triggers.** Whisper must confirm "Batsy" before anything is sent. Background chatter heard during the follow-up window is ignored.
 - **`batsy usage`** shows how many tokens you've used today, this week and all time. Each request is logged to `~/.local/share/batsy/usage.jsonl`.
