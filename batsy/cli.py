@@ -252,6 +252,12 @@ def main() -> None:
         if args[0] == "open" and VIEWER.proc:  # started from a terminal: keep the window until it's closed
             VIEWER.proc.wait()
         return
+    if len(sys.argv) > 1 and sys.argv[1] == "saver":  # `batsy saver get|set|preview`
+        from batsy import saver
+
+        Config.load()
+        saver.cli(sys.argv[2:])
+        return
     if len(sys.argv) > 1 and sys.argv[1] == "doc":  # `batsy doc ...`: document tools (used by Claude Code)
         from batsy import docs
 

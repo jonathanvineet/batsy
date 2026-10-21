@@ -110,5 +110,6 @@ class Overlay:
     def hide(self) -> None:
         self.send("hide")
 
-    def saver(self, stats: dict, next_text: str = "", extra: dict | None = None) -> None:
-        self.send("saver", stats=stats, next=next_text, **(extra or {}))
+    def saver_spec(self, payload: dict) -> None:
+        """Screensaver: theme + widgets + live data (see batsy/saver.py)."""
+        self.send("saver", **payload)

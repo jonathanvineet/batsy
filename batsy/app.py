@@ -76,6 +76,9 @@ class Batsy:
         model3d.VIEWER.on_event = self._viewer_event
         self._turn_markers: list[tuple[str, str]] = []
         self.saver_on = False
+        self.saver_preview_until = 0.0
+        self._saver_dirty = False
+        self._saver_wake = threading.Event()
         self.overlay.on_saver_exit = self._saver_exited
         if self.overlay.enabled and cfg.get("overlay.screensaver_minutes") > 0:
             threading.Thread(target=self._saver_loop, daemon=True, name="screensaver").start()
@@ -84,33 +87,46 @@ class Batsy:
 
     def _saver_exited(self) -> None:
         self.saver_on = False
+        self.saver_preview_until = 0.0
 
     def _saver_loop(self) -> None:
-        """Show the token-usage screensaver while the user is away and Batsy has nothing to do."""
-        from batsy import idle, usage
-        from batsy.memory_store import get_store
+        """Show the screensaver dashboard while you're away and Batsy has nothing to do (or on request)."""
+        from batsy import idle, saver
 
         after_ms = self.cfg.get("overlay.screensaver_minutes") * 60_000
         last_refresh = 0.0
         while True:
-            time.sleep(5)
+            self._saver_wake.wait(5)
+            self._saver_wake.clear()
+            previewing = time.time() < self.saver_preview_until
             away = idle.idle_ms()
-            if away is None:
+            if away is None and not previewing:
                 continue
             busy = self.turn_lock.locked() or not self.speaker.idle() or \
                 time.time() - self.overlay.last_active < self.cfg.get("overlay.linger_media_seconds") + 5
-            if self.saver_on and away < 3000:
+            if self.saver_on and not previewing and away is not None and away < 3000:
                 self.saver_on = False
                 self.overlay.hide()
-            elif not busy and away >= after_ms and (not self.saver_on or time.time() - last_refresh > 30):
-                from batsy import activity, claude_code
+            elif previewing or (not busy and away >= after_ms):
+                if not self.saver_on or time.time() - last_refresh > 20 or self._saver_dirty:
+                    try:
+                        self.overlay.saver_spec(saver.payload(self))
+                    except Exception:
+                        log.exception("screensaver payload")
+                    self.saver_on, last_refresh, self._saver_dirty = True, time.time(), False
 
-                items = get_store().agenda_for(time.strftime("%Y-%m-%d"))
-                nxt = ("Today: " + " · ".join(i["text"].rstrip(".") for i in items[:3])) if items else ""
-                self.overlay.saver(usage.stats(), nxt, extra={
-                    "claude": claude_code.budget(self.cfg), **activity.snapshot(),
-                    "upcoming": self.tasks.store.upcoming()})
-                self.saver_on, last_refresh = True, time.time()
+    def preview_saver(self, seconds: int = 120) -> None:
+        """Show the screensaver now (it closes on any key or mouse movement)."""
+        self.saver_preview_until = time.time() + seconds
+        self._saver_dirty = True
+        self._saver_wake.set()
+
+    def refresh_saver(self) -> None:
+        self._saver_dirty = True
+        if self.saver_on or time.time() < self.saver_preview_until:
+            self._saver_wake.set()
+        else:
+            self.preview_saver(30)  # show what changed
 
     def _overlay_dismissed(self) -> None:
         self.overlay_dismissed = True
@@ -396,6 +412,13 @@ class Batsy:
         if self.tasks.handle(n, text):  # chores/projects: check-in answers, "I do laundry every Sunday"...
             return True
         if self._claude_budget_command(n):
+            return True
+        from batsy import saver
+
+        said = saver.handle(n, self)  # "add the weather to the screensaver", "make it minimal"... (no AI)
+        if said is not None:
+            if said:
+                self._reply(said)
             return True
         if self._skill_feedback(n, text):
             return True

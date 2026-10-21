@@ -129,17 +129,29 @@ Every Claude Code request Batsy makes is counted exactly, using the token number
 
 Batsy warns you at 80%. At the limit it switches to the local AI until the budget resets. "Ask Claude anyway…" goes through regardless. Set the budgets by voice ("set my weekly Claude limit to 5 million", "set my session limit to 800k") or under `[claude_budget]` in the config. Ask "how much Claude have I used?" to hear where you are.
 
-## Screensaver: token usage
+## Screensaver: a live dashboard Batsy can redesign
 
-After 3 minutes with no keyboard or mouse activity, as long as Batsy isn't doing anything, the screen fades to a dark screensaver showing:
-- a big clock and the date
-- **Claude · this session** and **Claude · this week**: tokens used against your budget, with a colour bar (cyan, then orange, then red) and when each resets
-- **Local AI · today**: tokens used (free)
-- **Running now**: Claude jobs (file work, 3D, learning a skill, checking pictures), background shell jobs and active monitors, with how long each has been running
-- **Waiting for you**: questions Batsy asked that you haven't answered yet
-- **Coming up**: your chores, projects and habits for the next 7 days, plus today's plan
+After 3 minutes with no keyboard or mouse activity, as long as Batsy isn't doing anything, the screen turns into an animated dashboard. Say "show me the screensaver" to see it now. Any key or mouse movement closes it, or say "Batsy".
 
-Move the mouse or press a key to close it, or just say "Batsy". The layout drifts slowly so nothing burns into the screen. Change the delay with `[overlay] screensaver_minutes` (0 turns it off). GNOME blanks the screen after 5 minutes by default, so raise that in Settings → Power if you want the screensaver to stay up longer.
+- **Backgrounds:** aurora, stars, waves, orb or minimal, in any accent colour. Everything drifts slowly, so nothing burns into the screen.
+- **Pieces it can show:**
+  - the clock
+  - Claude budget (session and week, with reset times) and local AI tokens
+  - running jobs and questions waiting for you
+  - chores, projects and habits coming up, and today's plan
+  - live laptop stats (CPU, RAM, temperature, battery) and the song playing on Spotify
+  - weather for any city, countdowns, notes and quotes
+  - a photo slideshow from a folder, one project's update history, or **any command's output** (so it can show anything)
+- **Change it by voice, instantly and free:** "add the weather in Chennai to the screensaver" · "put system stats on the screensaver" · "add a countdown to my exam on 12 November to the screensaver" · "make the screensaver blue stars" · "remove the local tokens from the screensaver" · "add a note saying buy resistors to the screensaver" · "make the screensaver minimal / detailed / focus / default".
+- **Anything fancier** ("make it look like a cyberpunk terminal", "show my GitHub notifications on it") goes to Claude Code. Claude rewrites the layout file `~/.local/share/batsy/screensaver.json` with `batsy saver set`, and can add custom command panels.
+- **It adapts on its own:**
+  - Near your Claude limit, the budget glows and moves up.
+  - Questions waiting for you appear at the top.
+  - Music that's playing shows up.
+  - Running jobs appear while they run.
+  - After 11 PM it goes dim and calm.
+
+  Turn this off with "turn off auto on the screensaver".
 
 These are Batsy's own API tokens, the same numbers `batsy usage` prints. Your claude.ai plan limits aren't available through the API.
 

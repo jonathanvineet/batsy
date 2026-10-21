@@ -201,81 +201,200 @@ class Overlay(QWidget):
                    QColor(170, 160, 205), center=False)
         return QRectF(inner.left(), inner.top() + 28, inner.width(), inner.height() - 28)
 
-    def _bar(self, p: QPainter, r: QRectF, title: str, b: dict) -> None:
-        inner = self._panel(p, r, title)
-        used, limit = b.get("used", 0), b.get("limit") or 0
-        pct = min(100.0, b.get("pct") or 0.0)
-        self._text(p, f"{_fmt(used)} / {_fmt(limit)}" if limit else _fmt(used),
-                   QRectF(inner.left(), inner.top(), inner.width(), 40), 24, QColor(255, 255, 255), center=False)
-        col = QColor(120, 200, 255) if pct < 70 else QColor(255, 170, 70) if pct < 90 else QColor(255, 90, 90)
-        track = QRectF(inner.left(), inner.top() + 48, inner.width(), 10)
+    # --- screensaver: animated background + widgets from Batsy's spec ------------------------------------
+    def _background(self, p: QPainter, w: int, h: int, style: str, accent: QColor, t: float) -> None:
+        p.fillRect(self.rect(), QColor(3, 2, 8, int(255 * self.fade)))
+        if style == "aurora":
+            for i, (fx, fy, size) in enumerate([(0.2, 0.3, 0.7), (0.75, 0.25, 0.6), (0.5, 0.8, 0.8), (0.9, 0.7, 0.5)]):
+                cx = w * (fx + 0.12 * math.sin(t / (17 + i * 5) + i))
+                cy = h * (fy + 0.10 * math.cos(t / (23 + i * 4) + i * 2))
+                col = accent if i % 2 == 0 else QColor.fromHsv((accent.hue() + 60 + i * 25) % 360, 200, 255)
+                g = QRadialGradient(QPointF(cx, cy), max(w, h) * size * 0.5)
+                g.setColorAt(0, QColor(col.red(), col.green(), col.blue(), 55))
+                g.setColorAt(1, QColor(col.red(), col.green(), col.blue(), 0))
+                p.setPen(Qt.NoPen)
+                p.setBrush(g)
+                p.drawRect(self.rect())
+        elif style == "stars":
+            if not hasattr(self, "_stars"):
+                import random
+
+                rnd = random.Random(7)
+                self._stars = [(rnd.random(), rnd.random(), rnd.uniform(0.4, 2.2), rnd.uniform(0, 6.28), rnd.uniform(0.002, 0.01))
+                               for _ in range(220)]
+            p.setPen(Qt.NoPen)
+            for x, y, r, ph, sp in self._stars:
+                a = int(120 + 120 * math.sin(t * 1.5 + ph))
+                p.setBrush(QColor(255, 255, 255, max(30, a)))
+                p.drawEllipse(QPointF(((x + t * sp) % 1) * w, y * h), r, r)
+        elif style == "waves":
+            for k in range(5):
+                path = QPainterPath()
+                base = h * (0.62 + k * 0.07)
+                path.moveTo(0, base)
+                for x in range(0, w + 20, 20):
+                    path.lineTo(x, base + 22 * math.sin(x / 140 + t * (0.4 + k * 0.12) + k))
+                p.setPen(QPen(QColor(accent.red(), accent.green(), accent.blue(), 70 - k * 10), 2))
+                p.setBrush(Qt.NoBrush)
+                p.drawPath(path)
+        elif style == "orb":
+            self._orb(p, QPointF(w * 0.5 + 40 * math.sin(t / 30), h * 0.5 + 30 * math.cos(t / 40)), min(w, h) * 0.18)
+
+    def _glow(self, p: QPainter, r: QRectF, accent: QColor, t: float) -> None:
+        a = int(90 + 80 * math.sin(t * 3))
+        p.setPen(QPen(QColor(accent.red(), accent.green(), accent.blue(), a), 3))
+        p.setBrush(Qt.NoBrush)
+        p.drawRoundedRect(r.adjusted(-3, -3, 3, 3), 20, 20)
+
+    def _widget(self, p: QPainter, r: QRectF, wd: dict, d: dict, accent: QColor, t: float) -> None:
+        kind = wd["type"]
+        if kind == "photo":
+            path = d.get("path")
+            if path:
+                cache = getattr(self, "_pix", {})
+                if path not in cache:
+                    cache = {path: QPixmap(path)}
+                    self._pix = cache
+                pix = cache[path].scaled(int(r.width()), int(r.height()), Qt.KeepAspectRatioByExpanding, Qt.SmoothTransformation)
+                clip = QPainterPath()
+                clip.addRoundedRect(r, 18, 18)
+                p.save()
+                p.setClipPath(clip)
+                p.drawPixmap(int(r.left() - (pix.width() - r.width()) / 2), int(r.top() - (pix.height() - r.height()) / 2), pix)
+                p.restore()
+            return
+        inner = self._panel(p, r, wd.get("title") or "")
+        if wd.get("highlight"):
+            self._glow(p, r, accent, t)
+        white, soft = QColor(255, 255, 255), QColor(200, 195, 225)
+        if d.get("error"):
+            self._text(p, d["error"], QRectF(inner.left(), inner.top(), inner.width(), 40), 12, QColor(255, 140, 140), center=False)
+            return
+        if kind == "claude_budget":
+            half = (inner.width() - 20) / 2
+            for i, (label, key) in enumerate((("Session", "session"), ("This week", "week"))):
+                self._mini_bar(p, QRectF(inner.left() + i * (half + 20), inner.top(), half, inner.height()), label,
+                               d.get(key, {}), accent)
+        elif kind == "local_tokens":
+            self._text(p, f"{_fmt(d.get('tokens', 0))} tokens", QRectF(inner.left(), inner.top(), inner.width(), 40), 24, white, center=False)
+            self._text(p, f"free · {d.get('requests', 0)} requests", QRectF(inner.left(), inner.top() + 46, inner.width(), 22), 12, soft, center=False)
+        elif kind in ("running", "waiting", "upcoming", "agenda", "project", "command"):
+            rows = d.get("rows") if "rows" in d else d.get("lines", [])
+            empty = {"running": "Nothing running", "waiting": "Nothing to answer", "upcoming": "Nothing scheduled",
+                     "agenda": "Nothing planned", "project": "No updates yet", "command": "(no output)"}[kind]
+            self._rows(p, inner, rows, empty, accent, mono=kind == "command")
+        elif kind == "system":
+            items = [("CPU", d.get("cpu")), ("RAM", d.get("ram")), ("Temp", d.get("temp")), ("Battery", d.get("battery"))]
+            y = inner.top()
+            for label, val in items:
+                if val is None:
+                    continue
+                self._text(p, label, QRectF(inner.left(), y, 80, 20), 12, soft, center=False)
+                track = QRectF(inner.left() + 80, y + 6, inner.width() - 140, 8)
+                p.setPen(Qt.NoPen)
+                p.setBrush(QColor(255, 255, 255, 25))
+                p.drawRoundedRect(track, 4, 4)
+                frac = min(1.0, val / 100) if label != "Temp" else min(1.0, val / 100)
+                p.setBrush(accent if frac < 0.8 or label == "Battery" else QColor(255, 90, 90))
+                p.drawRoundedRect(QRectF(track.left(), track.top(), max(4.0, track.width() * frac), 8), 4, 4)
+                unit = "°C" if label == "Temp" else "%"
+                self._text(p, f"{val:.0f}{unit}", QRectF(track.right() + 8, y, 56, 20), 12, white, center=False)
+                y += 30
+        elif kind == "now_playing":
+            p.setPen(Qt.NoPen)
+            for i in range(5):  # little equaliser
+                hgt = 6 + 18 * abs(math.sin(t * (3 + i * 0.7) + i))
+                p.setBrush(accent)
+                p.drawRoundedRect(QRectF(inner.left() + i * 9, inner.top() + 26 - hgt, 6, hgt), 2, 2)
+            self._text(p, d.get("text", ""), QRectF(inner.left() + 56, inner.top(), inner.width() - 56, inner.height()), 14, white, center=False)
+        elif kind == "countdown":
+            self._text(p, d.get("big", ""), QRectF(inner.left(), inner.top(), inner.width(), 48), 30, white, center=False)
+            self._text(p, d.get("sub", ""), QRectF(inner.left(), inner.top() + 52, inner.width(), 40), 12, soft, center=False)
+        elif kind == "weather":
+            self._text(p, f"{d.get('temp', '–')}°", QRectF(inner.left(), inner.top(), inner.width(), 50), 34, white, center=False)
+            hum = f" · {d['humidity']}% humidity" if d.get("humidity") is not None else ""
+            self._text(p, f"{d.get('desc', '')} in {d.get('place', '')}{hum}", QRectF(inner.left(), inner.top() + 54, inner.width(), 40), 12, soft, center=False)
+        elif kind in ("note", "quote"):
+            self._text(p, d.get("text", ""), inner, 17 if kind == "quote" else 15, white, italic=kind == "quote", center=kind == "quote")
+
+    def _mini_bar(self, p, r, label, b, accent):
+        used, limit, pct = b.get("used", 0), b.get("limit") or 0, min(100.0, b.get("pct") or 0.0)
+        self._text(p, label, QRectF(r.left(), r.top(), r.width(), 18), 11, QColor(170, 160, 205), center=False)
+        self._text(p, f"{_fmt(used)} / {_fmt(limit)}" if limit else _fmt(used), QRectF(r.left(), r.top() + 18, r.width(), 32), 20,
+                   QColor(255, 255, 255), center=False)
+        col = accent if pct < 70 else QColor(255, 170, 70) if pct < 90 else QColor(255, 90, 90)
+        track = QRectF(r.left(), r.top() + 56, r.width(), 8)
         p.setPen(Qt.NoPen)
         p.setBrush(QColor(255, 255, 255, 25))
-        p.drawRoundedRect(track, 5, 5)
+        p.drawRoundedRect(track, 4, 4)
         if limit:
             p.setBrush(col)
-            p.drawRoundedRect(QRectF(track.left(), track.top(), max(6.0, track.width() * pct / 100), track.height()), 5, 5)
+            p.drawRoundedRect(QRectF(track.left(), track.top(), max(5.0, track.width() * pct / 100), 8), 4, 4)
         reset = b.get("resets_at")
-        when = time.strftime("%-I:%M %p" if "SESSION" in title.upper() else "%a %-I %p", time.localtime(reset)) if reset else "—"
-        sub = (f"{pct:.0f}% used · resets {when}" if limit else "no limit set") if reset or limit else "not used yet"
-        self._text(p, sub, QRectF(inner.left(), inner.top() + 66, inner.width(), 22), 12, QColor(200, 195, 225),
-                   center=False)
+        fmt = "%-I:%M %p" if label == "Session" else "%a %-I %p"
+        sub = f"{pct:.0f}% · resets {time.strftime(fmt, time.localtime(reset))}" if reset and limit else "not used yet"
+        self._text(p, sub, QRectF(r.left(), r.top() + 70, r.width(), 20), 11, QColor(200, 195, 225), center=False)
 
-    def _list(self, p: QPainter, r: QRectF, title: str, rows: list[str], empty: str) -> None:
-        inner = self._panel(p, r, title)
+    def _rows(self, p, inner, rows, empty, accent, mono=False):
         if not rows:
-            self._text(p, empty, QRectF(inner.left(), inner.top(), inner.width(), 24), 13, QColor(150, 145, 175),
-                       center=False)
+            self._text(p, empty, QRectF(inner.left(), inner.top(), inner.width(), 24), 13, QColor(150, 145, 175), center=False)
             return
         y = inner.top()
-        for line in rows[:6]:
+        for line in rows[:7]:
             if y > inner.bottom() - 20:
                 break
-            p.setPen(Qt.NoPen)
-            p.setBrush(QColor(214, 70, 255))
-            p.drawEllipse(QPointF(inner.left() + 4, y + 11), 3, 3)
-            self._text(p, line, QRectF(inner.left() + 16, y, inner.width() - 16, 24), 13, QColor(235, 232, 250),
-                       center=False)
-            y += 28
+            if not mono:
+                p.setPen(Qt.NoPen)
+                p.setBrush(accent)
+                p.drawEllipse(QPointF(inner.left() + 4, y + 11), 3, 3)
+            self._text(p, line, QRectF(inner.left() + (0 if mono else 16), y, inner.width() - 16, 24), 12 if mono else 13,
+                       QColor(235, 232, 250), center=False)
+            y += 26
 
     def _paint_saver(self, p: QPainter, w: int, h: int) -> None:
         t = time.time() - self.t0
         sv = self.saver or {}
-        p.fillRect(self.rect(), QColor(3, 2, 8, int(255 * self.fade)))
-        p.setOpacity(self.fade)
-        dx, dy = 30 * math.sin(t / 47), 20 * math.sin(t / 61)  # slow drift: no burn-in
-        self._orb(p, QPointF(w * 0.5 + dx * 2, h * 0.11 + dy), min(w, h) * 0.035)
-        self._text(p, time.strftime("%H:%M"), QRectF(dx, h * 0.15 + dy, w, 120), 72, QColor(240, 236, 255))
-        date = time.strftime("%A, %B ") + str(int(time.strftime("%d")))
-        self._text(p, date, QRectF(dx, h * 0.15 + 112 + dy, w, 34), 18, QColor(170, 160, 205))
-
-        margin, gap = w * 0.07, 24
-        col_w = (w - 2 * margin - 2 * gap) / 3
-        y1 = h * 0.40 + dy
-        claude = sv.get("claude", {})
-        local = sv.get("stats", {}).get("today", {})
-        x = margin + dx
-        self._bar(p, QRectF(x, y1, col_w, 120), "Claude · this session", claude.get("session", {}))
-        self._bar(p, QRectF(x + col_w + gap, y1, col_w, 120), "Claude · this week", claude.get("week", {}))
-        inner = self._panel(p, QRectF(x + 2 * (col_w + gap), y1, col_w, 120), "Local AI · today")
-        self._text(p, f"{_fmt(local.get('tokens', 0))} tokens", QRectF(inner.left(), inner.top(), inner.width(), 40),
-                   24, QColor(255, 255, 255), center=False)
-        self._text(p, f"free · {local.get('requests', 0)} requests", QRectF(inner.left(), inner.top() + 48,
-                   inner.width(), 22), 12, QColor(200, 195, 225), center=False)
-
-        y2 = y1 + 140
-        ph = h * 0.86 - y2
-        agents = [f"{a['label']}  ·  {a['secs'] // 60}m {a['secs'] % 60:02d}s" if a.get("secs") else a["label"]
-                  for a in sv.get("agents", [])]
-        asks = [f"{q['question']}" + (f"  ({q['mins']}m)" if q.get("mins") else "") for q in sv.get("asks", [])]
-        upcoming = [f"{u['when']}: {u['title']}" for u in sv.get("upcoming", [])]
-        if self.saver_next:
-            upcoming.insert(0, self.saver_next)
-        self._list(p, QRectF(x, y2, col_w, ph), "Running now", agents, "Nothing running")
-        self._list(p, QRectF(x + col_w + gap, y2, col_w, ph), "Waiting for you", asks, "Nothing to answer")
-        self._list(p, QRectF(x + 2 * (col_w + gap), y2, col_w, ph), "Coming up", upcoming, "Nothing scheduled")
+        theme = sv.get("theme", {})
+        accent = QColor(theme.get("accent", "#d646ff"))
+        self._background(p, w, h, theme.get("style", "aurora"), accent, t)
+        p.setOpacity(self.fade * (0.6 if theme.get("dim") else 1.0))
+        dx, dy = 24 * math.sin(t / 47), 16 * math.sin(t / 61)  # slow drift: no burn-in
+        widgets, data = sv.get("widgets", []), sv.get("data", {})
+        y = h * 0.06 + dy
+        margin, gap = w * 0.06, 22
+        cols = 3
+        col_w = (w - 2 * margin - (cols - 1) * gap) / cols
+        rest = []
+        for i, wd in enumerate(widgets):
+            if wd["type"] == "clock":
+                self._text(p, time.strftime("%H:%M"), QRectF(dx, y, w, 110), 70, QColor(240, 236, 255))
+                date = time.strftime("%A, %B ") + str(int(time.strftime("%d")))
+                self._text(p, date, QRectF(dx, y + 104, w, 30), 17, QColor(170, 160, 205))
+                y += 160
+            else:
+                rest.append((wd, data.get(str(i), {})))
+        # flow the other widgets into rows of 3 columns
+        rows, row, used = [], [], 0
+        for wd, d in rest:
+            span = max(1, min(cols, int(wd.get("span", 1))))
+            if used + span > cols:
+                rows.append(row)
+                row, used = [], 0
+            row.append((wd, d, span))
+            used += span
+        if row:
+            rows.append(row)
+        avail = h * 0.93 - y
+        row_h = min(240, max(110, (avail - gap * (len(rows) - 1)) / max(1, len(rows))))
+        for row in rows:
+            x = margin + dx
+            for wd, d, span in row:
+                width = col_w * span + gap * (span - 1)
+                self._widget(p, QRectF(x, y, width, row_h), wd, d, accent, t)
+                x += width + gap
+            y += row_h + gap
         p.setOpacity(0.4 * self.fade)
-        self._text(p, "Say “Batsy” anytime", QRectF(dx, h - 46, w, 24), 12, QColor(200, 200, 220))
+        self._text(p, "Say “Batsy” anytime", QRectF(dx, h - 40, w, 22), 12, QColor(200, 200, 220))
 
     def _orb(self, p: QPainter, c: QPointF, r: float) -> None:
         t = time.time() - self.t0

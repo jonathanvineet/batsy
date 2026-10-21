@@ -201,6 +201,19 @@ class LocalBrain:
 
         from batsy import model3d
 
+        if self.claude_ok and re.search(r"\bscreen ?saver\b", text.lower()):
+            emit("Let me redesign that.")
+            from batsy import claude_code
+            from batsy.saver import SAVER_BRIEF, load
+
+            answer = claude_code.run(SAVER_BRIEF.format(request=text, spec=json.dumps(load())), "redesigning screensaver",
+                                     args=["--allowedTools", "Bash(batsy saver:*)"], timeout=300)
+            chunker = SpeechChunker(emit, on_marker)
+            chunker.feed(answer)
+            chunker.flush()
+            actions.append("redesigned the screensaver")
+            return self._finish(source, text, spoken, actions, abort)
+
         if self.claude_ok and (model3d.VIEWER.active() and THREE_D_TALK.search(text.lower())
                                or DESIGN.search(text.lower())):
             self._claude_3d(text, context, emit, on_marker, on_tool, actions)
