@@ -114,6 +114,13 @@ class LocalBrain:
         ]
         threading.Thread(target=self._warm_up, daemon=True, name="warm-up").start()
 
+    @property
+    def claude_ok(self) -> bool:
+        """Claude Code is installed, auto-routing is on, and Batsy's Claude budget isn't used up."""
+        from batsy import claude_code
+
+        return self._claude_installed and claude_code.over_budget(self.cfg) is None
+
     # --- Ollama -------------------------------------------------------------
     def _options(self) -> dict:
         return {"num_ctx": self.cfg.get("local.context"), "temperature": 0.6, "num_predict": 400}
@@ -412,24 +419,15 @@ def ask_claude_docs(request: str, path, info: dict, note: str, context: str = ""
     """Claude Code reads the file and does the job, using `batsy doc ...` and Python, then checks its own work."""
     import sys
 
+    from batsy import claude_code
     from batsy.docs import OUT_DIR
 
-    exe = shutil.which("claude")
-    if not exe:
-        return "Claude Code isn't installed."
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     prompt = DOC_BRIEF.format(request=request, path=path, info=json.dumps(info), note=note, out_dir=OUT_DIR,
                               python=sys.executable, context=context)
-    env = dict(os.environ, PATH=f"{os.path.dirname(sys.executable)}:{os.path.expanduser('~/.local/bin')}:"
-                                f"{os.environ.get('PATH', '')}")
-    try:
-        p = subprocess.run([exe, "-p", prompt, "--output-format", "text", "--permission-mode", "acceptEdits",
-                            "--add-dir", str(path.parent), "--add-dir", str(OUT_DIR),
-                            "--allowedTools", f"Read,Write,Edit,Glob,Grep,Bash(batsy doc:*),Bash({sys.executable}:*)"],
-                           cwd=OUT_DIR, capture_output=True, text=True, timeout=timeout, env=env)
-    except subprocess.TimeoutExpired:
-        return "That took too long. Try a smaller part of the file."
-    return (p.stdout.strip() or p.stderr.strip() or "Claude didn't answer.")[:3000]
+    return claude_code.run(prompt, f"file: {path.name}", cwd=OUT_DIR, timeout=timeout, args=[
+        "--permission-mode", "acceptEdits", "--add-dir", str(path.parent), "--add-dir", str(OUT_DIR),
+        "--allowedTools", f"Read,Write,Edit,Glob,Grep,Bash(batsy doc:*),Bash({sys.executable}:*)"])[:3000]
 
 
 THREE_D_BRIEF = """You are the 3D engineer behind Batsy, a voice assistant on the user's Fedora laptop. The user said: \
@@ -455,12 +453,10 @@ Final reply: two or three spoken sentences, no markdown. Add [[card: Title | lin
 def ask_claude_3d(request: str, context: str = "", timeout: int = 900) -> str:
     import sys
 
+    from batsy import claude_code
     from batsy.model3d import VIEWER
     from batsy.viewer3d import OUT
 
-    exe = shutil.which("claude")
-    if not exe:
-        return "Claude Code isn't installed."
     OUT.mkdir(parents=True, exist_ok=True)
     try:
         state = json.dumps(VIEWER.send({"cmd": "info"})) if VIEWER.is_open() else "closed (load a file to open it)"
@@ -468,28 +464,15 @@ def ask_claude_3d(request: str, context: str = "", timeout: int = 900) -> str:
         state = "not responding"
     prompt = THREE_D_BRIEF.format(request=request, state=state[:3000], python=sys.executable, out_dir=OUT,
                                   context=context)
-    env = dict(os.environ, PATH=f"{os.path.dirname(sys.executable)}:{os.path.expanduser('~/.local/bin')}:"
-                                f"{os.environ.get('PATH', '')}")
-    try:
-        p = subprocess.run([exe, "-p", prompt, "--output-format", "text", "--permission-mode", "acceptEdits",
-                            "--add-dir", str(OUT), "--add-dir", os.path.expanduser("~"),
-                            "--allowedTools", f"Read,Write,Edit,Glob,Grep,Bash(batsy 3d:*),Bash({sys.executable}:*)"],
-                           cwd=OUT, capture_output=True, text=True, timeout=timeout, env=env)
-    except subprocess.TimeoutExpired:
-        return "That design took too long. Try a simpler version first."
-    return (p.stdout.strip() or p.stderr.strip() or "Claude didn't answer.")[:3000]
+    return claude_code.run(prompt, "3D: " + request[:40], cwd=OUT, timeout=timeout, args=[
+        "--permission-mode", "acceptEdits", "--add-dir", str(OUT), "--add-dir", os.path.expanduser("~"),
+        "--allowedTools", f"Read,Write,Edit,Glob,Grep,Bash(batsy 3d:*),Bash({sys.executable}:*)"])[:3000]
 
 
-def ask_claude(prompt: str, context: str = "", timeout: int = 240) -> str:
+def ask_claude(prompt: str, context: str = "", timeout: int = 240, force: bool = False) -> str:
     """One request to Claude Code (the official CLI, on the user's Pro plan)."""
-    exe = shutil.which("claude")
-    if not exe:
-        return "Claude Code isn't installed. Run: npm install -g @anthropic-ai/claude-code, then claude to log in."
+    from batsy import claude_code
+
     full = CLAUDE_BRIEF.format(workspace=WORKSPACE, context=context, request=prompt)
-    try:
-        p = subprocess.run([exe, "-p", full, "--output-format", "text", "--permission-mode", "acceptEdits",
-                            "--allowedTools", "Read,Write,Edit,Glob,Grep,Bash(arduino-cli:*)"],
-                           cwd=WORKSPACE, capture_output=True, text=True, timeout=timeout)
-    except subprocess.TimeoutExpired:
-        return "Claude took too long to answer."
-    return (p.stdout.strip() or p.stderr.strip() or "Claude didn't answer.")[:1500]
+    return claude_code.run(full, "ask: " + prompt[:40], cwd=WORKSPACE, timeout=timeout, force=force, args=[
+        "--permission-mode", "acceptEdits", "--allowedTools", "Read,Write,Edit,Glob,Grep,Bash(arduino-cli:*)"])[:1500]

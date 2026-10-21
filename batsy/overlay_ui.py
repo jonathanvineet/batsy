@@ -53,7 +53,7 @@ class Overlay(QWidget):
         cmd = m.get("cmd")
         if cmd == "saver":
             first = self.saver is None
-            self.saver, self.saver_next = m.get("stats", {}), m.get("next", "")
+            self.saver, self.saver_next = m, m.get("next", "")
             if first:
                 self.hide_timer.stop()
                 self.state = "idle"
@@ -192,60 +192,90 @@ class Overlay(QWidget):
         p.setOpacity(0.35 * self.fade)
         self._text(p, "Esc to close", QRectF(0, h - 34, w - 24, 24), 11, QColor(200, 200, 220), align=Qt.AlignRight)
 
+    def _panel(self, p: QPainter, r: QRectF, title: str) -> QRectF:
+        p.setPen(QPen(QColor(255, 255, 255, 28), 1.2))
+        p.setBrush(QColor(255, 255, 255, 11))
+        p.drawRoundedRect(r, 18, 18)
+        inner = r.adjusted(22, 16, -22, -14)
+        self._text(p, title.upper(), QRectF(inner.left(), inner.top(), inner.width(), 20), 10,
+                   QColor(170, 160, 205), center=False)
+        return QRectF(inner.left(), inner.top() + 28, inner.width(), inner.height() - 28)
+
+    def _bar(self, p: QPainter, r: QRectF, title: str, b: dict) -> None:
+        inner = self._panel(p, r, title)
+        used, limit = b.get("used", 0), b.get("limit") or 0
+        pct = min(100.0, b.get("pct") or 0.0)
+        self._text(p, f"{_fmt(used)} / {_fmt(limit)}" if limit else _fmt(used),
+                   QRectF(inner.left(), inner.top(), inner.width(), 40), 24, QColor(255, 255, 255), center=False)
+        col = QColor(120, 200, 255) if pct < 70 else QColor(255, 170, 70) if pct < 90 else QColor(255, 90, 90)
+        track = QRectF(inner.left(), inner.top() + 48, inner.width(), 10)
+        p.setPen(Qt.NoPen)
+        p.setBrush(QColor(255, 255, 255, 25))
+        p.drawRoundedRect(track, 5, 5)
+        if limit:
+            p.setBrush(col)
+            p.drawRoundedRect(QRectF(track.left(), track.top(), max(6.0, track.width() * pct / 100), track.height()), 5, 5)
+        reset = b.get("resets_at")
+        when = time.strftime("%-I:%M %p" if "SESSION" in title.upper() else "%a %-I %p", time.localtime(reset)) if reset else "—"
+        sub = (f"{pct:.0f}% used · resets {when}" if limit else "no limit set") if reset or limit else "not used yet"
+        self._text(p, sub, QRectF(inner.left(), inner.top() + 66, inner.width(), 22), 12, QColor(200, 195, 225),
+                   center=False)
+
+    def _list(self, p: QPainter, r: QRectF, title: str, rows: list[str], empty: str) -> None:
+        inner = self._panel(p, r, title)
+        if not rows:
+            self._text(p, empty, QRectF(inner.left(), inner.top(), inner.width(), 24), 13, QColor(150, 145, 175),
+                       center=False)
+            return
+        y = inner.top()
+        for line in rows[:6]:
+            if y > inner.bottom() - 20:
+                break
+            p.setPen(Qt.NoPen)
+            p.setBrush(QColor(214, 70, 255))
+            p.drawEllipse(QPointF(inner.left() + 4, y + 11), 3, 3)
+            self._text(p, line, QRectF(inner.left() + 16, y, inner.width() - 16, 24), 13, QColor(235, 232, 250),
+                       center=False)
+            y += 28
+
     def _paint_saver(self, p: QPainter, w: int, h: int) -> None:
         t = time.time() - self.t0
+        sv = self.saver or {}
         p.fillRect(self.rect(), QColor(3, 2, 8, int(255 * self.fade)))
         p.setOpacity(self.fade)
-        # everything drifts slowly so nothing burns into the panel
-        dx, dy = 40 * math.sin(t / 47), 30 * math.sin(t / 61)
-        self._orb(p, QPointF(w * 0.5 + dx * 3, h * 0.30 + dy * 2), min(w, h) * 0.05)
-        clock = time.strftime("%H:%M")
-        self._text(p, clock, QRectF(dx, h * 0.12 + dy, w, 160), 96, QColor(240, 236, 255))
+        dx, dy = 30 * math.sin(t / 47), 20 * math.sin(t / 61)  # slow drift: no burn-in
+        self._orb(p, QPointF(w * 0.5 + dx * 2, h * 0.11 + dy), min(w, h) * 0.035)
+        self._text(p, time.strftime("%H:%M"), QRectF(dx, h * 0.15 + dy, w, 120), 72, QColor(240, 236, 255))
         date = time.strftime("%A, %B ") + str(int(time.strftime("%d")))
-        self._text(p, date, QRectF(dx, h * 0.12 + 150 + dy, w, 40), 20, QColor(170, 160, 205))
+        self._text(p, date, QRectF(dx, h * 0.15 + 112 + dy, w, 34), 18, QColor(170, 160, 205))
 
-        tiles = [("This session", "session"), ("Today", "today"), ("Last 7 days", "week")]
-        tw, th, gap = min(340, w * 0.26), 170, 28
-        x0 = (w - (3 * tw + 2 * gap)) / 2 + dx
-        y0 = h * 0.52 + dy
-        for i, (label, key) in enumerate(tiles):
-            st = self.saver.get(key, {})
-            r = QRectF(x0 + i * (tw + gap), y0, tw, th)
-            p.setPen(QPen(QColor(255, 255, 255, 30), 1.2))
-            p.setBrush(QColor(255, 255, 255, 12))
-            p.drawRoundedRect(r, 20, 20)
-            inner = r.adjusted(24, 18, -24, -16)
-            self._text(p, label.upper(), QRectF(inner.left(), inner.top(), inner.width(), 22), 11,
-                       QColor(170, 160, 205), center=False)
-            self._text(p, _fmt(st.get("tokens", 0)) + " tokens", QRectF(inner.left(), inner.top() + 28, inner.width(), 56),
-                       30, QColor(255, 255, 255), center=False)
-            sub = f"≈ ${st.get('cost', 0):.2f} · {st.get('requests', 0)} requests"
-            self._text(p, sub, QRectF(inner.left(), inner.top() + 86, inner.width(), 24), 13,
-                       QColor(200, 195, 225), center=False)
-            total = max(1, st.get("tokens", 0))
-            bar = QRectF(inner.left(), inner.bottom() - 10, inner.width(), 6)
-            parts = [(st.get("cache_read", 0), QColor(90, 200, 255)), (st.get("in", 0) + st.get("cache_write", 0),
-                     QColor(200, 90, 255)), (st.get("out", 0), QColor(255, 255, 255))]
-            x = bar.left()
-            p.setPen(Qt.NoPen)
-            for val, col in parts:
-                seg = bar.width() * val / total
-                if seg > 0.5:
-                    p.setBrush(col)
-                    p.drawRoundedRect(QRectF(x, bar.top(), max(seg - 2, 1), bar.height()), 3, 3)
-                    x += seg
-        legend_y = y0 + th + 18
-        for i, (name, col) in enumerate([("cached", QColor(90, 200, 255)), ("new input", QColor(200, 90, 255)),
-                                         ("output", QColor(255, 255, 255))]):
-            lx = w / 2 - 170 + i * 120 + dx
-            p.setPen(Qt.NoPen)
-            p.setBrush(col)
-            p.drawEllipse(QPointF(lx, legend_y + 9), 4, 4)
-            self._text(p, name, QRectF(lx + 10, legend_y, 100, 20), 11, QColor(170, 160, 205), center=False)
+        margin, gap = w * 0.07, 24
+        col_w = (w - 2 * margin - 2 * gap) / 3
+        y1 = h * 0.40 + dy
+        claude = sv.get("claude", {})
+        local = sv.get("stats", {}).get("today", {})
+        x = margin + dx
+        self._bar(p, QRectF(x, y1, col_w, 120), "Claude · this session", claude.get("session", {}))
+        self._bar(p, QRectF(x + col_w + gap, y1, col_w, 120), "Claude · this week", claude.get("week", {}))
+        inner = self._panel(p, QRectF(x + 2 * (col_w + gap), y1, col_w, 120), "Local AI · today")
+        self._text(p, f"{_fmt(local.get('tokens', 0))} tokens", QRectF(inner.left(), inner.top(), inner.width(), 40),
+                   24, QColor(255, 255, 255), center=False)
+        self._text(p, f"free · {local.get('requests', 0)} requests", QRectF(inner.left(), inner.top() + 48,
+                   inner.width(), 22), 12, QColor(200, 195, 225), center=False)
+
+        y2 = y1 + 140
+        ph = h * 0.86 - y2
+        agents = [f"{a['label']}  ·  {a['secs'] // 60}m {a['secs'] % 60:02d}s" if a.get("secs") else a["label"]
+                  for a in sv.get("agents", [])]
+        asks = [f"{q['question']}" + (f"  ({q['mins']}m)" if q.get("mins") else "") for q in sv.get("asks", [])]
+        upcoming = [f"{u['when']}: {u['title']}" for u in sv.get("upcoming", [])]
         if self.saver_next:
-            self._text(p, self.saver_next, QRectF(dx, h * 0.86 + dy, w, 30), 15, QColor(200, 195, 225))
+            upcoming.insert(0, self.saver_next)
+        self._list(p, QRectF(x, y2, col_w, ph), "Running now", agents, "Nothing running")
+        self._list(p, QRectF(x + col_w + gap, y2, col_w, ph), "Waiting for you", asks, "Nothing to answer")
+        self._list(p, QRectF(x + 2 * (col_w + gap), y2, col_w, ph), "Coming up", upcoming, "Nothing scheduled")
         p.setOpacity(0.4 * self.fade)
-        self._text(p, "Say “Batsy” anytime", QRectF(dx, h - 50, w, 24), 12, QColor(200, 200, 220))
+        self._text(p, "Say “Batsy” anytime", QRectF(dx, h - 46, w, 24), 12, QColor(200, 200, 220))
 
     def _orb(self, p: QPainter, c: QPointF, r: float) -> None:
         t = time.time() - self.t0

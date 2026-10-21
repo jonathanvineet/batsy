@@ -61,6 +61,12 @@ class Batsy:
             self.ctx.display = self.overlay.send
         self.brain.visual = self.show_visual
         self.routines = Routines(self)
+        from batsy import claude_code
+        from batsy.tasks import TaskTalk
+
+        claude_code.CFG, claude_code.announce = cfg, self.announce
+        self.listen_requested = threading.Event()  # Batsy asked something: listen without the wake word
+        self.tasks = TaskTalk(self)
         self.vocab = get_vocab()
         self.skills = SkillBook(claude_cli, show=lambda q: self.show_visual("show", q))
         self.last_skill: dict | None = None  # the skill that just ran, awaiting feedback
@@ -97,9 +103,13 @@ class Batsy:
                 self.saver_on = False
                 self.overlay.hide()
             elif not busy and away >= after_ms and (not self.saver_on or time.time() - last_refresh > 30):
+                from batsy import activity, claude_code
+
                 items = get_store().agenda_for(time.strftime("%Y-%m-%d"))
                 nxt = ("Today: " + " · ".join(i["text"].rstrip(".") for i in items[:3])) if items else ""
-                self.overlay.saver(usage.stats(), nxt)
+                self.overlay.saver(usage.stats(), nxt, extra={
+                    "claude": claude_code.budget(self.cfg), **activity.snapshot(),
+                    "upcoming": self.tasks.store.upcoming()})
                 self.saver_on, last_refresh = True, time.time()
 
     def _overlay_dismissed(self) -> None:
@@ -181,6 +191,38 @@ class Batsy:
         else:
             subprocess.Popen(["xdg-open", str(path)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         return caption
+
+    def ask_user(self, question: str) -> None:
+        """Ask something out of the blue and listen for the answer without needing the wake word."""
+        self._reply(question)
+        if self.overlay.enabled:
+            self.overlay.done()
+        self.listen_requested.set()
+        if not self.voice:
+            print(f"\n[Batsy asks] {question}")
+
+    def _claude_budget_command(self, n: str) -> bool:
+        from batsy import claude_code
+
+        m = re.fullmatch(r"set (?:my |the )?(weekly|week|session) (?:claude )?(?:limit|budget) to (\d+(?:\.\d+)?) ?"
+                         r"(million|m|thousand|k)?(?: tokens)?", n)
+        if m:
+            mult = {"million": 1e6, "m": 1e6, "thousand": 1e3, "k": 1e3}.get(m.group(3) or "", 1)
+            which = "weekly" if m.group(1).startswith("week") else "session"
+            claude_code.set_limit(which, int(float(m.group(2)) * mult))
+            self._reply(f"Your {which} Claude budget is now {float(m.group(2)):g} {m.group(3) or ''} tokens.".replace("  ", " "))
+            return True
+        if re.fullmatch(r"(how much )?claude (usage|budget|left)|how much claude (have i used|is left|do i have left)|"
+                        r"how much of my claude (budget|limit) (have i used|is left)", n):
+            b = claude_code.budget(self.cfg)
+            parts = []
+            for key in ("session", "week"):
+                x = b[key]
+                if x["limit"]:
+                    parts.append(f"{x['pct']:.0f} percent of this {key}'s budget")
+            self._reply("You've used " + " and ".join(parts) + "." if parts else "No Claude budget is set.")
+            return True
+        return False
 
     def _viewer_event(self, ev: dict) -> None:
         if ev.get("event") == "measured":
@@ -351,6 +393,10 @@ class Batsy:
             self.overlay.hide()
             self.routines.capture = None
             return True
+        if self.tasks.handle(n, text):  # chores/projects: check-in answers, "I do laundry every Sunday"...
+            return True
+        if self._claude_budget_command(n):
+            return True
         if self._skill_feedback(n, text):
             return True
         if self.routines.handle(n):
@@ -393,7 +439,8 @@ class Batsy:
             from batsy.local_brain import ask_claude
 
             self._reply("Asking Claude.")
-            answer = ask_claude(m.group(1))
+            force = bool(re.search(r"\banyway\b", text, re.I))  # "ask Claude anyway" ignores Batsy's budget
+            answer = ask_claude(re.sub(r"\banyway\b", "", m.group(1), flags=re.I).strip(), force=force)
             self.brain.memory.add_exchange("claude", text, answer, ["asked Claude Code"])
             self._reply(answer)
             return True
@@ -465,18 +512,23 @@ class Batsy:
         pending_text: str | None = None
         follow_up = False
         while True:
+            if self.listen_requested.is_set():  # Batsy just asked a question: hear the answer, no wake word
+                self.listen_requested.clear()
+                self.speaker.wait_idle()
+                follow_up = True
             if pending_text is not None:
                 text, pending_text = pending_text, None
             elif follow_up:
                 follow_up = False
                 self.ears.drain()
-                wait = self.routines.follow_up_seconds or self.cfg.get("voice.follow_up_seconds")
+                wait = self.routines.follow_up_seconds or (15 if self.tasks.store.pending else None) or \
+                    self.cfg.get("voice.follow_up_seconds")
                 audio = self._record(wait, self.ears.preroll(0.3), fresh=False)
                 if audio is None:
                     self.overlay.done()
                     continue
                 text = self.stt.transcribe(audio)
-                awaiting = self.routines.capturing or self.last_skill  # "no" is a real answer here
+                awaiting = self.routines.capturing or self.last_skill or self.tasks.store.pending  # "no" is an answer
                 ignore = NOISE_TRANSCRIPTS if awaiting else END_FOLLOWUP | NOISE_TRANSCRIPTS
                 if _norm(text) in ignore:
                     self.overlay.done()

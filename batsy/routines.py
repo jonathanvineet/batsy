@@ -79,12 +79,13 @@ class Routines:
         today = dt.date.today()
         items = get_store().agenda_for(today.isoformat())
         reply = self.app._reply
+        tracked = self.app.tasks.morning_line() if hasattr(self.app, "tasks") else ""
         if items:
             plan = "; ".join(i["text"].rstrip(".!") for i in items)
-            reply(f"Good morning! It's {day_name(today)}. Here's your day: {plan}.")
+            reply(f"Good morning! It's {day_name(today)}. Here's your day: {plan}.{tracked}")
             self.app.show_visual("card", f"{day_name(today)} | " + "\n".join(f"• {i['text']}" for i in items))
         else:
-            reply(f"Good morning! It's {day_name(today)}. Nothing's planned for today, so it's all yours.")
+            reply(f"Good morning! It's {day_name(today)}." + (tracked or " Nothing's planned for today, so it's all yours."))
         extra = self.cfg.get("routines.morning_extra")
         if extra:
             self.app.speak_brief(extra)

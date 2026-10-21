@@ -109,12 +109,35 @@ Follow-ups work too: "now underline the second one as well" applies to the same 
 
 The live camera window is local: OpenCV shows the feed and nothing streams anywhere. The local AI can't see. So when you ask something visual, like "what am I holding?", "what's this?", "which component is this?", "how do I look?" or "read this error on my screen", Batsy saves **one frame** (768 px) or a screenshot. Claude Code then looks at that image and answers. Each look uses a little of your Pro allowance, roughly one image plus the question. It isn't continuous video: every question is a fresh snapshot.
 
+## Chores, projects and habits (tracked locally, no tokens)
+
+Tell Batsy what you do regularly, in your own words:
+- "Every weekend I work on my robot project" · "I do laundry every Sunday at 6 PM" · "Gym Monday, Wednesday and Friday at 6" · "Water the plants every 3 days" · "Add a habit: read for 20 minutes every night" · "Remind me to pay rent every month"
+
+**On the days they're due, Batsy:**
+- reminds you 15 minutes before anything with a time
+- **checks in afterwards:** "Did you get the laundry done?" or, for projects, "How did the robot project go today? Any progress?" It waits until you're at the laptop and listens for your answer without the wake word. Unanswered questions stay on the screensaver.
+- logs what you say: done, skipped, or your progress update. It keeps streaks and mentions today's chores and projects in "good morning".
+
+**Ask anytime:** "what are my projects?" · "what do I have to do today?" · "how's my robot project going?" (shows the update history) · "I finished the laundry" · "update on robot project: motors wired" · "stop tracking gym".
+
+## Claude budget (your Pro plan)
+
+Every Claude Code request Batsy makes is counted exactly, using the token numbers Claude Code reports. Pro's own limits can't be read from outside the official app, so Batsy keeps **its own budgets**:
+- **Session:** a 5-hour window, like Pro's.
+- **Week:** resets every Monday.
+
+Batsy warns you at 80%. At the limit it switches to the local AI until the budget resets. "Ask Claude anyway…" goes through regardless. Set the budgets by voice ("set my weekly Claude limit to 5 million", "set my session limit to 800k") or under `[claude_budget]` in the config. Ask "how much Claude have I used?" to hear where you are.
+
 ## Screensaver: token usage
 
 After 3 minutes with no keyboard or mouse activity, as long as Batsy isn't doing anything, the screen fades to a dark screensaver showing:
 - a big clock and the date
-- three tiles: **This session** (since Batsy started), **Today** and **Last 7 days**, each with total tokens, estimated cost and request count, plus a bar split into cached, new input and output
-- today's plan, if you have one
+- **Claude · this session** and **Claude · this week**: tokens used against your budget, with a colour bar (cyan, then orange, then red) and when each resets
+- **Local AI · today**: tokens used (free)
+- **Running now**: Claude jobs (file work, 3D, learning a skill, checking pictures), background shell jobs and active monitors, with how long each has been running
+- **Waiting for you**: questions Batsy asked that you haven't answered yet
+- **Coming up**: your chores, projects and habits for the next 7 days, plus today's plan
 
 Move the mouse or press a key to close it, or just say "Batsy". The layout drifts slowly so nothing burns into the screen. Change the delay with `[overlay] screensaver_minutes` (0 turns it off). GNOME blanks the screen after 5 minutes by default, so raise that in Settings → Power if you want the screensaver to stay up longer.
 

@@ -278,12 +278,8 @@ def best_image(query: str, entity: Entity | None = None, on_better=None) -> tupl
 
 def claude_pick(query: str, paths: list[Path]) -> int | None:
     """Let Claude Code look at candidate images and choose the right one (1-based), or None."""
-    import shutil
-    import subprocess
+    from batsy import claude_code
 
-    exe = shutil.which("claude")
-    if not exe:
-        return None
     vis = WORKSPACE / ".vision"
     vis.mkdir(parents=True, exist_ok=True)
     local = []
@@ -295,9 +291,8 @@ def claude_pick(query: str, paths: list[Path]) -> int | None:
     prompt = (f"Read each of these images:\n{listing}\nWhich one best shows: \"{query}\"? It must be correct "
               f"(right part/model), complete, legible, and not watermarked. Reply with only the number, or 0 if none.")
     try:
-        r = subprocess.run([exe, "-p", prompt, "--output-format", "text", "--allowedTools", "Read"],
-                           cwd=WORKSPACE, capture_output=True, text=True, timeout=120)
-        m = re.search(r"\b([0-9])\b", r.stdout)
+        out = claude_code.run(prompt, "checking pictures", cwd=WORKSPACE, timeout=120, args=["--allowedTools", "Read"])
+        m = re.search(r"\b([0-9])\b", out)
         return int(m.group(1)) if m else None
     except Exception:
         return None

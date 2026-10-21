@@ -110,5 +110,5 @@ class Overlay:
     def hide(self) -> None:
         self.send("hide")
 
-    def saver(self, stats: dict, next_text: str = "") -> None:
-        self.send("saver", stats=stats, next=next_text)
+    def saver(self, stats: dict, next_text: str = "", extra: dict | None = None) -> None:
+        self.send("saver", stats=stats, next=next_text, **(extra or {}))

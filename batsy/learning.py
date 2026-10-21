@@ -374,10 +374,8 @@ class SkillBook:
 
 
 def claude_cli(prompt: str, timeout: int = 180) -> str:
-    """Raw Claude Code call for teaching (no tools needed: it only writes text)."""
-    exe = shutil.which("claude")
-    if not exe:
-        return "ANSWER: Claude Code isn't installed, so I can't learn new things yet."
-    p = subprocess.run([exe, "-p", prompt, "--output-format", "text"], cwd=WORKSPACE,
-                       capture_output=True, text=True, timeout=timeout)
-    return p.stdout.strip() or "ANSWER: Claude didn't answer."
+    """Teaching call (Claude only writes text here)."""
+    from batsy import claude_code
+
+    out = claude_code.run(prompt, "learning a new skill", cwd=WORKSPACE, timeout=timeout)
+    return out if out.strip() else "ANSWER: Claude didn't answer."

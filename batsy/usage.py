@@ -19,8 +19,8 @@ PRICES = {
 
 
 def _cost(r: dict) -> float:
-    if r.get("model", "").startswith("local:"):
-        return 0.0  # runs on the laptop: free
+    if r.get("model", "").startswith(("local:", "claude-code")):
+        return 0.0  # the laptop is free; Claude Code is covered by the Pro subscription
     pin, pout, pread = PRICES.get(r.get("model", ""), PRICES["claude-opus-5-5"])
     return (r["in"] * pin + r["out"] * pout + r["cache_read"] * pread + r["cache_write"] * pin * 1.6) / 1e6
 

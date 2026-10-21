@@ -57,6 +57,19 @@ DEFAULTS = {
         "device": "ipad",       # preferred Spotify Connect device (name contains this)
         "redirect_port": 8888,  # login callback http://127.0.0.1:8888/callback
     },
+    # Batsy's own budget for Claude Code (your Pro plan). Change by voice: "set my weekly Claude limit to 5 million"
+    "claude_budget": {
+        "session_hours": 5,
+        "session_tokens": 1_500_000,   # all tokens Claude Code reports, cached reads included
+        "weekly_tokens": 10_000_000,
+        "warn_at": 0.8,
+    },
+    "tasks": {
+        "checkin_chore": "20:00",      # when to ask "did you do it?" if a chore has no time
+        "checkin_project": "19:30",
+        "checkin_habit": "21:00",
+        "remind_minutes_before": 15,
+    },
     "routines": {
         "day_starts_at": 5,   # before this hour it's still "tonight": good night at 3 AM asks about today's date
         "morning_extra": "",  # optional Claude prompt after the morning briefing, e.g. "weather in Chennai today, one line"
