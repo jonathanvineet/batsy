@@ -15,6 +15,8 @@ from batsy import images
 from batsy.brain import Brain
 from batsy.overlay import Overlay
 from batsy.routines import Routines
+from batsy import apps
+from batsy.learning import ACTION, NEGATIVE, SkillBook, claude_cli
 from batsy.vocab import get_vocab
 from batsy.config import SOCKET_PATH
 from batsy.tools import ToolContext, build_registry
@@ -60,6 +62,11 @@ class Batsy:
         self.brain.visual = self.show_visual
         self.routines = Routines(self)
         self.vocab = get_vocab()
+        self.skills = SkillBook(claude_cli, show=lambda q: self.show_visual("show", q))
+        self.last_skill: dict | None = None  # the skill that just ran, awaiting feedback
+        if hasattr(self.brain, "skills"):
+            self.brain.skills = self.skills
+        threading.Thread(target=apps.INDEX.refresh, daemon=True, name="app-index").start()
         self._turn_markers: list[tuple[str, str]] = []
         self.saver_on = False
         self.overlay.on_saver_exit = self._saver_exited
@@ -97,6 +104,56 @@ class Batsy:
     def _overlay_dismissed(self) -> None:
         self.overlay_dismissed = True
         self.speaker.stop()
+
+    # --- learned skills ---------------------------------------------------
+    def _confirm_now(self, question: str) -> bool:
+        """Yes/no from whichever context we're in (voice main loop, turn thread, or console)."""
+        if self.ears and threading.current_thread() is threading.main_thread():
+            self.speaker.say(question + " Say yes or no.")
+            self.speaker.wait_idle()
+            self.ears.drain()
+            audio = self.ears.record_utterance(start_timeout=8)
+            ok = safety.is_yes(self.stt.transcribe(audio) if audio is not None else "")
+            if not ok:
+                self.speaker.say("Okay, I won't.")
+            return ok
+        return self._confirm(question)
+
+    def _run_skill(self, name: str, slots: dict, request: str) -> None:
+        spoken, ok = self.skills.run(name, slots, self._confirm_now)
+        if ok:
+            if spoken:
+                self._reply(spoken)
+            self.last_skill = {"name": name, "request": request, "t": time.time()}
+            self.brain.memory.add_exchange("skill", request, spoken, [f"ran learned skill {name}"])
+            return
+        log.warning("skill %s failed: %s", name, spoken)
+        self.skills.record(name, False)
+        self._reply("That didn't work. Let me fix it.")
+        self._after_learning(self.skills.relearn(name, request, f"error: {spoken}", self._confirm_now), request)
+
+    def _skill_feedback(self, n: str, text: str) -> bool:
+        """A complaint right after a learned skill ran = failure + relearn. Anything else = success."""
+        last, self.last_skill = self.last_skill, None
+        if not last:
+            return False
+        if time.time() - last["t"] < 90 and NEGATIVE.match(n) and not self.routines.capturing:
+            self.skills.record(last["name"], False)
+            self._reply("Sorry. Let me relearn that.")
+            out = self.skills.relearn(last["name"], last["request"], text, self._confirm_now)
+            self._after_learning(out, last["request"])
+            return True
+        self.skills.record(last["name"], True)
+        return False
+
+    def _after_learning(self, out: dict, request: str) -> None:
+        if out["kind"] == "answer":
+            self._reply(out["text"])
+            return
+        if out.get("spoken"):
+            self._reply(out["spoken"])
+        if out.get("ok") and out.get("name"):
+            self.last_skill = {"name": out["name"], "request": request, "t": time.time()}
 
     def show_visual(self, kind: str, arg: str) -> str | None:
         """Put a picture ([[show: query]]) or a text card ([[card: Title | text]]) on screen.
@@ -222,6 +279,10 @@ class Batsy:
             finally:
                 self.confirm_handler = self._confirm_console
             self._learn_phrase(text)
+            learned = getattr(self.brain, "last_skill_run", None)
+            if learned:
+                self.last_skill = {"name": learned, "request": text, "t": time.time()}
+                self.brain.last_skill_run = None
         self._apply_flags()
         return reply
 
@@ -262,7 +323,33 @@ class Batsy:
             self.overlay.hide()
             self.routines.capture = None
             return True
+        if self._skill_feedback(n, text):
+            return True
         if self.routines.handle(n):
+            return True
+        m = re.match(r"(?:(?:please|can you|could you) )?(open|launch|start|run) (.+)", n)
+        if m and not re.search(r"\b(camera|webcam)\b", m.group(2)):
+            said = apps.open_target(m.group(2))
+            if said:
+                self._reply(said)
+                return True
+        m = re.match(r"(?:(?:please|can you|could you) )?(close|quit|exit|kill) (.+)", n)
+        if m and not re.search(r"\b(camera|webcam)\b", m.group(2)):
+            said = apps.close_app(m.group(2))
+            if said:
+                self._reply(said)
+                return True
+        m = re.match(r"forget how to (.+)", n)
+        if m:
+            hit = self.skills.match(m.group(1))
+            if hit and self.skills.forget(hit[0]):
+                self._reply("Forgotten. I'll relearn it if you ask again.")
+            else:
+                self._reply("I don't have a learned skill for that.")
+            return True
+        hit = self.skills.match(n)  # something Batsy learned before: run its code, no AI
+        if hit:
+            self._run_skill(hit[0], hit[1], text)
             return True
         m = re.match(r"(?:hey |ok )?ask (?:claude|cloud|clawed|claud)(?: to| about| if| whether)?[,\s]+(.+)", text.strip(" .!?"), re.I)
         if m:  # the only path that touches the Pro plan: explicit, one request
@@ -352,7 +439,8 @@ class Batsy:
                     self.overlay.done()
                     continue
                 text = self.stt.transcribe(audio)
-                ignore = NOISE_TRANSCRIPTS if self.routines.capturing else END_FOLLOWUP | NOISE_TRANSCRIPTS
+                awaiting = self.routines.capturing or self.last_skill  # "no" is a real answer here
+                ignore = NOISE_TRANSCRIPTS if awaiting else END_FOLLOWUP | NOISE_TRANSCRIPTS
                 if _norm(text) in ignore:
                     self.overlay.done()
                     continue

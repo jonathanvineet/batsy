@@ -181,6 +181,23 @@ class LocalBrain:
             if self.visual and not abort.is_set():
                 threading.Thread(target=self.visual, args=(kind, arg), daemon=True).start()
 
+        from batsy.learning import ACTION, norm
+
+        if self.claude_ok and self.skills and ACTION.match(norm(text)):
+            # a new kind of action: Claude writes code for it once; next time it runs without any AI
+            emit("Give me a moment, I'm learning how to do that.")
+            out = self.skills.learn(text, self.registry.ctx.confirm)
+            if out["kind"] == "answer":
+                emit(out["text"])
+            else:
+                if out.get("spoken"):
+                    emit(out["spoken"])
+                if out.get("ok"):
+                    emit("Next time that'll be instant.")
+                    self.last_skill_run = out["name"]
+                    actions.append(f"learned skill {out['name']}")
+            return self._finish(source, text, spoken, actions, abort)
+
         src = vision_source(text)
         if src and self.claude_ok:
             self._look(src, text, context, emit, on_marker, on_tool, actions)
@@ -231,7 +248,22 @@ class LocalBrain:
                 messages.append({"role": "tool", "tool_name": name, "content": truncate(out, m["tool_result_chars"])})
             if abort.is_set() or handed_off:
                 break
+        self._maybe_learn_from(text, actions)
         return self._finish(source, text, spoken, actions, abort)
+
+    def _maybe_learn_from(self, text: str, actions: list[str]) -> None:
+        """The local AI just did something with tools: in the background, have Claude turn it into a skill
+        so the same request skips the AI next time."""
+        from batsy.learning import norm
+
+        did = [a for a in actions if a.split(" ", 1)[0] in ("run_shell", "system_status", "spotify", "camera")]
+        if not (self.claude_ok and self.skills and did) or any("ERROR" in a for a in did):
+            return
+        if self.skills.match(norm(text)):
+            return
+        threading.Thread(target=self.skills.learn, args=(text, self.registry.ctx.confirm),
+                         kwargs={"execute": False, "happened": "\n".join(did)}, daemon=True,
+                         name="learn").start()
 
     def _finish(self, source, text, spoken, actions, abort) -> str:
         reply = " ".join(spoken)

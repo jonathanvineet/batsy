@@ -36,6 +36,16 @@ ARTICLES = {"the", "a", "an", "some"}
 POLITE = r"(?:(?:hey |ok )?(?:can|could|would) you |please |just )?"
 
 
+def compile_template(template: str) -> re.Pattern:
+    """'set brightness to {level}' -> regex with a named group per {slot}. A slot swallows a leading article,
+    and polite openers ("can you", "please") and a trailing "please" are always allowed."""
+    parts = re.split(r"\{(\w+)\}", template)
+    rx = "^" + POLITE
+    for i, part in enumerate(parts):
+        rx += re.escape(part) if i % 2 == 0 else rf"(?:(?:the|a|an|some) )?(?P<{part}>.+?)"
+    return re.compile(rx + r"(?: please)?$")
+
+
 class Vocab:
     def __init__(self):
         self.lock = threading.Lock()
@@ -56,10 +66,7 @@ class Vocab:
         rows = sorted(rows, key=lambda r: len(r["template"]), reverse=True)
         self.patterns = []
         for r in rows:
-            fixed = [re.escape(part) for part in r["template"].split("{x}")]
-            subject = r"(?:(?:the|a|an|some) )?(?P<x>.+?)"  # articles belong to the subject, not the phrase
-            rx = re.compile(f"^{POLITE}" + subject.join(fixed) + r"(?: please)?$")
-            self.patterns.append((rx, r["intent"], r["template"]))
+            self.patterns.append((compile_template(r["template"]), r["intent"], r["template"]))
 
     def match(self, n: str) -> tuple[str, str] | None:
         """Normalised utterance -> (intent, subject) or None."""

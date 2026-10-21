@@ -134,6 +134,23 @@ def cmd_vocab(cfg, args) -> None:
         print(f"{'learned' if r['learned'] else 'built-in':8} {r['intent']:8} used {r['uses']:3}x  {r['template']}")
 
 
+def cmd_skills(cfg, args) -> None:
+    from batsy.learning import SkillBook, claude_cli
+
+    book = SkillBook(claude_cli)
+    if args.forget:
+        print("Removed." if book.forget(args.forget) else "No such skill.")
+        return
+    rows = book.listing()
+    if not rows:
+        print("No skills learned yet.")
+    for r in rows:
+        state = "DISABLED" if r["disabled"] else ("not a learned skill" if r["problem"] else "ok")
+        print(f"{r['name']:28} {state:10} worked {r['successes']}x, failed {r['failures']}x")
+        for t in r["triggers"][:4]:
+            print(f"    “{t}”")
+
+
 def cmd_spotify_login(cfg, args) -> None:
     from batsy.spotify import Spotify, login
 
@@ -229,6 +246,8 @@ def main() -> None:
     sub.add_parser("reset", help="start a fresh conversation")
     sub.add_parser("usage", help="show token usage")
     sub.add_parser("spotify-login", help="connect your Spotify account")
+    p = sub.add_parser("skills", help="list (or --forget) skills Batsy learned")
+    p.add_argument("--forget", metavar="NAME")
     p = sub.add_parser("vocab", help="list (or --forget) the phrases Batsy knows for showing things")
     p.add_argument("--forget", metavar="PHRASE")
     args = parser.parse_args()
@@ -237,4 +256,4 @@ def main() -> None:
     _setup_logging(args.verbose or args.cmd in (None, "run") and sys.stderr.isatty())
     {"run": cmd_run, None: cmd_run, "chat": cmd_chat, "ask": cmd_ask,
      "doctor": cmd_doctor, "reset": cmd_reset, "usage": cmd_usage,
-     "spotify-login": cmd_spotify_login, "vocab": cmd_vocab}[args.cmd](cfg, args)
+     "spotify-login": cmd_spotify_login, "vocab": cmd_vocab, "skills": cmd_skills}[args.cmd](cfg, args)

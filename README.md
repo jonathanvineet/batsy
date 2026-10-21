@@ -51,6 +51,15 @@ When you say "Batsy", the screen fades to a dark Batsy view:
 
 The overlay closes by itself a few seconds after the answer, or 30 seconds after showing a picture. Esc, Space or a click closes it straight away. Turn it off with `[overlay] enabled = false`. If GNOME keeps it behind other windows, set `qt_platform = "xcb"`.
 
+## Learns once, then does it instantly
+
+- **Opening and closing are instant, with no AI:** "open VS Code / Files / Firefox / YouTube / Downloads / github.com", "close Spotify". Batsy finds your installed apps (including Flatpaks) by name, with a few nicknames like "vs code", "files" and "browser".
+- **New actions are learned once.** The first time you ask for something it doesn't know how to do, like "turn on dark mode", "connect my earbuds" or "set brightness to 40", Claude Code writes a small Python skill for it, covering the different ways you might say it. Batsy checks the code, runs it for you, and saves it ("Next time that'll be instant"). After that, any of those phrasings runs the saved code directly: no AI, no Pro usage.
+- **Things the local AI already did** (for example "what's my battery") are turned into skills in the background, so they're instant next time too.
+- **Feedback teaches it.** Say "no, that's wrong" / "didn't work" right after a skill runs, or let it crash, and Claude rewrites it using your complaint. Two failures in a row switch the skill off until it's relearned. Every clean use counts as a success.
+- **Safety:** skills can only run commands through Batsy's checked shell, so risky ones (deleting, uninstalling, shutting down…) still ask "Should I go ahead?". Code that tries to get around that is rejected. Questions and chat are never turned into code: Claude just answers them.
+- `batsy skills` lists what it has learned, with how often each skill worked or failed. `batsy skills --forget NAME` removes one, or say "Batsy, forget how to …".
+
 ## Showing and pulling up things
 
 - **Your usual phrases work instantly, with no AI:** "pull up connections for Nikola Tesla", "pull up the Taj Mahal", "show me a picture of a capybara", "what does a quokka look like". **Pull up** shows the best picture with an accurate facts card and speaks the first line. **Picture** shows just the picture.
