@@ -97,7 +97,7 @@ class Batsy:
         threading.Thread(target=apps.INDEX.refresh, daemon=True, name="app-index").start()
         model3d.VIEWER.on_event = self._viewer_event
         if self.overlay.enabled:  # the 3D viewer lives inside the overlay: one process, controlled by voice
-            model3d.VIEWER.host = lambda: self.overlay.send("model3d")
+            model3d.VIEWER.host = self._host_3d
             self.overlay.on_viewer_event = self._viewer_event
         self._turn_markers: list[tuple[str, str]] = []
         self.saver_on = False
@@ -109,6 +109,13 @@ class Batsy:
             threading.Thread(target=self._saver_loop, daemon=True, name="screensaver").start()
         self.last_raw_text = ""
         monitor.start_background(self.ctx)
+
+    def _host_3d(self) -> bool:
+        """Start the 3D viewer inside the overlay; False if this overlay can't (then it opens its own window)."""
+        if not self.overlay.hosts_3d:
+            return False
+        self.overlay.send("model3d")
+        return True
 
     def _saver_exited(self) -> None:
         self.saver_on = False
@@ -605,60 +612,86 @@ class Batsy:
 
         pending_text: str | None = None
         follow_up = False
+        wake_only = False  # heard just "Batsy": keep listening for the command, without talking over you
+        errors: list[float] = []
         while True:
-            if self.listen_requested.is_set():  # Batsy just asked a question: hear the answer, no wake word
-                self.listen_requested.clear()
-                self.speaker.wait_idle()
-                follow_up = True
-            if pending_text is not None:
-                text, pending_text = pending_text, None
-            elif follow_up:
-                follow_up = False
-                self.ears.drain()
-                from batsy.tools import screen
-
-                wait = self.routines.follow_up_seconds or (15 if self.tasks.store.pending else None) or \
-                    (30 if screen.camera_pid() or model3d.VIEWER.active() else None) or \
-                    self.cfg.get("voice.follow_up_seconds")  # live camera / 3D model: keep talking to it
-                audio = self._record(wait, self.ears.preroll(0.3), fresh=False)
-                if audio is None or not self.voiceprint.is_owner(audio):
-                    self.overlay.done()
-                    continue
-                self.overlay.send("status", text="Transcribing")
-                text = self.stt.transcribe(audio)
-                awaiting = self.routines.capturing or self.last_skill or self.tasks.store.pending  # "no" is an answer
-                ignore = NOISE_TRANSCRIPTS if awaiting else END_FOLLOWUP | NOISE_TRANSCRIPTS
-                # Without the wake word, a short "mm-hmm" / "they got this" is you talking to someone else,
-                # unless Batsy just asked you something.
-                asked = getattr(self, "last_said", "").rstrip().endswith("?")
-                for_me = text.rstrip().endswith("?") or FOR_BATSY.match(_norm(text)) or \
-                    (model3d.VIEWER.active() and model3d.parse(_norm(text)) is not None)  # "rotate it", "top view"
-                if _norm(text) in ignore or not (awaiting or asked or for_me):
-                    log.info("follow-up ignored: %r", text)
-                    self.overlay.done()
-                    continue
-                self.overlay.heard(text)
-            else:
-                frame = self.ears.read(0.5)
-                if frame is None or not self.ears.wake_hit(frame):
-                    continue
-                text = self._listen_after_wake(strip_wake_word)
-                if text is None:
-                    continue
-                if not text:
-                    self._reply("Yes?")
+            try:
+                if self.listen_requested.is_set():  # Batsy just asked a question: hear the answer, no wake word
+                    self.listen_requested.clear()
                     self.speaker.wait_idle()
                     follow_up = True
-                    continue
+                if pending_text is not None:
+                    text, pending_text = pending_text, None
+                elif follow_up:
+                    follow_up = False
+                    from batsy.tools import screen
 
-            if self.local_command(text):
-                self.speaker.wait_idle()
+                    if wake_only:  # keep what you already started saying: no drain, nothing spoken
+                        wait = 8
+                    else:
+                        self.ears.drain()
+                        wait = self.routines.follow_up_seconds or (15 if self.tasks.store.pending else None) or \
+                            (30 if screen.camera_pid() or model3d.VIEWER.active() else None) or \
+                            self.cfg.get("voice.follow_up_seconds")  # live camera / 3D model: keep talking to it
+                    was_wake_only, wake_only = wake_only, False
+                    audio = self._record(wait, self.ears.preroll(0.3), fresh=False,
+                                         min_speech=0.6 if was_wake_only else 0.0)
+                    if audio is None or not self.voiceprint.is_owner(audio):
+                        self.overlay.done()
+                        continue
+                    self.overlay.send("status", text="Transcribing")
+                    text = self.stt.transcribe(audio)
+                    if was_wake_only:  # "Batsy ... Batsy, open YouTube"
+                        text = strip_wake_word(text, self.cfg.get("voice.wake_words"))[1] or text
+                    awaiting = self.routines.capturing or self.last_skill or self.tasks.store.pending  # "no" is an answer
+                    ignore = NOISE_TRANSCRIPTS if awaiting or was_wake_only else END_FOLLOWUP | NOISE_TRANSCRIPTS
+                    # Without the wake word, a short "mm-hmm" / "they got this" is you talking to someone else,
+                    # unless Batsy just asked you something.
+                    asked = was_wake_only or getattr(self, "last_said", "").rstrip().endswith("?")
+                    for_me = text.rstrip().endswith("?") or FOR_BATSY.match(_norm(text)) or \
+                        (model3d.VIEWER.active() and model3d.parse(_norm(text)) is not None)  # "rotate it", "top view"
+                    if _norm(text) in ignore or not (awaiting or asked or for_me):
+                        log.info("follow-up ignored: %r", text)
+                        self.overlay.done()
+                        continue
+                    self.overlay.heard(text)
+                else:
+                    frame = self.ears.read(0.5)
+                    if frame is None or not self.ears.wake_hit(frame):
+                        continue
+                    text = self._listen_after_wake(strip_wake_word)
+                    if text is None:
+                        continue
+                    if not text:  # just "Batsy": the chime and the screen already say "listening"
+                        self.overlay.listen()
+                        follow_up = wake_only = True
+                        continue
+
+                if self.local_command(text):
+                    self.speaker.wait_idle()
+                    self.overlay.done()
+                    follow_up = (self.cfg.get("voice.follow_up_seconds") > 0 or self.routines.capturing) \
+                        and _norm(text) not in STOP_WORDS
+                    continue
+                pending_text, aborted = self._voice_turn(text, strip_wake_word)
+                if pending_text == "":  # interrupted with just "Batsy": listen for the new command
+                    pending_text, follow_up, wake_only = None, True, True
+                    self.overlay.listen()
+                    continue
+                follow_up = pending_text is None and not aborted and self.cfg.get("voice.follow_up_seconds") > 0
+            except Exception:  # one bad turn must never stop Batsy listening
+                log.exception("voice loop")
+                pending_text, follow_up, wake_only = None, False, False
                 self.overlay.done()
-                follow_up = (self.cfg.get("voice.follow_up_seconds") > 0 or self.routines.capturing) \
-                    and _norm(text) not in STOP_WORDS
-                continue
-            pending_text, aborted = self._voice_turn(text, strip_wake_word)
-            follow_up = pending_text is None and not aborted and self.cfg.get("voice.follow_up_seconds") > 0
+                now = time.time()
+                errors = [t for t in errors if now - t < 60] + [now]
+                if len(errors) == 1:
+                    self.speaker.say("Sorry, that went wrong. I'm still listening.")
+                if len(errors) >= 5:  # something keeps failing: maybe the microphone; reopen it
+                    self.ears.reopen()
+                    errors.clear()
+                time.sleep(0.2)
+
 
     def _voiceprint_command(self, n: str) -> bool:
         """"learn my voice" records you so Batsy ignores other voices (music, TV, itself); "forget my voice" undoes it."""
@@ -691,7 +724,7 @@ class Batsy:
         self._reply("Got it. From now on I'll only answer your voice. Say forget my voice to undo that.")
         return True
 
-    def _record(self, start_timeout: float, preroll: list[bytes], fresh: bool):
+    def _record(self, start_timeout: float, preroll: list[bytes], fresh: bool, min_speech: float = 0.0):
         """Record an utterance while animating the overlay: orb follows your voice, words appear live.
         fresh=True (after the wake word) opens the overlay at once; follow-ups open it only once you speak."""
         live = self.ears.live_recognizer() if self.overlay.enabled and self.cfg.get("overlay.live_words") else None
@@ -720,14 +753,15 @@ class Batsy:
                     state["partial"] = text
                     self.overlay.partial(text)
 
-        return self.ears.record_utterance(start_timeout=start_timeout, preroll=preroll, on_frame=on_frame)
+        return self.ears.record_utterance(start_timeout=start_timeout, preroll=preroll, on_frame=on_frame,
+                                          min_speech=min_speech)
 
     def _listen_after_wake(self, strip_wake_word) -> str | None:
         """Record the command that follows the wake word. None = false alarm, '' = wake word only."""
         self.speaker.stop()
         self.speaker.chime()
         preroll = self.ears.preroll(2.0)
-        audio = self._record(5, preroll, fresh=True)
+        audio = self._record(5, preroll, fresh=True, min_speech=1.0)  # don't stop at the pause after "Batsy"
         if audio is None:
             # they said just the wake word and waited; check the pre-roll really contained it
             import numpy as np
@@ -788,7 +822,9 @@ class Batsy:
                 abort.set()
                 self.speaker.stop()
                 done.wait()
-                if not new_text or self.local_command(new_text):
+                if not new_text:
+                    return "", True
+                if self.local_command(new_text):
                     return None, True
                 return new_text, True
         self.overlay.done()

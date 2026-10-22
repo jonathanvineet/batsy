@@ -48,10 +48,67 @@ def _single_instance():
 
 def cmd_run(cfg, args) -> None:
     _require_key()
-    lock = _single_instance()  # noqa: F841 - held for the life of the process
-    from batsy.app import Batsy
+    if getattr(args, "worker", False):  # the supervised process that does the work
+        _crash_reporting()
+        from batsy.app import Batsy
 
-    Batsy(cfg, voice=True).run_voice()
+        Batsy(cfg, voice=True).run_voice()
+        return
+    lock = _single_instance()  # noqa: F841 - held for the life of the process
+    _supervise(args)
+
+
+def _crash_reporting() -> None:
+    """Native crashes (audio, speech models, Qt) leave a trace in crash.log; thread errors go to batsy.log."""
+    import faulthandler
+
+    faulthandler.enable(open(DATA_DIR / "crash.log", "a"))
+    log = logging.getLogger("batsy")
+    threading.excepthook = lambda a: log.error("thread %s crashed", a.thread.name if a.thread else "?",
+                                               exc_info=(a.exc_type, a.exc_value, a.exc_traceback))
+
+
+def _supervise(args) -> None:
+    """Run Batsy in a child process and bring it back if it ever dies. Backs off if it keeps crashing,
+    and tells you (desktop notification) instead of looping silently."""
+    import signal
+    import subprocess
+    import time
+
+    log = logging.getLogger("batsy")
+    argv = [sys.executable, "-m", "batsy"] + (["-v"] if args.verbose else []) + ["run", "--worker"]
+    crashes: list[float] = []
+    child = None
+
+    def stop(*_):
+        if child and child.poll() is None:
+            child.terminate()
+            try:
+                child.wait(10)
+            except subprocess.TimeoutExpired:
+                child.kill()
+        sys.exit(0)
+
+    signal.signal(signal.SIGTERM, stop)
+    signal.signal(signal.SIGHUP, stop)
+    while True:
+        started = time.time()
+        child = subprocess.Popen(argv)
+        try:
+            code = child.wait()
+        except KeyboardInterrupt:
+            stop()
+        if code == 0:
+            return
+        now = time.time()
+        crashes = [t for t in crashes if now - t < 600] + [now]
+        delay = [1, 2, 5, 15, 30, 60][min(len(crashes) - 1, 5)] if now - started < 120 else 1
+        log.error("Batsy stopped unexpectedly (exit %s); restarting in %ss (see crash.log)", code, delay)
+        if len(crashes) == 3:
+            subprocess.run(["notify-send", "-a", "Batsy", "Batsy keeps restarting",
+                            f"It crashed {len(crashes)} times in 10 minutes. Details: {DATA_DIR / 'batsy.log'}"],
+                           stderr=subprocess.DEVNULL, check=False)
+        time.sleep(delay)
 
 
 def _local_turn(app, text: str) -> None:
@@ -272,7 +329,8 @@ def main() -> None:
     parser = argparse.ArgumentParser(prog="batsy", description="Batsy voice assistant")
     parser.add_argument("-v", "--verbose", action="store_true", help="log to the terminal too")
     sub = parser.add_subparsers(dest="cmd")
-    sub.add_parser("run", help="voice assistant (default)")
+    p = sub.add_parser("run", help="voice assistant (default)")
+    p.add_argument("--worker", action="store_true", help=argparse.SUPPRESS)
     p = sub.add_parser("chat", help="type to Batsy")
     p.add_argument("--speak", action="store_true", help="also speak replies aloud")
     p = sub.add_parser("ask", help="one-off request")

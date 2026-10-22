@@ -55,7 +55,9 @@ class Speaker:
             self._init_engine()
             if not self.chime_path.exists():
                 _write_chime(self.chime_path)
+            self.pq: queue.Queue = queue.Queue()  # synthesized audio waiting to play
             threading.Thread(target=self._worker, daemon=True, name="tts").start()
+            threading.Thread(target=self._player_loop, daemon=True, name="tts-play").start()
 
     def _init_engine(self) -> None:
         want = self.cfg.get("voice.tts_engine")
@@ -95,6 +97,12 @@ class Speaker:
                 self.q.task_done()
         except queue.Empty:
             pass
+        try:  # audio already synthesized for the old answer
+            while True:
+                _, path = self.pq.get_nowait()
+                self._discard(path)
+        except (queue.Empty, AttributeError):
+            pass
         proc = self.proc
         if proc and proc.poll() is None:
             proc.kill()
@@ -107,17 +115,44 @@ class Speaker:
         while not self.idle() and time.time() < end:
             time.sleep(0.05)
 
-    # --- worker -----------------------------------------------------------
+    # --- workers: one synthesizes the next sentence while the other plays the current one -----------------
     def _worker(self) -> None:
         while True:
             gen, text = self.q.get()
+            if gen != self.generation:
+                self.q.task_done()
+                continue
             try:
-                if gen == self.generation:
-                    self._speak(gen, text)
+                path = self._synth(text) if self.engine == "piper" else None
             except Exception as e:
                 log.error("tts failed: %s", e)
-            finally:
                 self.q.task_done()
+                continue
+            if path is None:  # engines that synthesize and play in one go
+                try:
+                    if gen == self.generation:
+                        self._speak(gen, text)
+                except Exception as e:
+                    log.error("tts failed: %s", e)
+                finally:
+                    self.q.task_done()
+            else:
+                self.pq.put((gen, path))
+
+    def _player_loop(self) -> None:
+        while True:
+            gen, path = self.pq.get()
+            try:
+                self._run([*self.player, path], gen)
+            except Exception as e:
+                log.error("audio playback failed: %s", e)
+            finally:
+                Path(path).unlink(missing_ok=True)
+                self.q.task_done()
+
+    def _discard(self, path: str) -> None:
+        Path(path).unlink(missing_ok=True)
+        self.q.task_done()
 
     def _run(self, argv: list[str], gen: int) -> None:
         if gen != self.generation:
@@ -125,18 +160,18 @@ class Speaker:
         self.proc = subprocess.Popen(argv, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         self.proc.wait()
 
+    def _synth(self, text: str) -> str:
+        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
+            path = f.name
+        with wave.open(path, "wb") as wf:
+            if hasattr(self.piper, "synthesize_wav"):  # piper-tts >= 1.3
+                self.piper.synthesize_wav(text, wf)
+            else:
+                self.piper.synthesize(text, wf)
+        return path
+
     def _speak(self, gen: int, text: str) -> None:
-        if self.engine == "piper":
-            with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
-                path = f.name
-            with wave.open(path, "wb") as wf:
-                if hasattr(self.piper, "synthesize_wav"):  # piper-tts >= 1.3
-                    self.piper.synthesize_wav(text, wf)
-                else:
-                    self.piper.synthesize(text, wf)
-            self._run([*self.player, path], gen)
-            Path(path).unlink(missing_ok=True)
-        elif self.engine == "espeak-ng":
+        if self.engine == "espeak-ng":
             self._run(["espeak-ng", "-s", "165", text], gen)
         elif self.engine == "say":
             self._run(["say", text], gen)

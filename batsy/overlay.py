@@ -1,13 +1,28 @@
-"""Daemon-side handle on the overlay process (batsy/overlay_ui.py). Every call is fire-and-forget,
-and everything degrades to a no-op if the overlay is disabled or PySide6 isn't installed."""
+"""Daemon-side handle on the overlay process. Every call is fire-and-forget, and everything degrades to a no-op
+if the overlay is disabled or PySide6 isn't installed.
+
+Renderers: "web" (batsy/overlay_web.py: GPU-drawn, hosts the 3D viewer) or "classic" (batsy/overlay_ui.py:
+plain Qt painting). If the web overlay keeps dying it is restarted with software rendering, then replaced by the
+classic one, so a bad graphics driver costs you visuals, never the assistant."""
 import json
 import logging
 import os
 import subprocess
 import sys
 import threading
+import time
+
+from batsy.config import DATA_DIR
 
 log = logging.getLogger("batsy.overlay")
+
+
+def _has_webengine() -> bool:
+    try:
+        import PySide6.QtWebEngineWidgets  # noqa: F401
+        return True
+    except ImportError:
+        return False
 
 
 class Overlay:
@@ -21,8 +36,18 @@ class Overlay:
         self.last_active = 0.0  # last time Batsy used the overlay for a conversation
         self.on_saver_exit = None
         self.on_viewer_event = None  # 3D viewer hosted in the overlay: click-to-measure etc.
+        want = cfg.get("overlay.renderer") or "auto"
+        self.renderer = "web" if want in ("auto", "web") and _has_webengine() else "classic"
+        self.safe_gpu = False
+        self.deaths: list[float] = []
+        self.next_start = 0.0
         if self.enabled:
             self._start()
+
+    @property
+    def hosts_3d(self) -> bool:
+        """The 3D viewer can live inside this overlay (web renderer only)."""
+        return self.enabled and self.renderer == "web"
 
     def _start(self) -> None:
         try:
@@ -34,15 +59,21 @@ class Overlay:
         env = dict(os.environ)
         if self.cfg.get("overlay.qt_platform"):
             env["QT_QPA_PLATFORM"] = self.cfg.get("overlay.qt_platform")
+        if self.safe_gpu:
+            env["BATSY_SAFE_GPU"] = "1"
+        module = "batsy.overlay_web" if self.renderer == "web" else "batsy.overlay_ui"
         try:
+            err = open(DATA_DIR / "overlay.log", "ab")
             self.proc = subprocess.Popen(
-                [sys.executable, "-m", "batsy.overlay_ui"], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                [sys.executable, "-m", module], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=err,
                 text=True, bufsize=1, env=env, start_new_session=True,
             )
+            err.close()
         except OSError as e:
             log.warning("overlay unavailable: %s", e)
             self.enabled = False
             return
+        log.info("overlay started (%s%s)", self.renderer, ", software rendering" if self.safe_gpu else "")
         threading.Thread(target=self._events, args=(self.proc,), daemon=True, name="overlay-events").start()
 
     def _events(self, proc) -> None:
@@ -51,23 +82,41 @@ class Overlay:
                 ev = json.loads(line)
             except ValueError:
                 continue
-            if ev.get("event") == "dismissed" and self.on_dismiss:
-                self.on_dismiss()
-            elif ev.get("event") == "saver_exit" and self.on_saver_exit:
-                self.on_saver_exit()
-            elif ev.get("event") == "measured" and self.on_viewer_event:
-                self.on_viewer_event(ev)
+            try:
+                if ev.get("event") == "dismissed" and self.on_dismiss:
+                    self.on_dismiss()
+                elif ev.get("event") == "saver_exit" and self.on_saver_exit:
+                    self.on_saver_exit()
+                elif ev.get("event") == "measured" and self.on_viewer_event:
+                    self.on_viewer_event(ev)
+            except Exception:
+                log.exception("overlay event %s", ev)
+        code = proc.wait()
+        if code not in (0, None) and proc is self.proc:
+            self._died(code)
+
+    def _died(self, code: int) -> None:
+        """Pick how to come back: same renderer, then software rendering, then the classic overlay."""
+        now = time.time()
+        self.deaths = [t for t in self.deaths if now - t < 300] + [now]
+        log.warning("overlay exited with code %s (%d times in 5 min); see overlay.log", code, len(self.deaths))
+        if self.renderer == "web" and (code == 3 or len(self.deaths) >= 2) and not self.safe_gpu:
+            self.safe_gpu = True
+        elif self.renderer == "web" and len(self.deaths) >= 4:
+            self.renderer, self.safe_gpu = "classic", False
+            log.warning("web overlay keeps failing; using the classic overlay")
+        self.next_start = now + min(30, 2 ** len(self.deaths))
 
     def send(self, cmd: str, **kw) -> None:
         if not self.enabled:
             return
         if cmd != "saver":
-            import time
-
             self.last_active = time.time()
         with self.lock:
             if self.proc is None or self.proc.poll() is not None:
-                log.warning("overlay process exited; restarting")
+                if time.time() < self.next_start:  # backing off after a crash: drop this update
+                    return
+                log.warning("overlay process not running; starting it")
                 self._start()
                 if not self.enabled:
                     return
@@ -76,6 +125,13 @@ class Overlay:
                 self.proc.stdin.flush()
             except (BrokenPipeError, OSError):
                 self.proc = None
+
+    def close(self) -> None:
+        """Stop the overlay on purpose (not counted as a crash)."""
+        with self.lock:
+            proc, self.proc = self.proc, None
+        if proc and proc.poll() is None:
+            proc.terminate()
 
     # --- conveniences -----------------------------------------------------
     def listen(self, fresh: bool = False) -> None:

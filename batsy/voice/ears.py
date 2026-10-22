@@ -4,6 +4,7 @@ import json
 import logging
 import queue
 import re
+import time
 
 import numpy as np
 
@@ -44,20 +45,58 @@ class Ears:
         # Background level = a low percentile of the last few seconds, so it follows the room both ways
         # (a fan spinning up must raise it, or every frame looks like speech and recording never ends).
         self.levels = collections.deque(maxlen=FRAMES_PER_SEC * 5)
+        self.stream = None
+        self.last_frame = time.monotonic()
+        self.next_retry = 0.0
+        self._open()
+
+    def _open(self) -> None:
+        import sounddevice as sd
+
         self.stream = sd.RawInputStream(
             samplerate=RATE, blocksize=BLOCK, dtype="int16", channels=1,
-            device=cfg.get("voice.input_device"), callback=self._callback,
+            device=self.cfg.get("voice.input_device"), callback=self._callback,
         )
 
     def _callback(self, indata, frames, time_info, status):
+        self.last_frame = time.monotonic()
         self.q.put(bytes(indata))
 
     def start(self) -> None:
         self.stream.start()
+        self.last_frame = time.monotonic()
 
     def close(self) -> None:
-        self.stream.stop()
-        self.stream.close()
+        try:
+            self.stream.stop()
+            self.stream.close()
+        except Exception:
+            pass
+
+    def reopen(self) -> bool:
+        """The microphone went quiet (suspend/resume, USB mic replugged, PipeWire restarted): start it again.
+        PortAudio only sees new devices after a re-init, so do that too."""
+        import sounddevice as sd
+
+        log.warning("microphone stopped delivering audio; reopening it")
+        self.close()
+        try:
+            sd._terminate()
+            sd._initialize()
+            self._open()
+            self.start()
+            log.info("microphone reopened")
+            return True
+        except Exception as e:
+            log.error("microphone still unavailable: %s", e)
+            self.next_retry = time.monotonic() + 5
+            return False
+
+    def _watchdog(self) -> None:
+        now = time.monotonic()
+        if now - self.last_frame > 4 and now >= self.next_retry:
+            self.next_retry = now + 5
+            self.reopen()
 
     def drain(self) -> None:
         try:
@@ -71,6 +110,7 @@ class Ears:
         try:
             frame = self.q.get(timeout=timeout)
         except queue.Empty:
+            self._watchdog()
             return None
         self.history.append(frame)
         self.levels.append(rms(frame))
@@ -110,13 +150,15 @@ class Ears:
 
     def record_utterance(self, start_timeout: float, preroll: list[bytes] | None = None,
                          end_silence: float | None = None, max_seconds: float = 15,
-                         on_frame=None) -> np.ndarray | None:
+                         on_frame=None, min_speech: float = 0.0) -> np.ndarray | None:
         """Record until the speaker goes quiet. Returns int16 samples, or None if nobody spoke.
-        on_frame(frame, level, speaking) is called for every frame (drives the overlay)."""
+        on_frame(frame, level, speaking) is called for every frame (drives the overlay).
+        min_speech: until this many seconds of speech are heard, a pause has to be longer (1.6 s) to end the
+        recording. Right after the wake word that's just the tail of "Batsy": people pause, then say the command."""
         frames = list(preroll or [])
         end_silence = end_silence or self.cfg.get("voice.end_silence")
         thresh = self.threshold()
-        started, silent, waited, total = False, 0, 0, 0
+        started, silent, waited, total, spoken = False, 0, 0, 0, 0
         while total < max_seconds * FRAMES_PER_SEC:
             frame = self.read(timeout=1.0)
             if frame is None:
@@ -138,7 +180,9 @@ class Ears:
                         frames.pop(len(preroll or []))  # keep a short lead-in, not all the waiting
                 continue
             silent = 0 if loud else silent + 1
-            if silent > end_silence * FRAMES_PER_SEC:
+            spoken += loud
+            pause = end_silence if spoken >= min_speech * FRAMES_PER_SEC else max(end_silence, 1.6)
+            if silent > pause * FRAMES_PER_SEC:
                 break
         self.wake.Reset()
         return np.frombuffer(b"".join(frames), dtype=np.int16)

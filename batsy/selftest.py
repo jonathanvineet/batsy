@@ -220,8 +220,11 @@ def t_screenshot(cfg):
 @check("Overlay window")
 def t_overlay(cfg, gui):
     import PySide6  # noqa: F401
+    from batsy.overlay import _has_webengine
+
+    kind = "GPU (line + particles)" if _has_webengine() else "classic (Qt WebEngine missing: pip install PySide6-Addons)"
     if not gui:
-        return "PySide6 present (open it: --gui)"
+        return f"PySide6 present, {kind} overlay (open it: --gui)"
     from batsy.overlay import Overlay
 
     ov = Overlay(cfg, enabled=True)
@@ -239,8 +242,9 @@ def t_overlay(cfg, gui):
     time.sleep(4)
     ov.hide()
     time.sleep(0.5)
-    ov.proc.terminate()
-    return "shown: listening view, card, screensaver"
+    need(not ov.deaths, f"the {ov.renderer} overlay crashed; see overlay.log")
+    ov.close()
+    return f"shown ({ov.renderer}{', software rendering' if ov.safe_gpu else ''}): listening view, card, screensaver"
 
 
 @check("Camera")
@@ -342,10 +346,11 @@ def t_3d(cfg, gui):
 
     box = trimesh.creation.box(extents=(40, 20, 10))
     need(abs(box.volume - 8000) < 1, "trimesh maths wrong")
-    import pyvista  # noqa: F401
-    import pyvistaqt  # noqa: F401
+    from batsy.viewer3d import pack
+
+    need(pack(box)[:4] == b"BMSH", "mesh packing broken")
     if not gui:
-        return "trimesh + PyVista present (open the viewer: --gui)"
+        return "trimesh present (open the viewer: --gui)"
     from batsy.model3d import Viewer3D, handle, parse  # noqa: F401
     from batsy.viewer3d import OUT
 
@@ -363,7 +368,8 @@ def t_3d(cfg, gui):
     need(abs(size[0] - 20) < 0.01, f"rotation didn't apply: {size}")
     time.sleep(2)
     v.send({"cmd": "close"})
-    v.proc.terminate()
+    if v.proc:
+        v.proc.terminate()
     stl.unlink()
     return "viewer: load, rotate, section, explode, screenshot OK"
 

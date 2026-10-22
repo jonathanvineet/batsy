@@ -42,14 +42,17 @@ Log out and back in once so the Arduino serial-port permission (`dialout` group)
 
 ## Full-screen mode
 
-When you say "Batsy", the screen fades to a dark Batsy view:
-- **While you talk,** a glowing orb follows your voice and your words appear live. This is local and uses no tokens.
-- **While it works,** the orb spins.
+When you say "Batsy", the screen fades to a dark Batsy view, drawn by the GPU (three.js inside Qt WebEngine):
+- **While you talk,** a glowing line ripples with your voice, particles gather into it, and your words appear live. This is local and uses no tokens.
+- **While it works,** a pulse sweeps along the line and the particles stream through it; a status pill says what it's doing ("Asking Claude · 12s").
+- **Saying just "Batsy"** gives a chime and the listening line, nothing spoken, so it never talks over you. Pause as long as you like (up to 8 s) before the request.
 - **When it answers,** the reply appears as big captions while it speaks.
 - **Pictures without special phrases.** Ask in any words: "what does a capybara look like", "who's the CEO of Nvidia", "how big is a blue whale", "I wanna see that bridge in Prague". Claude decides when a picture helps and adds a hidden `[[show: …]]` note to its reply. Batsy cuts the note out of the speech, finds one picture (Wikipedia, then Openverse) and puts it on screen while still talking. There's no extra request to Claude, and Claude never has to see the picture.
 - **Details** (lists, steps, numbers) appear on a text card, from a hidden `[[card: Title | text]]` note, instead of being read aloud.
 
 The overlay closes by itself a few seconds after the answer, or 30 seconds after showing a picture. Esc, Space or a click closes it straight away. Turn it off with `[overlay] enabled = false`. If GNOME keeps it behind other windows, set `qt_platform = "xcb"`.
+
+**It doesn't crash the assistant.** The overlay is its own process. If the graphics driver makes it crash, Batsy restarts it with software rendering, and after repeated failures it switches to the plain Qt overlay (`[overlay] renderer = "classic"` forces that). Batsy itself runs under a supervisor (`batsy run` restarts the worker if it ever dies, and notifies you if it keeps happening), the voice loop survives any failed request, and the microphone reopens itself after suspend or replugging. Crash details: `~/.local/share/batsy/crash.log`, `overlay.log`.
 
 ## Learns once, then does it instantly
 
@@ -70,7 +73,7 @@ The overlay closes by itself a few seconds after the answer, or 30 seconds after
 
 ## 3D models
 
-"Open this 3D model" / "show me the gear STL" opens the most recent model, or the one you named, in **Batsy 3D**. It's a dark viewer window with a floor grid, colour-coded dimension rulers drawn in 3D (X, Y, Z in mm) and a live size readout. It handles STL, OBJ, PLY, GLB/GLTF, 3MF and OFF, plus STEP if the extra converter installs.
+"Open this 3D model" / "show me the gear STL" opens the most recent model, or the one you named, in **Batsy 3D**, right inside the overlay (its own window if the overlay is off). It's a dark viewer with a floor grid, colour-coded dimension rulers drawn in 3D (X, Y, Z in mm) and a live size readout. It handles STL, OBJ, PLY, GLB/GLTF, 3MF and OFF, plus STEP if the extra converter installs.
 
 **Instant voice controls, no AI:**
 - **Rotate and view:** "rotate it 90 degrees around X" · "turn it right" · "flip it over" · "spin it" / "stop spinning" · "top / front / side / back / bottom / isometric view" · "zoom in/out" · "reset"

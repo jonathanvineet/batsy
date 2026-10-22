@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Batsy</title>
+<link rel="stylesheet" href="style.css">
+<script type="importmap">{"imports": {"three": "./vendor/three.module.min.js"}}</script>
+</head>
+<body>
+<canvas id="sky"></canvas>
+
+<main id="talk">
+  <div id="status" hidden><span class="ind"><i></i><i></i><i></i></span><span class="label"></span><span class="secs"></span></div>
+  <p id="heard"></p>
+  <p id="answer"></p>
+</main>
+
+<section id="stage">
+  <figure id="media" hidden><img id="pic" alt=""><figcaption></figcaption></figure>
+  <article id="card" hidden><h2></h2><div class="body"></div></article>
+  <div id="viewer" hidden>
+    <canvas></canvas>
+    <div class="labels"></div>
+    <div class="hud"><p class="lines"></p><p class="message"></p></div>
+    <p class="hint">Try “rotate it 90 degrees”, “top view”, “cut it in half”, “explode it” or “measure”</p>
+  </div>
+</section>
+
+<p id="subtitle"></p>
+
+<section id="saver" hidden>
+  <header class="clock"><time class="hm"></time><p class="date"></p></header>
+  <div class="grid"></div>
+  <p class="foot">Say “Batsy” any time</p>
+</section>
+
+<p id="esc">Esc to close</p>
+<script type="module" src="app.js"></script>
+</body>
+</html>

@@ -55,15 +55,14 @@ class Viewer3D:
         return self.is_open() and time.time() - self.last_used < 1800
 
     def _start(self) -> None:
-        if self.host is not None:
-            self.host()
-            for _ in range(200):  # VTK takes a few seconds to load the first time
+        if self.host is not None and self.host():
+            for _ in range(150):
                 try:
                     self.send({"cmd": "info"}, start=False)
                     return
                 except OSError:
                     time.sleep(0.1)
-            raise RuntimeError("the 3D viewer didn't start in the overlay")
+            log.warning("the 3D viewer didn't start in the overlay; opening its own window")
         log_f = open(DATA_DIR / "viewer3d.log", "ab")
         self.proc = subprocess.Popen([sys.executable, "-m", "batsy.viewer3d"], stdout=subprocess.PIPE,
                                      stderr=log_f, text=True, start_new_session=True)

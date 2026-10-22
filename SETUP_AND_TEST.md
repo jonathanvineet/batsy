@@ -2,7 +2,7 @@
 
 Work through this top to bottom. Tick each box as you go. Every test says **what to say or run**, **what should happen**, and **what to check if it doesn't**.
 
-> Logs, for when anything goes wrong: `~/.local/share/batsy/batsy.log` (what Batsy heard, said and ran), plus `viewer3d.log` and `camera.log` in the same folder. Start Batsy with `batsy -v` to see the log live in the terminal.
+> Logs, for when anything goes wrong: `~/.local/share/batsy/batsy.log` (what Batsy heard, said and ran), plus `overlay.log`, `crash.log`, `viewer3d.log` and `camera.log` in the same folder. Start Batsy with `batsy -v` to see the log live in the terminal.
 
 ---
 
@@ -23,7 +23,7 @@ Work through this top to bottom. Tick each box as you go. Every test says **what
   ```bash
   bash ~/Downloads/batsy-install.sh
   ```
-  **Expect:** it asks for your password once, then works through about 15 steps for 10–20 minutes (mostly downloads: the local AI is about 2 GB, the 3D libraries about 250 MB). It ends with a `batsy selftest` summary.
+  **Expect:** it asks for your password once, then works through about 15 steps for 10–20 minutes (mostly downloads: the local AI is about 2 GB, the 3D libraries about 100 MB). It ends with a `batsy selftest` summary.
   **If a step prints "(skipped …)" or "failed":** keep going. The self-test below shows exactly what's missing and how to fix it.
 
 - [ ] **Log out and back in.** This activates Arduino serial access and the `batsy` command in new terminals.
@@ -70,12 +70,14 @@ Work through this top to bottom. Tick each box as you go. Every test says **what
 Talk normally. Say **"Batsy"**, wait for the chime, then speak. Or say it all in one go: "Batsy, what time is it?"
 
 ### A. Voice basics
-- [ ] "Batsy" → chime → the full-screen overlay appears with a pulsing orb, and your words appear live as you speak.
+- [ ] "Batsy" → chime → the full-screen overlay appears: a glowing line that ripples with your voice, particles drifting into it, and your words appear live as you speak.
+- [ ] While it thinks, a pulse sweeps along the line and a status pill shows what it's doing with a seconds counter.
 - [ ] "Batsy, what time is it?" → the answer comes in about 1.5–2.5 s.
 - [ ] **Follow-up without the wake word:** right after an answer, say "and what's the date?" → it answers.
 - [ ] **Interrupt:** ask something long, then say "Batsy" while it talks → it stops and listens.
 - [ ] "Batsy, stop" → silence, overlay closes.
-- [ ] Say "Batsy" on its own and wait → "Yes?" → speak your request.
+- [ ] Say "Batsy" on its own → chime only (nothing spoken) → pause a second or two → speak your request → it answers. It must not talk over you.
+- [ ] "Batsy, ... open YouTube" with a pause in the middle → still one request (the pause after "Batsy" doesn't cut you off).
 - [ ] Talk normally near the laptop **without** "Batsy" → nothing happens. If it wakes by itself, remove `"patsy"` and `"bitsy"` from `wake_words` in `~/.config/batsy/config.toml`.
 
 ### B. Instant commands (no AI at all)
@@ -123,9 +125,14 @@ Talk normally. Say **"Batsy"**, wait for the chime, then speak. Or say it all in
 - [ ] **Natural requests:** "How big is a blue whale?" → the spoken answer also puts a picture on screen.
 - [ ] Esc, Space or a click closes the overlay.
 
+### Robustness (do these once)
+- [ ] `pkill -f batsy.overlay_web` while it's idle → the next "Batsy" brings the overlay back (`overlay.log` shows the restart).
+- [ ] `pkill -f "batsy run --worker"` → within a few seconds Batsy says "Batsy online." again (the supervisor restarted it).
+- [ ] Suspend the laptop, wake it, say "Batsy" → it still hears you (the log may show "microphone reopened").
+
 ### I. Camera (Lenovo webcam)
 - [ ] "Open the camera" → a "Batsy camera" window shows the live feed.
-- [ ] Hold up an object: "What am I holding?" → the border flashes pink and Claude describes it (about 8–15 s).
+- [ ] Hold up an object: "What am I holding?" → the frame flashes yellow and Claude describes it (about 8–15 s).
 - [ ] "Which component is this?" (hold an Arduino or resistor) → identified.
 - [ ] "Close the camera" → window closes.
 - [ ] Wrong camera? `batsy doctor` lists the cameras; set `[camera] device = N` in the config.
@@ -142,7 +149,7 @@ Talk normally. Say **"Batsy"**, wait for the chime, then speak. Or say it all in
 - [ ] Other jobs: "Turn the table in this PDF into a spreadsheet", "Redact my phone number in this document", "Crop this image to the face".
 
 ### L. 3D models
-- [ ] "Open this 3D model" (after opening or downloading an STL), or "Show me the gear STL" → the **Batsy 3D** window opens with rulers in mm, and the size is spoken.
+- [ ] "Open this 3D model" (after opening or downloading an STL), or "Show me the gear STL" → the model appears inside the overlay with yellow rulers in mm, and the size is spoken. Drag to orbit, scroll to zoom.
 - [ ] "Rotate it 90 degrees around X" · "Top view" · "Zoom in" · "Spin it" · "Stop spinning"
 - [ ] "How tall is it?" · "How much will it weigh in PETG?" · "Is it watertight?"
 - [ ] "Make it 50 mm tall" → the rulers update.
@@ -243,7 +250,9 @@ Talk normally. Say **"Batsy"**, wait for the chime, then speak. Or say it all in
 | "My local brain isn't running" | `sudo systemctl restart ollama`, then `ollama list` |
 | Claude never used | `claude` (log in again); `batsy selftest --claude`; "how much Claude have I used?" (budget reached?) |
 | Overlay stays behind windows | `[overlay] qt_platform = "xcb"` |
-| 3D viewer won't open | `~/.local/share/batsy/viewer3d.log` |
+| Overlay black, flickers or keeps restarting | `overlay.log`; it falls back by itself, or set `[overlay] renderer = "classic"` |
+| Batsy restarted by itself | `crash.log` and the end of `batsy.log` (send me both) |
+| 3D viewer won't open | `overlay.log` (inside the overlay) or `viewer3d.log` (own window) |
 | Camera busy or black | close other camera apps; `[camera] device = N` |
 | Spotify "can't see the iPad" | tap Spotify on the iPad; Premium needed |
 | Arduino upload denied | log out and back in (dialout group), then replug the board |
