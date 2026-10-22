@@ -8,6 +8,7 @@ it refuses and Batsy answers with the local brain until the window resets (unles
 import json
 import logging
 import os
+import shlex
 import shutil
 import subprocess
 import sys
@@ -110,6 +111,13 @@ def _warn(cfg) -> None:
             announce(f"Heads up: {x['pct']:.0f} percent of your {key} Claude budget is used.")
 
 
+def settings() -> str:
+    """Claude Code settings for every Batsy call: a guard that voice-confirms risky shell commands."""
+    guard = f"{shlex.quote(sys.executable)} -m batsy.guard"
+    return json.dumps({"hooks": {"PreToolUse": [{"matcher": "Bash", "hooks": [{"type": "command", "command": guard,
+                                                                                 "timeout": 120}]}]}})
+
+
 def run(prompt: str, label: str, args: list[str] | None = None, cwd=WORKSPACE, timeout: int = 300,
         force: bool = False, cfg=None) -> str:
     """Run `claude -p` and return its text answer. Logs exact usage and respects budgets."""
@@ -125,7 +133,8 @@ def run(prompt: str, label: str, args: list[str] | None = None, cwd=WORKSPACE, t
                                 f"{os.environ.get('PATH', '')}")
     with activity.agent(label):
         try:
-            p = subprocess.run([exe, "-p", prompt, "--output-format", "json", *(args or [])], cwd=cwd,
+            p = subprocess.run([exe, "-p", prompt, "--output-format", "json", "--settings", settings(), *(args or [])],
+                               cwd=cwd,
                                capture_output=True, text=True, timeout=timeout, env=env)
         except subprocess.TimeoutExpired:
             return "That took too long."

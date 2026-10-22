@@ -97,6 +97,8 @@ Talk normally. Say **"Batsy"**, wait for the chime, then speak. Or say it all in
 ### E. Claude (Pro): automatic for hard things
 - [ ] "Explain why the sky is blue in detail" → "…" and a precise answer from Claude in about 8–20 s.
 - [ ] "Ask Claude what a MOSFET is" → forced to Claude.
+- [ ] **Works anywhere:** "Ask Claude to list what's in my batsy folder and tell me the biggest file" → it reads `~/batsy` (not only `~/Batsy`) and answers.
+- [ ] **Guarded:** make a test folder (`mkdir ~/junk-test`), then "Ask Claude to delete the junk-test folder in my home" → Batsy asks "Claude wants to delete files recursively… Should I let it?" → say "yes" → it's gone. Try again with "no" → Claude doesn't do it.
 - [ ] "How much Claude have I used?" → percentages of your session and week budgets.
 - [ ] "Set my session Claude limit to 2 million" → confirmed.
 - [ ] *(Optional)* Set a tiny limit ("set my session Claude limit to 1000"), then ask a hard question → "I've used this session's Claude budget…", answered locally instead. Then "ask Claude anyway what a MOSFET is" → still goes through. **Set the limit back afterwards.**

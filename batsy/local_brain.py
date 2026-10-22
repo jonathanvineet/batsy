@@ -272,6 +272,14 @@ class LocalBrain:
 
         from batsy import model3d
 
+        explicit = ASK_CLAUDE.match(text.strip(" .!?"))
+        if explicit and self._claude_installed:  # "ask Claude to ...": straight to Claude Code, nothing local
+            request = re.sub(r"\banyway\b", "", explicit.group(1), flags=re.I).strip()
+            emit("Asking Claude.")
+            self._claude(request, context, emit, on_marker, on_tool, actions,
+                         force=bool(re.search(r"\banyway\b", text, re.I)))  # "anyway" ignores Batsy's budget
+            return self._finish(source, text, spoken, actions, abort)
+
         if self.claude_ok and re.search(r"\bscreen ?saver\b", text.lower()):
             emit("Let me redesign that.")
             from batsy import claude_code
@@ -475,13 +483,13 @@ class LocalBrain:
         self._claude(f"{question}\n\n(Read the image at {img}: it's the user's {'screen' if source == 'screen' else 'webcam, showing them and what they hold'} right now.)",
                      context, emit, on_marker, on_tool, actions)
 
-    def _claude(self, request, context, emit, on_marker, on_tool, actions) -> None:
+    def _claude(self, request, context, emit, on_marker, on_tool, actions, force: bool = False) -> None:
         """Answer with Claude Code on the user's Pro plan; its reply goes straight to speech and screen."""
         if on_tool:
             on_tool("ask_claude")
         log.info("routing to Claude: %s", request[:120])
         self.status("Asking Claude" if "(Read the image" not in request else "Asking Claude about what I see")
-        answer = ask_claude(request, context)
+        answer = ask_claude(request, context, force=force)
         chunker = SpeechChunker(emit, on_marker)
         chunker.feed(answer)
         chunker.flush()
@@ -492,8 +500,11 @@ class LocalBrain:
             self.memory.new_session()
 
 
+ASK_CLAUDE = re.compile(r"(?:hey |ok )?ask (?:claude|cloud|clawed|claud)(?: to| about| if| whether)?[,\s]+(.+)", re.I | re.S)
 CLAUDE_BRIEF = """You are the expert brain behind Batsy, a voice assistant on the user's Fedora laptop. Your reply is \
-spoken aloud. Answer exactly what was asked and stop: usually one short sentence, two at most, unless they \
+spoken aloud. You can work anywhere on this laptop: read, edit and create files in any folder (use absolute paths; \
+home is {home}, Batsy's own code is {code}) and run any command. Risky commands are confirmed with the user by voice \
+automatically; for root use pkexec, never sudo. When asked to do something, do it fully, then say briefly what you did. Answer exactly what was asked and stop: usually one short sentence, two at most, unless they \
 ask for detail, an explanation or steps. No extra facts, background, tips or follow-up offers they didn't ask \
 for ("what is this?" -> "That's a red banana."). No markdown or lists in the spoken part. Be precise and correct.
 Only when they ask to see something, or for steps/lists/code, add a screen marker (not spoken): [[show: exact \
@@ -581,10 +592,16 @@ def ask_claude_3d(request: str, context: str = "", timeout: int = 900) -> str:
         "--allowedTools", f"Read,Write,Edit,Glob,Grep,Bash(batsy 3d:*),Bash({sys.executable}:*)"])[:3000]
 
 
-def ask_claude(prompt: str, context: str = "", timeout: int = 240, force: bool = False) -> str:
-    """One request to Claude Code (the official CLI, on the user's Pro plan)."""
+def ask_claude(prompt: str, context: str = "", timeout: int = 900, force: bool = False) -> str:
+    """One request to Claude Code (the official CLI, on the user's Pro plan). It may work anywhere on the laptop:
+    the whole filesystem, any command (risky ones voice-confirmed by batsy.guard), and the web."""
+    from pathlib import Path
+
     from batsy import claude_code
 
-    full = CLAUDE_BRIEF.format(workspace=WORKSPACE, context=context, request=prompt)
-    return claude_code.run(full, "ask: " + prompt[:40], cwd=WORKSPACE, timeout=timeout, force=force, args=[
-        "--permission-mode", "acceptEdits", "--allowedTools", "Read,Write,Edit,Glob,Grep,Bash(arduino-cli:*)"])[:1500]
+    home = Path.home()
+    full = CLAUDE_BRIEF.format(workspace=WORKSPACE, context=context, request=prompt, home=home,
+                               code=Path(__file__).resolve().parent.parent)
+    return claude_code.run(full, "ask: " + prompt[:40], cwd=home, timeout=timeout, force=force, args=[
+        "--permission-mode", "acceptEdits", "--add-dir", "/",
+        "--allowedTools", "Read,Write,Edit,MultiEdit,Glob,Grep,Bash,WebSearch,WebFetch,TodoWrite"])[:1500]

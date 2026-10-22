@@ -534,16 +534,8 @@ class Batsy:
         if hit:
             self._run_skill(hit[0], hit[1], text)
             return True
-        m = re.match(r"(?:hey |ok )?ask (?:claude|cloud|clawed|claud)(?: to| about| if| whether)?[,\s]+(.+)", text.strip(" .!?"), re.I)
-        if m:  # the only path that touches the Pro plan: explicit, one request
-            from batsy.local_brain import ask_claude
-
-            self._reply("Asking Claude.")
-            force = bool(re.search(r"\banyway\b", text, re.I))  # "ask Claude anyway" ignores Batsy's budget
-            answer = ask_claude(re.sub(r"\banyway\b", "", m.group(1), flags=re.I).strip(), force=force)
-            self.brain.memory.add_exchange("claude", text, answer, ["asked Claude Code"])
-            self._reply(answer)
-            return True
+        if re.match(r"(?:hey |ok )?ask (?:claude|cloud|clawed|claud)\b", text.strip(" .!?"), re.I):
+            return False  # a full turn (status on screen, barge-in, voice confirmations), not a local command
         if n in RESET_PHRASES:
             self.brain.reset()
             self._reply("Fresh start. I still remember the long-term stuff.")
@@ -871,6 +863,13 @@ class ControlServer(threading.Thread):
                 send({"confirm": question})
                 return safety.is_yes(f.readline())
 
+            if "confirm_only" in req:  # batsy.guard: Claude Code wants to run something risky
+                yes = False
+                try:
+                    yes = self.app._confirm(str(req["confirm_only"]))
+                finally:
+                    send({"yes": bool(yes)})
+                return
             text = req.get("text", "").strip()
             try:
                 if text and not self.app.local_command(text):
