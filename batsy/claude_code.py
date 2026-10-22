@@ -118,9 +118,43 @@ def settings() -> str:
                                                                                  "timeout": 120}]}]}})
 
 
+def _stream(exe, prompt, args, cwd, timeout, env, on_text) -> dict | str:
+    """Stream-json mode: text deltas go to on_text as they arrive; returns the final result object."""
+    proc = subprocess.Popen([exe, "-p", prompt, "--output-format", "stream-json", "--verbose",
+                             "--include-partial-messages", "--settings", settings(), *(args or [])], cwd=cwd, env=env,
+                            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    killer = threading.Timer(timeout, proc.kill)
+    killer.start()
+    result, turn_text = None, False
+    try:
+        for line in proc.stdout:
+            try:
+                ev = json.loads(line)
+            except ValueError:
+                continue
+            if ev.get("type") == "stream_event":
+                e = ev.get("event", {})
+                if e.get("type") == "content_block_delta" and e.get("delta", {}).get("type") == "text_delta":
+                    on_text(e["delta"]["text"])
+                    turn_text = True
+                elif e.get("type") == "message_stop" and turn_text:
+                    on_text("\n")  # end of a turn: let a sentence without a full stop be spoken
+                    turn_text = False
+            elif ev.get("type") == "result":
+                result = ev
+        proc.wait()
+    finally:
+        killer.cancel()
+    if result is None:
+        return "That took too long." if proc.returncode in (-9, 137) else \
+            (proc.stderr.read().strip()[-300:] or "Claude didn't answer.")
+    return result
+
+
 def run(prompt: str, label: str, args: list[str] | None = None, cwd=WORKSPACE, timeout: int = 300,
-        force: bool = False, cfg=None) -> str:
-    """Run `claude -p` and return its text answer. Logs exact usage and respects budgets."""
+        force: bool = False, cfg=None, on_text=None) -> str:
+    """Run `claude -p` and return its text answer. Logs exact usage and respects budgets.
+    on_text(chunk) gets the answer as Claude writes it, so Batsy can start speaking at the first sentence."""
     cfg = cfg or CFG
     exe = shutil.which("claude")
     if not exe:
@@ -132,16 +166,21 @@ def run(prompt: str, label: str, args: list[str] | None = None, cwd=WORKSPACE, t
     env = dict(os.environ, PATH=f"{os.path.dirname(sys.executable)}:{os.path.expanduser('~/.local/bin')}:"
                                 f"{os.environ.get('PATH', '')}")
     with activity.agent(label):
-        try:
-            p = subprocess.run([exe, "-p", prompt, "--output-format", "json", "--settings", settings(), *(args or [])],
-                               cwd=cwd,
-                               capture_output=True, text=True, timeout=timeout, env=env)
-        except subprocess.TimeoutExpired:
-            return "That took too long."
-    try:
-        data = json.loads(p.stdout)
-    except ValueError:
-        return (p.stdout.strip() or p.stderr.strip() or "Claude didn't answer.")[:3000]
+        if on_text is not None:
+            data = _stream(exe, prompt, args, cwd, timeout, env, on_text)
+            if isinstance(data, str):
+                return data
+        else:
+            try:
+                p = subprocess.run([exe, "-p", prompt, "--output-format", "json", "--settings", settings(), *(args or [])],
+                                   cwd=cwd,
+                                   capture_output=True, text=True, timeout=timeout, env=env)
+            except subprocess.TimeoutExpired:
+                return "That took too long."
+            try:
+                data = json.loads(p.stdout)
+            except ValueError:
+                return (p.stdout.strip() or p.stderr.strip() or "Claude didn't answer.")[:3000]
     u = data.get("usage") or {}
     row = {"t": int(time.time()), "model": "claude-code", "label": label,
            "in": int(u.get("input_tokens", 0)), "out": int(u.get("output_tokens", 0)),

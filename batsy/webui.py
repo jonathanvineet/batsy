@@ -131,7 +131,7 @@ class Web:
             profile.installUrlSchemeHandler(SCHEME, QWebEngineProfile._batsy_handler)
         self.view = QWebEngineView(parent)
         self.page = Page(profile, self.view)
-        self.page.setBackgroundColor(QColor(6, 7, 10))
+        self.page.setBackgroundColor(QColor(0, 0, 0, 0))  # see-through: the overlay reveals itself over the desktop
         self.view.setPage(self.page)
         st = self.page.settings()
         for attr, on in ((QWebEngineSettings.WebAttribute.WebGLEnabled, True),

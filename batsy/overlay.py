@@ -36,6 +36,13 @@ class Overlay:
         self.last_active = 0.0  # last time Batsy used the overlay for a conversation
         self.on_saver_exit = None
         self.on_viewer_event = None  # 3D viewer hosted in the overlay: click-to-measure etc.
+        # The standby bat in the top-right corner (batsy/dock.py) while the overlay is closed.
+        self.on_dock_open = None  # the bat or its bubble was clicked
+        self.dock: subprocess.Popen | None = None
+        self.dock_lock = threading.Lock()
+        self.dock_deaths: list[float] = []
+        self.origin: dict | None = None
+        self.convo = {"text": "", "image": None, "title": "", "fresh": False}  # what the bubble will show
         want = cfg.get("overlay.renderer") or "auto"
         self.renderer = "web" if want in ("auto", "web") and _has_webengine() else "classic"
         self.safe_gpu = False
@@ -43,6 +50,8 @@ class Overlay:
         self.next_start = 0.0
         if self.enabled:
             self._start()
+            if cfg.get("overlay.dock") and os.environ.get("DISPLAY"):
+                self._start_dock()
 
     @property
     def hosts_3d(self) -> bool:
@@ -74,6 +83,9 @@ class Overlay:
             self.enabled = False
             return
         log.info("overlay started (%s%s)", self.renderer, ", software rendering" if self.safe_gpu else "")
+        if self.origin:  # a restarted overlay still needs to know where the bat is
+            self.proc.stdin.write(json.dumps({"cmd": "origin", **self.origin}) + "\n")
+            self.proc.stdin.flush()
         threading.Thread(target=self._events, args=(self.proc,), daemon=True, name="overlay-events").start()
 
     def _events(self, proc) -> None:
@@ -89,6 +101,10 @@ class Overlay:
                     self.on_saver_exit()
                 elif ev.get("event") == "measured" and self.on_viewer_event:
                     self.on_viewer_event(ev)
+                elif ev.get("event") == "shown":
+                    self._dock_send("away")  # the overlay is growing out of the bat
+                elif ev.get("event") == "hidden":
+                    self._rest()
             except Exception:
                 log.exception("overlay event %s", ev)
         code = proc.wait()
@@ -107,9 +123,80 @@ class Overlay:
             log.warning("web overlay keeps failing; using the classic overlay")
         self.next_start = now + min(30, 2 ** len(self.deaths))
 
+    # --- the standby bat ----------------------------------------------------------------------------------
+    def _start_dock(self) -> None:
+        env = dict(os.environ, QT_QPA_PLATFORM="xcb")  # XWayland: may sit in a corner and stay on top
+        try:
+            err = open(DATA_DIR / "dock.log", "ab")
+            self.dock = subprocess.Popen([sys.executable, "-m", "batsy.dock"], stdin=subprocess.PIPE,
+                                         stdout=subprocess.PIPE, stderr=err, text=True, bufsize=1, env=env,
+                                         start_new_session=True)
+            err.close()
+        except OSError as e:
+            log.warning("standby bat unavailable: %s", e)
+            return
+        threading.Thread(target=self._dock_events, args=(self.dock,), daemon=True, name="dock-events").start()
+        self._dock_send("standby")
+
+    def _dock_events(self, proc) -> None:
+        from urllib.parse import quote
+
+        for line in proc.stdout:
+            try:
+                ev = json.loads(line)
+            except ValueError:
+                continue
+            if ev.get("event") == "origin":
+                logo = DATA_DIR / "assets" / "bat.svg"
+                self.origin = {"x": ev["x"], "y": ev["y"], "logo": "batsy://file" + quote(str(logo)) if logo.exists() else ""}
+                self.send("origin", **self.origin)
+            elif ev.get("event") == "open" and self.on_dock_open:
+                try:
+                    self.on_dock_open()
+                except Exception:
+                    log.exception("dock open")
+        if proc is self.dock and proc.wait() not in (0, None):
+            now = time.time()
+            self.dock_deaths = [t for t in self.dock_deaths if now - t < 300] + [now]
+            if len(self.dock_deaths) < 4:
+                log.warning("standby bat exited; restarting (see dock.log)")
+                self._start_dock()
+
+    def _dock_send(self, cmd: str, **kw) -> None:
+        with self.dock_lock:
+            if self.dock is None or self.dock.poll() is not None:
+                return
+            try:
+                self.dock.stdin.write(json.dumps({"cmd": cmd, **kw}) + "\n")
+                self.dock.stdin.flush()
+            except (BrokenPipeError, OSError):
+                self.dock = None
+
+    def _rest(self) -> None:
+        """The overlay closed: the bat comes back, with this conversation's answer (or picture) in a bubble."""
+        c = self.convo
+        if c["fresh"] and (c["text"] or c["image"] or c["title"]):
+            self._dock_send("rest", text=c["text"], image=c["image"], title=c["title"])
+            c["fresh"] = False  # shown once; a later screensaver exit just brings back the bat
+        else:
+            self._dock_send("standby")
+
+    def _track(self, cmd: str, kw: dict) -> None:
+        c = self.convo
+        if cmd == "listen" and kw.get("fresh"):
+            c.update(text="", image=None, title="", fresh=False)
+        elif cmd == "say":
+            c["text"] = (c["text"] + " " + kw.get("text", "")).strip()[-600:]
+            c["fresh"] = True
+        elif cmd == "image":
+            c["image"], c["fresh"] = kw.get("path"), True
+        elif cmd == "card":
+            c["title"], c["fresh"] = kw.get("title", ""), True
+
     def send(self, cmd: str, **kw) -> None:
         if not self.enabled:
             return
+        self._track(cmd, kw)
         if cmd != "saver":
             self.last_active = time.time()
         with self.lock:
@@ -127,11 +214,15 @@ class Overlay:
                 self.proc = None
 
     def close(self) -> None:
-        """Stop the overlay on purpose (not counted as a crash)."""
+        """Stop the overlay (and the standby bat) on purpose (not counted as a crash)."""
         with self.lock:
             proc, self.proc = self.proc, None
         if proc and proc.poll() is None:
             proc.terminate()
+        with self.dock_lock:
+            dock, self.dock = self.dock, None
+        if dock and dock.poll() is None:
+            dock.terminate()
 
     # --- conveniences -----------------------------------------------------
     def listen(self, fresh: bool = False) -> None:

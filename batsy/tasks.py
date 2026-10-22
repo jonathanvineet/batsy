@@ -294,7 +294,10 @@ class TaskTalk:
         sched, phrase = parse_schedule(n)
         m = ADD.match(n)
         short_item = phrase and 0 < n.find(phrase) and len(n.split()) <= 10  # "gym monday and friday at 6"
-        if sched and not QUESTION.match(n) and (m or re.search(r"\b(i|we)\b", n) or short_item):
+        # Needs a real request: "add / remind me to ...", or a short "I ... every Monday". A long ramble that
+        # happens to say "daily" is someone talking, not a task.
+        if sched and not QUESTION.match(n) and (m or (re.search(r"\b(i|we)\b", n) and len(n.split()) <= 14)
+                                                or short_item):
             if True:
                 body = (m.group(2) if m and m.group(2) else n)
                 body = re.sub(re.escape(phrase), " ", body).strip(" ,") if phrase else body
@@ -307,7 +310,7 @@ class TaskTalk:
                 title = re.sub(r"^(my|the|a|an|to)\s+", "", title)
                 kind = m.group(1) if m and m.group(1) in ("chore", "project", "habit") else \
                     "project" if PROJECT_WORDS.search(n) else "chore" if CHORE_WORDS.search(n) else "habit"
-                if not title:
+                if not title or len(title.split()) > 8:
                     return False
                 s.add(title, kind, sched)
                 self.app._reply(f"Got it. I'll keep track of {title} {describe(sched)} and check in with you.")

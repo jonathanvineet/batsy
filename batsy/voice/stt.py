@@ -72,7 +72,7 @@ class Transcriber:
         return dict(decoding_method="modified_beam_search", hotwords_file=str(hot),
                     hotwords_score=cfg.get("voice.hotwords_score"), modeling_unit="bpe", bpe_vocab=str(vocab))
 
-    def transcribe(self, audio: np.ndarray) -> str:
+    def transcribe(self, audio: np.ndarray, quiet: bool = False) -> str:
         if audio is None or audio.size == 0:
             return ""
         if self.engine == "parakeet":
@@ -92,5 +92,6 @@ class Transcriber:
             rec = KaldiRecognizer(self.vosk_model, 16000)
             rec.AcceptWaveform(audio.tobytes())
             text = json.loads(rec.FinalResult()).get("text", "")
-        log.info("heard: %s", text)
+        if not quiet:
+            log.info("heard: %s", text)
         return text

@@ -18,10 +18,16 @@
 }
 
 * { box-sizing: border-box; margin: 0; padding: 0; }
-html, body { width: 100%; height: 100%; overflow: hidden; background: var(--night); color: var(--bone);
+html { background: transparent; }  /* the window is see-through: the page grows out of the corner bat */
+html, body { width: 100%; height: 100%; overflow: hidden; color: var(--bone);
   font-family: var(--body); -webkit-font-smoothing: antialiased; cursor: default; user-select: none; }
-body { opacity: 0; transition: opacity 220ms ease-out; }
+body { background: transparent; opacity: 0; transition: opacity 220ms ease-out; }
+#world { position: fixed; inset: 0; background: var(--night); }  /* revealed as a circle growing from the bat */
 body.on { opacity: 1; }
+/* standby bat: where the dock's bat sits (--ox, --oy) and its logo (--logo), set by app.js */
+#flybat { position: fixed; left: 0; top: 0; width: 46px; height: 21px; z-index: 50; pointer-events: none; opacity: 0;
+  background: var(--signal); -webkit-mask: var(--logo) center / contain no-repeat; mask: var(--logo) center / contain no-repeat;
+  filter: drop-shadow(0 0 14px rgba(255, 194, 14, .55)); will-change: transform, opacity; }
 body.saver { cursor: none; }
 [hidden] { display: none !important; }
 

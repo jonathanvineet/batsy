@@ -200,6 +200,24 @@ class SkillBook:
                 if st and st["disabled"]:
                     continue
                 return name, {k: v.strip() for k, v in m.groupdict().items()}
+        return self._near(n)
+
+    def _near(self, n: str) -> tuple[str, dict] | None:
+        """No exact phrasing matched: a close variation of a fixed phrasing (no {slots}) still counts, so
+        "whats the weather gonna be tomorrow" finds "what will the weather be tomorrow"."""
+        import difflib
+
+        best, best_name = 0.0, None
+        for _, name, template in self.index:
+            if "{" in template:
+                continue
+            score = difflib.SequenceMatcher(None, n, norm_template(template)).ratio()
+            if score > best:
+                best, best_name = score, name
+        if best >= 0.86:
+            st = self.stats(best_name)
+            if not (st and st["disabled"]):
+                return best_name, {}
         return None
 
     # --- running -----------------------------------------------------------

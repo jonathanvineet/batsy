@@ -4,6 +4,7 @@ Same JSON-lines protocol on stdin as the classic painter overlay (batsy/overlay_
 either. This process owns the window (show/hide, linger timers, the live camera feed) and hosts the 3D viewer's
 scene; everything visual happens in the page. Events go out on stdout:
   {"event": "dismissed"} {"event": "saver_exit"} {"event": "measured", "mm"}
+  {"event": "shown"} {"event": "hidden"}  (every time the window really appears / goes, whatever the reason)
 Exit code 3 means the GPU renderer kept crashing: the daemon restarts us with software rendering.
 """
 import json
@@ -37,7 +38,11 @@ class Shell(QWidget):
         super().__init__()
         self.setWindowTitle("Batsy")
         self.setWindowFlags(Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint)
-        self.setStyleSheet("background: #06070a;")
+        self.setAttribute(Qt.WA_TranslucentBackground)  # the page grows out of the corner bat over your desktop
+        self.origin: dict | None = None  # where the standby bat sits on screen (from the dock)
+        self.collapsing = False
+        self.collapse_notify = False
+        self.collapse_timer = QTimer(self, singleShot=True, interval=1200, timeout=self._finish_dismiss)
         self.web = webui.Web("index.html", self._ui_event, self)
         self.web.on_reload = self._replay
         lay = QVBoxLayout(self)
@@ -56,6 +61,10 @@ class Shell(QWidget):
     # --- commands from the daemon ---------------------------------------------------------------------------
     def handle(self, m: dict) -> None:
         cmd = m.get("cmd")
+        if cmd == "origin":
+            self.origin = {k: m.get(k) for k in ("x", "y", "logo")}
+            self.web.send({"cmd": "origin", **self.origin})
+            return
         if cmd == "saver":
             first = not self.saver
             self.saver = True
@@ -120,6 +129,8 @@ class Shell(QWidget):
         if self.camera_path:
             self.web.send({"cmd": "camera", "on": True})
             self.camera_mtime = 0.0
+        if self.origin:
+            self.web.send({"cmd": "origin", **self.origin})
         if self.isVisible():
             self.web.send({"cmd": "appear"})
 
@@ -131,18 +142,41 @@ class Shell(QWidget):
 
     # --- window -------------------------------------------------------------------------------------------
     def _appear(self) -> None:
+        if self.collapsing:  # asked to show while closing: open straight back up
+            self.collapse_timer.stop()
+            self.collapsing = False
+            self.web.send({"cmd": "appear"})
+            return
         if not self.isVisible():
             self.web.send({"cmd": "appear"})
             self.showFullScreen()
             self.raise_()
             self.activateWindow()
             self.web.view.setFocus()
+            emit({"event": "shown"})
 
     def _dismiss(self, notify: bool = True) -> None:
-        was_saver, self.saver = self.saver, False
+        """Fold back into the corner bat (the page animates; we hide when it says it's done, or after 1.2 s)."""
         self.hide_timer.stop()
+        if not self.isVisible():
+            return
+        self.collapse_notify = self.collapse_notify or notify
+        if self.collapsing:
+            return
+        self.collapsing = True
+        self.web.send({"cmd": "collapse"})
+        self.collapse_timer.start()
+
+    def _finish_dismiss(self) -> None:
+        if not self.collapsing:
+            return
+        self.collapsing = False
+        self.collapse_timer.stop()
+        was_saver, self.saver = self.saver, False
+        notify, self.collapse_notify = self.collapse_notify, False
         self.web.send({"cmd": "hidden"})
         self.hide()
+        emit({"event": "hidden"})
         if notify:
             emit({"event": "saver_exit" if was_saver else "dismissed"})
 
@@ -150,6 +184,8 @@ class Shell(QWidget):
         kind = ev.get("event")
         if kind in ("dismiss", "saver_exit"):
             self._dismiss(notify=True)
+        elif kind == "collapsed":
+            self._finish_dismiss()
         elif kind == "measured":
             if self.scene is not None:
                 threading.Thread(target=self.scene.measured, args=(ev.get("mm", 0),), daemon=True).start()

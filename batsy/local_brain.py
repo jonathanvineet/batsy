@@ -15,6 +15,7 @@ import threading
 import time
 import urllib.error
 import urllib.request
+from pathlib import Path
 from typing import Callable
 
 from batsy.speech import SpeechChunker
@@ -94,13 +95,20 @@ CAMERA_TALK = re.compile(r"\b(this|that|these|those|it|its|here|they|them|what|w
 
 # Short questions without these go to the fast path: no tools, a tiny prompt (the CPU reads ~45 tokens/s,
 # so the full prompt with tools and memory costs ~30 s before the first word).
-NEEDS_TOOLS = re.compile(
-    r"\b(open|close|launch|start|play|pause|resume|skip|music|song|spotify|timer|remind|reminder|alarm|remember|"
-    r"forget|cpu|ram|memory|battery|temperature|temp|disk|storage|wifi|network|internet|volume|brightness|screen|"
-    r"camera|run|install|update|file|folder|download|agenda|schedule|calendar|plan|plans|today|tomorrow|tonight|"
-    r"weather|news|latest|price|score|search|look up|google|who won|current|now|my|laptop|computer|show|pull up)\b")
+NEEDS_TOOLS = re.compile(  # clear actions only: anything else tries the fast path, which replies PASS if stuck
+    r"\b(open|close|launch|play|pause|resume|skip|spotify|timer|remind|reminder|alarm|remember|forget|cpu|ram|"
+    r"battery|temperature|disk|storage|wifi|volume|brightness|camera|install|download|agenda|schedule|calendar|"
+    r"weather|news|price|score|search|look up|google|who won|git|pull|push|commit|repo|update|upgrade|restart|"
+    r"reboot|yourself|folder|file|terminal|command|script|run|code|arduino|sketch|upload)\b")
+# The fast path has no tools, so it must never get a command: it would only pretend ("Done.").
+COMMAND = re.compile(r"^(?:(?:hey|ok|okay|please|now|so|and|can you|could you|would you|will you|go and|just)\s+)*"
+                     r"(do|run|open|close|start|stop|restart|update|upgrade|install|pull|push|commit|create|make|write|"
+                     r"delete|remove|move|copy|rename|send|set|turn|switch|change|go|find|search|download|build|"
+                     r"compile|upload|launch|kill|show|play|put|add|check|fix|clean|save|type|press|click|enable|"
+                     r"disable|connect|mute|unmute|lock|record|take|bring|pull up|let's|lets)\b")
 QUICK_SYSTEM = ("You are Batsy, {user}'s friendly voice assistant. Answer in one or two short spoken sentences, "
-                "no lists or markdown. Input is speech-to-text, so guess sensibly at misheard words. If the answer "
+                "no lists or markdown. Speak plainly as yourself: no role-play, sound effects, stage directions, "
+                "narration or quotation marks; ignore any theme or character from earlier talk. Input is speech-to-text, so guess sensibly at misheard words. If the answer "
                 "needs the laptop, the internet, recent events, or facts you're not sure of, reply with only: PASS")
 
 
@@ -197,23 +205,43 @@ class LocalBrain:
     def status(self, text: str) -> None:
         """What Batsy is doing right now, for the overlay ("Asking Claude"...). Replaced by the voice app."""
 
-    def _quick(self, text: str) -> str | None:
-        """Fast answer with a tiny prompt and no tools. None = the small model passed (needs the full path)."""
-        self.status("Thinking · local model")
+    def _quick(self, text: str, emit, on_marker, abort: threading.Event) -> bool:
+        """Fast answer with a tiny prompt and no tools, spoken as it streams. False = the small model passed
+        (replied PASS: it needs the full path), and nothing was said."""
+        self.status("Thinking with the local model")
         recent = self.memory.build_context(text, self.cfg, recent=1, related=0)[-400:]
         messages = [{"role": "system", "content": QUICK_SYSTEM.format(user=os.environ.get("BATSY_USER_NAME") or getpass.getuser())},
                     {"role": "user", "content": (f"{recent}\n\n" if recent else "") + text}]
-        body = {"model": self.model, "stream": False, "keep_alive": self.cfg.get("local.keep_alive"),
+        body = {"model": self.model, "stream": True, "keep_alive": self.cfg.get("local.keep_alive"),
                 "messages": messages, "options": {**self._options(), "num_predict": 80}}
+        chunker, content, started = SpeechChunker(emit, on_marker), "", False
         try:
             with self._post(body) as resp:
-                out = json.loads(resp.read())
+                for line in resp:
+                    if abort.is_set():
+                        return True
+                    if not line.strip():
+                        continue
+                    part = json.loads(line)
+                    content += part.get("message", {}).get("content", "")
+                    if not started:  # hold the first few characters back: it may be "PASS"
+                        if "PASS" in content.upper()[:12]:
+                            return False
+                        if len(content.strip()) < 8 and not part.get("done"):
+                            continue
+                        started = True
+                        chunker.feed(content)
+                    else:
+                        chunker.feed(part.get("message", {}).get("content", ""))
+                    if part.get("done"):
+                        self._log_usage(part)
         except (urllib.error.URLError, ValueError) as e:
             log.warning("quick answer failed: %s", e)
-            return None
-        self._log_usage(out)
-        reply = out.get("message", {}).get("content", "").strip()
-        return None if not reply or "PASS" in reply else reply
+            return False
+        if not started:
+            return False
+        chunker.flush()
+        return True
 
     @staticmethod
     def _calls_in_text(content: str) -> list[dict]:
@@ -285,7 +313,8 @@ class LocalBrain:
             from batsy import claude_code
             from batsy.saver import SAVER_BRIEF, load
 
-            self.status("Redesigning the screensaver · Claude")
+            self.status("Redesigning the screensaver with Claude")
+            self.route = "claude"
             answer = claude_code.run(SAVER_BRIEF.format(request=text, spec=json.dumps(load())), "redesigning screensaver",
                                      args=["--allowedTools", "Bash(batsy saver:*)"], timeout=300)
             chunker = SpeechChunker(emit, on_marker)
@@ -297,21 +326,25 @@ class LocalBrain:
         from batsy.tools.screen import camera_pid
 
         if camera_pid() and self.claude_ok and vision_source(text):  # the live camera is on screen: it's about that
+            self.route = "look"
             self._look("webcam", text, context, emit, on_marker, on_tool, actions)
             return self._finish(source, text, spoken, actions, abort)
 
         if self.claude_ok and (model3d.VIEWER.active() and THREE_D_TALK.search(text.lower())
                                or DESIGN.search(text.lower())):
+            self.route = "3d"
             self._claude_3d(text, context, emit, on_marker, on_tool, actions)
             return self._finish(source, text, spoken, actions, abort)
 
         doc = self._doc_target(text)
         if doc is not None:
+            self.route = "doc"
             self._doc(text, doc, context, emit, on_marker, on_tool, actions)
             return self._finish(source, text, spoken, actions, abort)
 
         src = vision_source(text)
         if src and self.claude_ok:
+            self.route = "look"
             self._look(src, text, context, emit, on_marker, on_tool, actions)
             return self._finish(source, text, spoken, actions, abort)
 
@@ -320,8 +353,9 @@ class LocalBrain:
             # Read back what we heard first: a misheard word ("plot" for "Claude") must not run anything.
             if not self.registry.ctx.confirm(f"Just to check, you want me to {text.strip().rstrip('.?!')}?"):
                 return self._finish(source, text, spoken, actions, abort)
+            self.route = "learn"
             emit("One sec.")  # usually an existing skill said differently; only new ones are "learned"
-            self.status("Checking my skills · Claude")
+            self.status("Checking my skills with Claude")
             out = self.skills.learn(text, self.registry.ctx.confirm)
             if out["kind"] == "answer":
                 emit(out["text"])
@@ -334,21 +368,20 @@ class LocalBrain:
                     actions.append(f"learned skill {out['name']}")
             return self._finish(source, text, spoken, actions, abort)
 
+        self.route = "claude"
         if self.claude_ok and is_complex(text):
             self._claude(text, context, emit, on_marker, on_tool, actions)
             return self._finish(source, text, spoken, actions, abort)
 
-        if len(text.split()) <= 14 and not NEEDS_TOOLS.search(text.lower()):
-            reply = self._quick(text)
-            if reply:
-                for sentence in re.split(r"(?<=[.!?])\s+", reply):
-                    if sentence.strip():
-                        emit(sentence.strip())
+        if len(text.split()) <= 14 and not NEEDS_TOOLS.search(text.lower()) and not COMMAND.match(text.lower()):
+            self.route = "quick"
+            if self._quick(text, emit, on_marker, abort):
                 return self._finish(source, text, spoken, actions, abort)
 
+        self.route = "full"
         for _ in range(m["max_steps"]):
             chunker = SpeechChunker(emit, on_marker)
-            self.status("Thinking · local model")
+            self.status("Thinking with the local model")
             try:
                 result = self._stream(messages, chunker, abort)
             except urllib.error.URLError as e:
@@ -377,6 +410,7 @@ class LocalBrain:
                     handed_off = True
                     break
                 if name == "ask_claude" and self.claude_ok:
+                    self.route = "claude"
                     self._claude(args.get("request") or text, context, emit, on_marker, on_tool, actions)
                     handed_off = True
                     break
@@ -409,6 +443,7 @@ class LocalBrain:
 
     def _finish(self, source, text, spoken, actions, abort) -> str:
         reply = " ".join(spoken)
+        self.last_actions = actions  # the learner remembers plain answers only, not ones that used tools
         self.memory.add_exchange(source, text, reply + (" (interrupted)" if abort.is_set() else ""), actions)
         return reply
 
@@ -450,11 +485,9 @@ class LocalBrain:
             note = "unreadable locally"
         self.last_doc = (path, time.time())
         actions.append(f"worked on file {path}")
-        self.status("Reading the document · Claude")
-        answer = ask_claude_docs(text, path, docs.info(path), note, context)
-        chunker = SpeechChunker(emit, on_marker)
-        chunker.feed(answer)
-        chunker.flush()
+        self.status("Reading the document with Claude")
+        answer = speak_stream(lambda on_text: ask_claude_docs(text, path, docs.info(path), note, context,
+                                                              on_text=on_text), emit, on_marker)
         self.memory.set_document_summary(str(path), answer[:600])
 
     def _claude_3d(self, text, context, emit, on_marker, on_tool, actions) -> None:
@@ -462,12 +495,9 @@ class LocalBrain:
         emit("Let me work on that.")
         if on_tool:
             on_tool("3d")
-        self.status("Working on the 3D model · Claude")
-        answer = ask_claude_3d(text, context)
+        self.status("Working on the 3D model with Claude")
+        speak_stream(lambda on_text: ask_claude_3d(text, context, on_text=on_text), emit, on_marker)
         actions.append("3D work by Claude")
-        chunker = SpeechChunker(emit, on_marker)
-        chunker.feed(answer)
-        chunker.flush()
 
     def _look(self, source, question, context, emit, on_marker, on_tool, actions) -> None:
         """One frame from the camera window (or a screenshot) -> Claude Code looks at it and answers."""
@@ -489,10 +519,7 @@ class LocalBrain:
             on_tool("ask_claude")
         log.info("routing to Claude: %s", request[:120])
         self.status("Asking Claude" if "(Read the image" not in request else "Asking Claude about what I see")
-        answer = ask_claude(request, context, force=force)
-        chunker = SpeechChunker(emit, on_marker)
-        chunker.feed(answer)
-        chunker.flush()
+        speak_stream(lambda on_text: ask_claude(request, context, force=force, on_text=on_text), emit, on_marker)
         actions.append("answered by Claude")
 
     def reset(self) -> None:
@@ -503,7 +530,8 @@ class LocalBrain:
 ASK_CLAUDE = re.compile(r"(?:hey |ok )?ask (?:claude|cloud|clawed|claud)(?: to| about| if| whether)?[,\s]+(.+)", re.I | re.S)
 CLAUDE_BRIEF = """You are the expert brain behind Batsy, a voice assistant on the user's Fedora laptop. Your reply is \
 spoken aloud. You can work anywhere on this laptop: read, edit and create files in any folder (use absolute paths; \
-home is {home}, Batsy's own code is {code}) and run any command. Risky commands are confirmed with the user by voice \
+home is {home}, Batsy's own code is {code}: to change Batsy itself, edit those files in place, never copies \
+elsewhere, then tell them to say "restart yourself") and run any command. Risky commands are confirmed with the user by voice \
 automatically; for root use pkexec, never sudo. When asked to do something, do it fully, then say briefly what you did. Answer exactly what was asked and stop: usually one short sentence, two at most, unless they \
 ask for detail, an explanation or steps. No extra facts, background, tips or follow-up offers they didn't ask \
 for ("what is this?" -> "That's a red banana."). No markdown or lists in the spoken part. Be precise and correct.
@@ -538,7 +566,8 @@ for every file you made, and optionally [[card: Title | line; line]] for key fac
 {context}"""
 
 
-def ask_claude_docs(request: str, path, info: dict, note: str, context: str = "", timeout: int = 600) -> str:
+def ask_claude_docs(request: str, path, info: dict, note: str, context: str = "", timeout: int = 600,
+                    on_text=None) -> str:
     """Claude Code reads the file and does the job, using `batsy doc ...` and Python, then checks its own work."""
     import sys
 
@@ -548,9 +577,9 @@ def ask_claude_docs(request: str, path, info: dict, note: str, context: str = ""
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     prompt = DOC_BRIEF.format(request=request, path=path, info=json.dumps(info), note=note, out_dir=OUT_DIR,
                               python=sys.executable, context=context)
-    return claude_code.run(prompt, f"file: {path.name}", cwd=OUT_DIR, timeout=timeout, args=[
+    return claude_code.run(prompt, f"file: {path.name}", cwd=OUT_DIR, timeout=timeout, on_text=on_text, args=[
         "--permission-mode", "acceptEdits", "--add-dir", str(path.parent), "--add-dir", str(OUT_DIR),
-        "--allowedTools", f"Read,Write,Edit,Glob,Grep,Bash(batsy doc:*),Bash({sys.executable}:*)"])[:3000]
+        "--allowedTools", f"Read,Write,Edit,Glob,Grep,Bash(batsy doc:*),Bash({sys.executable}:*)"])
 
 
 THREE_D_BRIEF = """You are the 3D engineer behind Batsy, a voice assistant on the user's Fedora laptop. The user said: \
@@ -573,7 +602,7 @@ Final reply: two or three spoken sentences, no markdown. Add [[card: Title | lin
 {context}"""
 
 
-def ask_claude_3d(request: str, context: str = "", timeout: int = 900) -> str:
+def ask_claude_3d(request: str, context: str = "", timeout: int = 900, on_text=None) -> str:
     import sys
 
     from batsy import claude_code
@@ -587,12 +616,27 @@ def ask_claude_3d(request: str, context: str = "", timeout: int = 900) -> str:
         state = "not responding"
     prompt = THREE_D_BRIEF.format(request=request, state=state[:3000], python=sys.executable, out_dir=OUT,
                                   context=context)
-    return claude_code.run(prompt, "3D: " + request[:40], cwd=OUT, timeout=timeout, args=[
+    return claude_code.run(prompt, "3D: " + request[:40], cwd=OUT, timeout=timeout, on_text=on_text, args=[
         "--permission-mode", "acceptEdits", "--add-dir", str(OUT), "--add-dir", os.path.expanduser("~"),
-        "--allowedTools", f"Read,Write,Edit,Glob,Grep,Bash(batsy 3d:*),Bash({sys.executable}:*)"])[:3000]
+        "--allowedTools", f"Read,Write,Edit,Glob,Grep,Bash(batsy 3d:*),Bash({sys.executable}:*)"])
 
 
-def ask_claude(prompt: str, context: str = "", timeout: int = 900, force: bool = False) -> str:
+def speak_stream(ask, emit, on_marker=None) -> str:
+    """Run ask(on_text) and speak Claude's answer sentence by sentence as it's written, not after it ends."""
+    chunker, streamed = SpeechChunker(emit, on_marker), []
+
+    def on_text(chunk: str) -> None:
+        streamed.append(chunk)
+        chunker.feed(chunk)
+
+    answer = ask(on_text)
+    if not streamed:  # nothing streamed (over budget, an error): speak the message itself
+        chunker.feed(answer)
+    chunker.flush()
+    return answer
+
+
+def ask_claude(prompt: str, context: str = "", timeout: int = 900, force: bool = False, on_text=None) -> str:
     """One request to Claude Code (the official CLI, on the user's Pro plan). It may work anywhere on the laptop:
     the whole filesystem, any command (risky ones voice-confirmed by batsy.guard), and the web."""
     from pathlib import Path
@@ -602,6 +646,6 @@ def ask_claude(prompt: str, context: str = "", timeout: int = 900, force: bool =
     home = Path.home()
     full = CLAUDE_BRIEF.format(workspace=WORKSPACE, context=context, request=prompt, home=home,
                                code=Path(__file__).resolve().parent.parent)
-    return claude_code.run(full, "ask: " + prompt[:40], cwd=home, timeout=timeout, force=force, args=[
+    return claude_code.run(full, "ask: " + prompt[:40], cwd=home, timeout=timeout, force=force, on_text=on_text, args=[
         "--permission-mode", "acceptEdits", "--add-dir", "/",
-        "--allowedTools", "Read,Write,Edit,MultiEdit,Glob,Grep,Bash,WebSearch,WebFetch,TodoWrite"])[:1500]
+        "--allowedTools", "Read,Write,Edit,MultiEdit,Glob,Grep,Bash,WebSearch,WebFetch,TodoWrite"])

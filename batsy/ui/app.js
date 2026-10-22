@@ -131,8 +131,14 @@ function renderCard(title, text) {
 
 // --- commands from Python ---------------------------------------------------------------------------------
 const handlers = {
-  appear() { ui.shown = true; body.classList.add('on'); sky.target.fade = 1; kick(); },
+  appear() { ui.shown = true; body.classList.add('on'); sky.target.fade = 1; kick(); openFromBat(); },
+  collapse() { closeIntoBat(); },
+  origin(m) {
+    ui.origin = {x: +m.x, y: +m.y};
+    if (m.logo) document.documentElement.style.setProperty('--logo', `url("${m.logo}")`);
+  },
   hidden() {
+    for (const el of [$('#world'), $('#flybat')]) el.getAnimations().forEach(a => a.cancel());
     ui.shown = false; ui.saver = false; body.classList.remove('on'); sky.target.fade = 0;
     sky.u.uFade.value = 0; $('#saver').hidden = true; setState('idle'); layout();
   },
@@ -206,6 +212,52 @@ window.batsy = {
   },
   viewer,
 };
+
+// --- opening out of the corner bat, and folding back into it ----------------------------------------------
+// The standby bat (batsy/dock.py) sits at ui.origin. Opening: a circle of night grows from it while the bat flies
+// to the voice line and dissolves into it. Closing is the same played backwards, ending exactly where the dock's
+// bat reappears, so the hand-over between the two windows is invisible.
+const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)');
+function origin() { return ui.origin || {x: innerWidth - 37, y: 94}; }
+function lineCentre() {
+  const cs = getComputedStyle(document.documentElement);
+  return {x: parseFloat(cs.getPropertyValue('--sx')) || innerWidth / 2,
+          y: parseFloat(cs.getPropertyValue('--sy')) || innerHeight * 0.34,
+          r: parseFloat(cs.getPropertyValue('--sr')) || 120};
+}
+function flight() {
+  const o = origin(), c = lineCentre();
+  const at = (p, s) => `translate(${p.x - 23}px, ${p.y - 10.5}px) scale(${s})`;
+  const big = Math.max(3, c.r * 2.2 / 46);  // the bat grows to about the voice line's size
+  const radius = Math.hypot(Math.max(o.x, innerWidth - o.x), Math.max(o.y, innerHeight - o.y)) + 40;
+  const circle = r => `circle(${r}px at ${o.x}px ${o.y}px)`;
+  return {o, c, at, big, circle, radius};
+}
+function openFromBat() {
+  const world = $('#world'), bat = $('#flybat');
+  for (const el of [world, bat]) el.getAnimations().forEach(a => a.cancel());
+  if (reduceMotion.matches) return;
+  const f = flight();
+  world.animate([{clipPath: f.circle(0)}, {clipPath: f.circle(f.radius)}],
+                {duration: 640, easing: 'cubic-bezier(.7, 0, .25, 1)'});
+  bat.animate([{transform: f.at(f.o, 1), opacity: 1},
+               {transform: f.at(f.c, f.big), opacity: 1, offset: .62},
+               {transform: f.at(f.c, f.big * 1.3), opacity: 0}],
+              {duration: 900, easing: 'cubic-bezier(.6, 0, .2, 1)'});
+}
+function closeIntoBat() {
+  const world = $('#world'), bat = $('#flybat');
+  if (!ui.shown || reduceMotion.matches) { send({event: 'collapsed'}); return; }
+  for (const el of [world, bat]) el.getAnimations().forEach(a => a.cancel());
+  const f = flight();
+  bat.animate([{transform: f.at(f.c, f.big * 1.3), opacity: 0},
+               {transform: f.at(f.c, f.big), opacity: 1, offset: .28},
+               {transform: f.at(f.o, 1), opacity: 1}],
+              {duration: 720, easing: 'cubic-bezier(.6, 0, .2, 1)', fill: 'forwards'});
+  const shrink = world.animate([{clipPath: f.circle(f.radius)}, {clipPath: f.circle(0)}],
+                               {duration: 600, delay: 140, easing: 'cubic-bezier(.7, 0, .3, 1)', fill: 'forwards'});
+  shrink.onfinish = () => send({event: 'collapsed'});
+}
 
 // --- input: Esc / click closes; any input ends the screensaver --------------------------------------------
 addEventListener('keydown', e => {

@@ -9,12 +9,14 @@ import subprocess
 import sys
 import threading
 import time
+from pathlib import Path
 
 from batsy import safety, spotify
 from batsy import images
 from batsy.overlay import Overlay
 from batsy.routines import Routines
-from batsy import apps, calc, model3d
+from batsy import apps, calc, instant, model3d
+from batsy.learner import Automator, Learner
 from batsy.learning import ACTION, NEGATIVE, SkillBook, claude_cli
 from batsy.vocab import get_vocab
 from batsy.config import SOCKET_PATH
@@ -91,6 +93,9 @@ class Batsy:
         self.tasks = TaskTalk(self)
         self.vocab = get_vocab()
         self.skills = SkillBook(claude_cli, show=lambda q: self.show_visual("show", q))
+        self.learner = Learner()  # logs every request, remembers answers, turns repeats into code
+        self.automator = Automator(self, self.learner)
+        self.last_turn = 0.0
         self.last_skill: dict | None = None  # the skill that just ran, awaiting feedback
         if hasattr(self.brain, "skills"):
             self.brain.skills = self.skills
@@ -99,6 +104,7 @@ class Batsy:
         if self.overlay.enabled:  # the 3D viewer lives inside the overlay: one process, controlled by voice
             model3d.VIEWER.host = self._host_3d
             self.overlay.on_viewer_event = self._viewer_event
+            self.overlay.on_dock_open = self._dock_clicked
         self._turn_markers: list[tuple[str, str]] = []
         self.saver_on = False
         self.saver_preview_until = 0.0
@@ -160,6 +166,11 @@ class Batsy:
         else:
             self.preview_saver(30)  # show what changed
 
+    def _dock_clicked(self) -> None:
+        """The standby bat was clicked: open up and listen, as if you'd said "Batsy"."""
+        self.overlay.listen(fresh=True)
+        self.listen_requested.set()
+
     def _overlay_dismissed(self) -> None:
         self.overlay_dismissed = True
         self.speaker.stop()
@@ -189,8 +200,9 @@ class Batsy:
     def _run_skill(self, name: str, slots: dict, request: str) -> None:
         from batsy.learning import restore_case
 
+        self._route = "skill"
         slots = restore_case(slots, request)  # matching is lowercase; skills get "Jonathan", not "jonathan"
-        self.overlay.send("status", text=f"Running skill · {name.replace('_', ' ')}")
+        self.overlay.send("status", text=f"Running the {name.replace('_', ' ')} skill")
         spoken, ok = self.skills.run(name, slots, self._confirm_now)
         if ok:
             if spoken:
@@ -419,13 +431,31 @@ class Batsy:
                 self.speaker.say(random.choice(FILLERS))
             spoke.append(name)
 
+        n, t0 = _norm(text), time.time()
+        self.last_turn = t0
+        known = self.learner.recall(n)  # asked before and answered by a model: instant
+        if known:
+            for sentence in re.split(r"(?<=[.!?])\s+", known):
+                say(sentence)
+            self.learner.record(text, n, "cache", time.time() - t0, known)
+            self.brain.memory.add_exchange(source, text, known, ["answered from memory"])
+            return known
         with self.turn_lock:
             self.confirm_handler = confirm
             self._turn_markers = []
+            self.brain.route, self.brain.last_actions = "full", []
             try:
                 reply = self.brain.ask(text, source, say, abort, on_tool)
             finally:
                 self.confirm_handler = self._confirm_console
+            route = getattr(self.brain, "route", "full")
+            secs = time.time() - t0
+            self.learner.record(text, n, route, secs, reply)
+            if route in ("quick", "full", "claude") and secs > 6 and not abort.is_set():
+                self.automator.learn_soon(text, n)  # slow once is enough: have Claude make it instant
+            plain = not [a for a in getattr(self.brain, "last_actions", []) if a != "answered by Claude"]
+            if route in ("quick", "claude") and plain and not abort.is_set():
+                self.learner.remember(text, n, reply)
             self._learn_phrase(text)
             learned = getattr(self.brain, "last_skill_run", None)
             if learned:
@@ -461,7 +491,15 @@ class Batsy:
         os.execv(sys.executable, [sys.executable, "-m", "batsy", *sys.argv[1:]])
 
     def local_command(self, text: str) -> bool:
-        """Handle common phrases instantly, without calling Claude (zero tokens). Returns True if handled."""
+        """Handle common phrases instantly, without any AI. Returns True if handled (and logs how)."""
+        t0, self._route = time.time(), "command"
+        handled = self._local_command(text)
+        if handled:
+            self.last_turn = time.time()
+            self.learner.record(text, _norm(text), self._route, time.time() - t0)
+        return handled
+
+    def _local_command(self, text: str) -> bool:
         from batsy.tools import screen
 
         n = _norm(text)
@@ -472,13 +510,18 @@ class Batsy:
             self.overlay.hide()
             self.routines.capture = None
             return True
+        if self._self_command(n):
+            return True
         if self._claude_budget_command(n):
             return True
         if self._voiceprint_command(n):
             return True
-        said = calc.answer(text)  # "what is five plus five": instant, no AI
+        said = calc.answer(text) or instant.answer(self, n, text)  # maths, time, weather, small talk...: no AI
         if said:
+            self._route = "instant"
             self._reply(said)
+            return True
+        if self._learner_command(n):
             return True
         if CLOSE_CAMERA.search(n):
             self._close_camera()
@@ -601,6 +644,7 @@ class Batsy:
         self.ears.start()
         self.speaker.say("Batsy online.")
         log.info("listening for wake word")
+        self.automator.start()  # in the background: turn repeated model requests into instant code
 
         pending_text: str | None = None
         follow_up = False
@@ -631,6 +675,7 @@ class Batsy:
                     if audio is None or not self.voiceprint.is_owner(audio):
                         self.overlay.done()
                         continue
+                    self.overlay.think()  # you've stopped talking: the screen shows it's working straight away
                     self.overlay.send("status", text="Transcribing")
                     text = self.stt.transcribe(audio)
                     if was_wake_only:  # "Batsy ... Batsy, open YouTube"
@@ -684,6 +729,72 @@ class Batsy:
                     errors.clear()
                 time.sleep(0.2)
 
+
+    def _self_command(self, n: str) -> bool:
+        """Built in, never improvised by a model: "update yourself" (a real git pull) and "restart yourself"."""
+        update = re.search(r"\b(git pull|pull (the )?(latest|updates?|new code)|(update|upgrade) (yourself|batsy)|"
+                           r"get the latest (code|version))\b", n)
+        restart = re.search(r"\b(restart|reboot|reload|relaunch) (yourself|batsy)\b|^restart$", n)
+        if not update and not restart:
+            return False
+        self._route = "command"
+        if update:
+            repo = Path(__file__).resolve().parent.parent
+            self.overlay.send("status", text="Pulling the latest code")
+            p = subprocess.run(["git", "-C", str(repo), "pull", "--ff-only"], capture_output=True, text=True,
+                               timeout=120)
+            out = (p.stdout + p.stderr).strip()
+            log.info("git pull: %s", out[-500:])
+            if p.returncode != 0:
+                first = next((ln for ln in out.splitlines() if ln.strip()), "unknown error")
+                self._reply(f"The git pull failed: {first[:160]}")
+                return True
+            if "Already up to date" in out:
+                self._reply("Already up to date." + (" Restarting anyway." if restart else ""))
+                if not restart:
+                    return True
+            else:
+                changed = re.search(r"(\d+) files? changed", out)
+                self._reply(f"Pulled {changed.group(1) + ' changed files' if changed else 'the update'}. Restarting.")
+                if "pyproject.toml" in out:  # dependencies may have changed
+                    self.overlay.send("status", text="Installing dependencies")
+                    subprocess.run([sys.executable, "-m", "pip", "install", "-q", "-e", str(repo)], timeout=900)
+        else:
+            self._reply("Restarting.")
+        self.speaker.wait_idle(15)
+        self.restart()
+        return True
+
+    def _learner_command(self, n: str) -> bool:
+        """"That's wrong" forgets a remembered answer; "learn from what I ask" automates repeats now;
+        "what have you learned" sums it up."""
+        if re.fullmatch(r"(no |nope )?(that'?s|thats|that is) (wrong|not right|incorrect)|wrong answer|forget that answer", n) \
+                and self.learner.last_answer:
+            self.learner.forget_last()
+            self._route = "command"
+            self._reply("Okay, I've forgotten that answer. Ask me again and I'll work it out fresh.")
+            return True
+        if re.fullmatch(r"(learn from (what|everything) i (ask|say)|improve yourself|get faster|automate (my|what i) "
+                        r"(ask|requests|questions))", n):
+            self._reply("Looking at what you ask most. I'll tell you what I manage to make instant.")
+
+            def go():
+                learned = self.automator.run_once()
+                self._reply(("Done. Now instant: " + "; ".join(t.strip(" .?!") for t in learned) + ".") if learned
+                            else "Nothing new to automate yet. Everything you repeat is already instant or needs thinking.")
+
+            threading.Thread(target=go, daemon=True).start()
+            return True
+        if re.fullmatch(r"what (have you|did you) learn(ed|t)?( so far)?|how fast (have you been|are you)|"
+                        r"(show|tell me) (your|my) (stats|statistics)", n):
+            st = self.learner.stats()
+            routes = st["routes"]
+            fast = sum(c for r, (c, _) in routes.items() if r in ("instant", "command", "skill", "cache"))
+            slow = sum(c for r, (c, _) in routes.items() if r in ("quick", "full", "claude", "look", "3d", "doc"))
+            self._reply(f"This week, {fast} requests were instant and {slow} needed a model. I remember "
+                        f"{st['remembered']} answers and have turned {st['automated']} repeated requests into code.")
+            return True
+        return False
 
     def _voiceprint_command(self, n: str) -> bool:
         """"learn my voice" records you so Batsy ignores other voices (music, TV, itself); "forget my voice" undoes it."""
@@ -750,27 +861,43 @@ class Batsy:
 
     def _listen_after_wake(self, strip_wake_word) -> str | None:
         """Record the command that follows the wake word. None = false alarm, '' = wake word only."""
+        import numpy as np
+
+        # The quick wake spotter often fires on similar sounds. Check the last couple of seconds with the real
+        # recogniser first (~0.3 s), so a false alarm never opens the screen or chimes.
+        for _ in range(8):  # 0.4 s more (kept in the pre-roll), so a "Batsy" still being said is complete
+            self.ears.read(0.2)
+        preroll = self.ears.preroll(2.4)
+        check = self.stt.transcribe(np.frombuffer(b"".join(preroll), dtype=np.int16), quiet=True)
+        if not strip_wake_word(check, self.cfg.get("voice.wake_words"))[0] and self.stt.engine != "vosk":
+            log.info("false wake (%r): staying hidden", check)
+            return None
         self.speaker.stop()
         self.speaker.chime()
-        preroll = self.ears.preroll(2.0)
         audio = self._record(5, preroll, fresh=True, min_speech=1.0)  # don't stop at the pause after "Batsy"
         if audio is None:
             # they said just the wake word and waited; check the pre-roll really contained it
-            import numpy as np
-
             audio = np.frombuffer(b"".join(preroll), dtype=np.int16)
         if not self.voiceprint.is_owner(audio):
             self.overlay.hide()
             return None
+        self.overlay.think()  # you've stopped talking: the screen shows it's working straight away
         self.overlay.send("status", text="Transcribing")
         text = self.stt.transcribe(audio)
         found, rest = strip_wake_word(text, self.cfg.get("voice.wake_words"))
+        if not found:
+            # The quick check above already heard "Batsy", so the full transcript can't veto it ("Bachy, how
+            # are you?"). Drop a first word that's a mangled "Batsy" and keep the rest as the command.
+            import difflib
+
+            first, _, after = text.strip().partition(" ")
+            if difflib.SequenceMatcher(None, re.sub(r"[^a-z]", "", first.lower()), "batsy").ratio() >= 0.45:
+                rest = after
+            else:
+                rest = text
+            log.info("wake word heard earlier; full transcript %r, command %r", text, rest)
         if _norm(rest) in NOISE_TRANSCRIPTS:
             rest = ""
-        if not found and self.stt.engine != "vosk":
-            log.info("wake word not confirmed by %s (%r); ignoring", self.stt.engine, text)
-            self.overlay.hide()
-            return None
         if rest.strip():
             self.overlay.heard(rest.strip())
         return rest.strip()

@@ -82,7 +82,11 @@ DEFAULTS = {
         "live_words": True,           # show your words as you speak (local Vosk, no tokens)
         "screensaver_minutes": 3,     # token-usage screensaver after this long idle (0 = off)
         "qt_platform": "",            # e.g. "xcb" to force XWayland if the window won't come to the front
+        "dock": True,                 # a small Batman bat in the top-right corner while the overlay is closed
         "renderer": "auto",           # auto | web (GPU, line + particles, 3D inside) | classic (plain Qt painting)
+    },
+    "weather": {
+        "city": "Chennai",            # "what's the weather" with no place named
     },
     "camera": {
         "name": "lenovo",       # matched against the V4L2 device name; first camera if none match

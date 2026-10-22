@@ -200,13 +200,17 @@ def strip_wake_word(text: str, wake_words: list[str]) -> tuple[bool, str]:
 
     words = text.split()
     norm = [re.sub(r"[^a-z]", "", w.lower()) for w in words]
-    targets = [w.replace(" ", "") for w in wake_words + TRANSCRIPT_ALIASES]
+    targets = [(w.replace(" ", ""), 0.7) for w in wake_words]
+    # Recogniser spellings only count when nearly exact: "that" must not pass for "that's it".
+    targets += [(w.replace(" ", ""), 0.86) for w in TRANSCRIPT_ALIASES]
+
     def score(cand: str) -> float:
-        return max(difflib.SequenceMatcher(None, cand, t).ratio() for t in targets) if cand else 0.0
+        """How far past its own threshold the best target is (>= 0 means it's the wake word)."""
+        return max(difflib.SequenceMatcher(None, cand, t).ratio() - need for t, need in targets) if cand else -1.0
 
     for i in range(min(len(words), 5)):
         # Take two words only when they match better than one ("bat see"), not "Batsy, what" -> "batsywhat".
         best, span = max((score("".join(norm[i:i + n])), -n) for n in (1, 2))
-        if best >= 0.7:
+        if best >= 0:
             return True, " ".join(words[i - span:]).lstrip(" ,.!?-")
     return False, text

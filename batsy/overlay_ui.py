@@ -154,6 +154,7 @@ class Overlay(QWidget):
             self.raise_()
             self.activateWindow()
             self.anim.start()
+            print(json.dumps({"event": "shown"}), flush=True)
 
     def _leave_saver(self) -> None:
         if self.saver is not None:
@@ -176,6 +177,8 @@ class Overlay(QWidget):
         if was_saver and notify:
             print(json.dumps({"event": "saver_exit"}), flush=True)
             notify = False
+        if self.isVisible():
+            print(json.dumps({"event": "hidden"}), flush=True)
         self.hide()
         self.anim.stop()
         self.state = "idle"
