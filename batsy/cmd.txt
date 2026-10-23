@@ -1,0 +1,4 @@
+sudo dnf install tailscale && sudo systemctl enable --now tailscaled
+sudo tailscale up                       
+sudo tailscale set --operator=$USER     
+batsy doctor
