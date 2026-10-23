@@ -98,6 +98,9 @@ class Batsy:
         from batsy.inbox import Inbox
 
         self.inbox = Inbox(self)  # files sent over Tailscale land in ~/Batsy/inbox; "send it to my Mac"
+        from batsy.shopping import ShopTalk
+
+        self.shop = ShopTalk(self)  # "how much is X", "compare prices for X", "find me a TV under 50k"
         self.vocab = get_vocab()
         self.skills = SkillBook(claude_cli, show=lambda q: self.show_visual("show", q))
         self.learner = Learner()  # logs every request, remembers answers, turns repeats into code
@@ -552,6 +555,14 @@ class Batsy:
                 return True
         except Exception:
             log.exception("inbox")
+        try:
+            if self.shop.handle(n, text):  # prices across Amazon, Flipkart, Robu, Croma...
+                self._route = "command"
+                return True
+        except Exception:
+            log.exception("shopping")
+            self._reply("Something went wrong checking prices. It's in the log.")
+            return True
         try:
             if self.projects.handle(n, text):  # "I'm doing a project on...", "update on my robot project", "find my notes"
                 self._route = "command"

@@ -31,6 +31,7 @@ Log out and back in once so the Arduino serial-port permission (`dialout` group)
 | "Batsy, remind me in 20 minutes to check the oven" / "remind me tomorrow at 9 to submit the assignment" | reminder (survives restarts, no tokens) |
 | "Batsy, I'm doing a project on a line following robot" | remembers it and finds its GitHub repo / folder from the description |
 | "Batsy, give me an update on my robot project" | commits, unpushed and uncommitted work, issues and your notes |
+| "Batsy, how much is the Raspberry Pi 5 8GB?" / "find me a 55 inch TV under 50000" | prices compared across Amazon, Flipkart, Robu, Croma and more |
 | "Batsy, send this to my Mac" / a file arrives from the Mac | Tailscale file sharing both ways |
 | "Batsy, create a Python script that converts PNGs to JPG" | Claude Code writes and tests it in `~/Batsy/code/`, then opens it |
 | "Batsy, remember my ESP32 is on ttyUSB0" | long-term memory |
@@ -159,6 +160,31 @@ sudo tailscale up                       # sign in with the same account as your 
 sudo tailscale set --operator=$USER     # lets Batsy collect received files without root
 ```
 "My Mac" means the Tailscale device `c` (change it, or add `ipad` / `phone`, under `[files] devices`). Taildrop only sends between devices signed in to your own account. `batsy doctor` checks all of this.
+
+## Shopping: compare prices across stores
+
+Ask about anything you might buy, in any words:
+- **A specific product:** "how much is the Raspberry Pi 5 8GB" · "compare prices for PETG filament 1kg" · "where can I buy an ESP32 DevKit V1" · "price of the iPhone 16 128GB". It's checked on every store that fits, all at once, in about 5 seconds:
+  - electronics and maker parts: Amazon, Flipkart, Robu, Robocraze, ElectronicsComp, ThinkRobotics, Quartz Components, Evelta;
+  - gadgets and appliances: Amazon, Flipkart, Croma, Reliance Digital, Vijay Sales, Tata CLiQ, JioMart;
+  - fashion and beauty: also Myntra, AJIO, Meesho and Nykaa.
+
+  Batsy says the cheapest in-stock price and the next few ("Cheapest is Amazon at 22,989 rupees. Quartz Components has it for 17,500, but it's out of stock."). The full table (store, price, listing name, stock, link) goes on screen and into a page in `~/Batsy/shopping/`.
+- **Not sure what to get:** "find me a 55 inch TV under 50000" · "best earbuds under 2000" · "a microcontroller for a drone". Claude picks a few current models that fit, using web search (one request, about a minute), and each is priced across the stores.
+- **Then:** "open the cheapest one" · "open the Flipkart one" · "open the comparison".
+
+**How it reads prices (no store offers an API):**
+- Amazon's and Flipkart's own search results.
+- Shopify stores' product search.
+- Elsewhere, the store's own page for the product, through the product data shops publish for Google.
+- Croma, Tata CLiQ and JioMart fill their prices in with JavaScript, so their price comes from a search listing (marked "approx.") or just the link.
+
+**How it matches:** a different variant never counts as the product you asked for:
+- 4GB for 8GB, 43" for 55", iPhone 16 **Plus** for iPhone 16, ESP32-**C5** for ESP32;
+- an accessory: a case, power supply, or a "relay board *for* ESP32";
+- a starter kit, unless nothing else matches.
+
+Prices are as listed, before delivery charges; stores change their pages, so a store sometimes drops out.
 
 ## Reminders (no tokens)
 

@@ -16,6 +16,7 @@ dependencies = [
   "pymupdf>=1.24",
   "pytesseract>=0.3",
   "python-docx>=1.1",
+  "curl_cffi>=0.7",  # shopping: store pages that turn away anything that isn't a browser
 ]
 
 [project.optional-dependencies]
