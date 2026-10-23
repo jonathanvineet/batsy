@@ -31,6 +31,7 @@ Log out and back in once so the Arduino serial-port permission (`dialout` group)
 | "Batsy, remind me in 20 minutes to check the oven" / "remind me tomorrow at 9 to submit the assignment" | reminder (survives restarts, no tokens) |
 | "Batsy, I'm doing a project on a line following robot" | remembers it and finds its GitHub repo / folder from the description |
 | "Batsy, give me an update on my robot project" | commits, unpushed and uncommitted work, issues and your notes |
+| "Batsy, send this to my Mac" / a file arrives from the Mac | Tailscale file sharing both ways |
 | "Batsy, create a Python script that converts PNGs to JPG" | Claude Code writes and tests it in `~/Batsy/code/`, then opens it |
 | "Batsy, remember my ESP32 is on ttyUSB0" | long-term memory |
 | "Batsy, make yourself a skill that summarises my unread GitHub notifications" | writes the Python, tests it, saves it for next time |
@@ -144,6 +145,20 @@ Batsy says "Got it", then works out **which repo or folder it is**. It matches w
 **Finding files by what they're about:** "find my thermodynamics notes" · "where's the STL for the phone stand" · "find my arduino sketch for the servo". Batsy names the best match and asks "Want me to open it?"; say "yes", "the second one" or "no".
 
 **GitHub access:** public repos work straight away. Batsy uses `[github] user`, or works your username out from your git identity and your clones. For private repos, put `GITHUB_TOKEN=...` (a fine-grained read-only token) in `~/.config/batsy/env`, or run `gh auth login`. Check what it sees with `batsy projects --scan`, `batsy projects --find "the drone docs"` and `batsy projects --update robot`. The index refreshes in the background every 6 hours. `[projects] roots` limits where it looks.
+
+## Files between your Mac and Batsy (Tailscale)
+
+**Mac → Batsy:** right-click a file → **Share → Tailscale** → this laptop, or run `tailscale file cp FILE <this laptop's name>:`. Batsy collects it into `~/Batsy/inbox`, puts it on screen and says *"datasheet.pdf just arrived. Want me to open it?"* (answer "yes", "the second one" or "no"). PDFs, documents and images are read in straight away, so "summarise what I just sent" or "circle the pin numbers in the file I sent" work. STL, 3MF and STEP files open in the 3D viewer. If you're away from the laptop it just announces the file and shows a notification. Files dropped into the inbox any other way (LocalSend, `scp`) are noticed too.
+
+**Batsy → Mac:** "send this to my Mac" (the file Batsy just made, opened, found or received) · "send the marked-up PDF to my Mac" · "send my arduino sketch for the servo to my Mac" · "send the portfolio project to my Mac" (a folder is zipped first, without `.git`, `node_modules` or virtualenvs). It arrives in the Mac's Downloads folder. Also: "what's in my inbox?", "open my inbox", "open the file I just sent".
+
+**One-time setup on Fedora:**
+```bash
+sudo dnf install tailscale && sudo systemctl enable --now tailscaled
+sudo tailscale up                       # sign in with the same account as your Mac
+sudo tailscale set --operator=$USER     # lets Batsy collect received files without root
+```
+"My Mac" means the Tailscale device `c` (change it, or add `ipad` / `phone`, under `[files] devices`). Taildrop only sends between devices signed in to your own account. `batsy doctor` checks all of this.
 
 ## Reminders (no tokens)
 

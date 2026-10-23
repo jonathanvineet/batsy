@@ -283,6 +283,10 @@ def cmd_doctor(cfg, args) -> None:
         check("microphone", False, f"{e} (dnf install portaudio; pip install sounddevice)")
     vosk_dir = MODELS_DIR / cfg.get("voice.vosk_model")
     check(f"wake word model {vosk_dir.name}", vosk_dir.exists(), "run install.sh")
+    from batsy import inbox
+
+    ok, fix = inbox.check()
+    check("Tailscale file sharing (send files to and from this laptop)", ok, fix)
     try:
         import faster_whisper  # noqa: F401
         check("faster-whisper speech recognition", True)

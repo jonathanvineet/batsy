@@ -1009,7 +1009,10 @@ class ProjectTalk:
                     return True
                 return False
             self.pending = None
-            self._open(target)
+            if os.path.isdir(target):
+                self._open(target)
+            else:  # opens it and previews it (PDFs, pictures); 3D models go to Batsy's viewer
+                self.app.open_result(target)
             self._say(f"Opening {os.path.basename(target)}.")
             return True
         return False
@@ -1135,6 +1138,7 @@ class ProjectTalk:
             return True
         files = [h["path"] for h in hits[:3]]
         first = files[0]
+        self.app.last_file = Path(first)  # "send it to my Mac" right after
         self.pending = {"kind": "open", "files": files, "until": time.time() + 120}
         folder = Path(first).parent.name if Path(first).parent != HOME else "home"
         self._say(f"Found {os.path.basename(first)}, in your {folder} folder. Want me to open it?")

@@ -94,6 +94,10 @@ class Batsy:
         from batsy.projects import ProjectTalk
 
         self.projects = ProjectTalk(self)  # "I'm doing a project on...", updates from GitHub/the laptop, finding files
+        self.last_file = None  # the file last made, opened or received: what "send this to my Mac" means
+        from batsy.inbox import Inbox
+
+        self.inbox = Inbox(self)  # files sent over Tailscale land in ~/Batsy/inbox; "send it to my Mac"
         self.vocab = get_vocab()
         self.skills = SkillBook(claude_cli, show=lambda q: self.show_visual("show", q))
         self.learner = Learner()  # logs every request, remembers answers, turns repeats into code
@@ -330,6 +334,7 @@ class Batsy:
         if not path.exists():
             log.warning("result file missing: %s", path)
             return None
+        self.last_file = path
         if path.suffix.lower() in model3d.MODEL_EXTS:  # a model Claude made or edited: show it in the viewer
             model3d.VIEWER.open(path)
             return path.name
@@ -541,6 +546,12 @@ class Batsy:
             if said:
                 self._reply(said)
             return True
+        try:
+            if self.inbox.handle(n, text):  # "send this to my Mac", "what's in my inbox"
+                self._route = "command"
+                return True
+        except Exception:
+            log.exception("inbox")
         try:
             if self.projects.handle(n, text):  # "I'm doing a project on...", "update on my robot project", "find my notes"
                 self._route = "command"

@@ -507,6 +507,10 @@ class LocalBrain:
             path = docs.resolve_file(name, kind)
             return path if path else Path("/nonexistent")  # tell the user we couldn't find it
         last = getattr(self, "last_doc", None)
+        if last and time.time() - last[1] < 1200 and docs.DOC_VERBS.search(text.lower()) and re.search(
+                r"\b(just sent|i sent|you got|just got|just arrived|i shared|i just shared|that file|the file i)\b",
+                text.lower()):  # "summarise what I just sent"
+            return last[0]
         if last and time.time() - last[1] < 1200 and docs.EDIT_VERBS.search(text.lower()) and \
                 re.search(r"\b(it|this|that|there|also|now|again|too|page|line|word|the)\b", text.lower()):
             return last[0]

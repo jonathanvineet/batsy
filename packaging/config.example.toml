@@ -18,6 +18,10 @@ clear_tool_results_at = 20000  # drop old tool outputs/images beyond this (0 = n
 [projects]
 # roots = ["~/code", "~/Documents"]   # where to look for project folders; empty = your whole home folder
 
+[files]
+# inbox = "~/Batsy/inbox"
+# devices = { mac = "c", ipad = "jonathans-ipad" }   # names from `tailscale status`
+
 [spotify]
 client_id = ""              # from developer.spotify.com, then run: batsy spotify-login
 device = "ipad"             # control the Spotify device whose name contains this

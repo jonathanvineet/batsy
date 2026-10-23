@@ -65,6 +65,12 @@ DEFAULTS = {
     "projects": {
         "roots": [],              # folders to look for projects in; empty = your whole home folder
     },
+    # Files in and out over Tailscale (Taildrop): received files land in the inbox; "send this to my Mac".
+    "files": {
+        "inbox": "~/Batsy/inbox",
+        "taildrop": True,             # collect files sent to this laptop with Taildrop
+        "devices": {"mac": "c"},      # what "my Mac" / "my iPad" / "my phone" mean: names from `tailscale status`
+    },
     "spotify": {
         "client_id": "",        # from developer.spotify.com (see README)
         "device": "ipad",       # preferred Spotify Connect device (name contains this)
