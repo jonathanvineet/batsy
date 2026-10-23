@@ -25,8 +25,8 @@ from batsy.tools import ToolRegistry, truncate
 
 log = logging.getLogger("batsy.local")
 
-SYSTEM = """You are Batsy, {user}'s voice assistant on their Fedora laptop. Talk like a friend in a real \
-conversation: warm, quick, natural, usually one or two short sentences. No lists, markdown or emoji. Input is \
+SYSTEM = """You are Batsy, {user}'s voice assistant on their Fedora laptop. {user} is {about}; use their \
+vocabulary and skip the basics. Talk like a friend in a real conversation: warm, quick, natural, usually one or two short sentences. No lists, markdown or emoji. Input is \
 speech-to-text, so guess sensibly at misheard words.
 Use tools to actually do things on the laptop, then confirm in a few words. Open apps with run_shell \
 background=true (e.g. gtk-launch firefox, xdg-open URL). Music plays on the iPad: use spotify.
@@ -106,7 +106,7 @@ COMMAND = re.compile(r"^(?:(?:hey|ok|okay|please|now|so|and|can you|could you|wo
                      r"delete|remove|move|copy|rename|send|set|turn|switch|change|go|find|search|download|build|"
                      r"compile|upload|launch|kill|show|play|put|add|check|fix|clean|save|type|press|click|enable|"
                      r"disable|connect|mute|unmute|lock|record|take|bring|pull up|let's|lets)\b")
-QUICK_SYSTEM = ("You are Batsy, {user}'s friendly voice assistant. Answer in one or two short spoken sentences, "
+QUICK_SYSTEM = ("You are Batsy, {user}'s friendly voice assistant. {user} is {about}. Answer in one or two short spoken sentences, "
                 "no lists or markdown. Speak plainly as yourself: no role-play, sound effects, stage directions, "
                 "narration or quotation marks; ignore any theme or character from earlier talk. Input is speech-to-text, so guess sensibly at misheard words. If the answer "
                 "needs the laptop, the internet, recent events, or facts you're not sure of, reply with only: PASS")
@@ -121,8 +121,48 @@ def vision_source(text: str) -> str | None:
     return "screen" if SCREEN_WORDS.search(t) else "webcam"
 
 
+def who(cfg) -> dict:
+    """{user, about, github} for the prompts: who Batsy is talking to."""
+    name = cfg.get("user.name") or os.environ.get("BATSY_USER_NAME") or getpass.getuser()
+    try:
+        from batsy import projects
+
+        gh = cfg.get("github.user") or projects.index(cfg, wait=False).get("user") or ""
+    except Exception:
+        gh = cfg.get("github.user") or ""
+    return {"user": name, "about": cfg.get("user.about") or "a developer", "github": gh}
+
+
 def is_complex(text: str) -> bool:
     return bool(COMPLEX.search(text.lower())) or len(text.split()) > 22
+
+
+# Asking for code to be written: goes to Claude Code as a coding job, never to the skill learner (which would
+# answer "that's a coding task, I can't make it a skill" and write nothing).
+CODE_WORK = re.compile(
+    r"^(?:(?:hey|ok|okay|so|now|please|can you|could you|would you|will you|i want you to|i need you to|help me|"
+    r"i want to|i need to|let's|lets)\s+)*"
+    r"(?:write|create|make|build|generate|code|develop|program|scaffold|set up|setup|start|implement|draft)\b"
+    r"(?:\s+(?!that\b|which\b|to\b)[\w+#.-]+){0,5}?\s+"
+    r"(?:script|program|code|function|class|module|library|package|app|application|website|web ?site|web ?app|"
+    r"landing page|web ?page|api|server|backend|frontend|bot|cli|tool|game|extension|plugin|notebook|component|"
+    r"regex|query|dockerfile|makefile|workflow|unit tests?|tests?|scraper|parser|dashboard|cron job|addon|add-on|"
+    r"shader|macro|snippet|algorithm)s?\b")
+
+
+def is_code_work(text: str) -> bool:
+    t = re.sub(r"[^a-z0-9+#.' -]", " ", text.lower())
+    return bool(CODE_WORK.search(re.sub(r"\s+", " ", t).strip())) and not re.search(r"\bskills?\b", t)
+
+
+CODE_DIR = WORKSPACE / "code"
+CODE_NOTE = """
+
+(This is a coding job. Make a folder for it under {code_dir}/ with a short, clear name, unless they named an \
+existing project or folder: then work there. Write the real, complete code, run it or its tests on a small example \
+and fix any errors before you finish. In the spoken reply say only the file name and how to run it, never the \
+full path. Then add [[card: <file name> | what it does; how to run it]] and [[open: <absolute path of the main \
+file>]] so it opens in their editor.)"""
 
 
 class LocalBrain:
@@ -134,7 +174,7 @@ class LocalBrain:
         self.visual: Callable[[str, str], None] | None = None
         self.url = cfg.get("local.url").rstrip("/") + "/api/chat"
         self.model = cfg.get("local.model")
-        self.system = SYSTEM.format(user=os.environ.get("BATSY_USER_NAME") or getpass.getuser())
+        self.system = SYSTEM.format(**who(cfg))
         self.tools = [
             {"type": "function", "function": {"name": name, "description": desc,
                                               "parameters": {"type": "object", "properties": props, "required": req}}}
@@ -210,7 +250,7 @@ class LocalBrain:
         (replied PASS: it needs the full path), and nothing was said."""
         self.status("Thinking with the local model")
         recent = self.memory.build_context(text, self.cfg, recent=1, related=0)[-400:]
-        messages = [{"role": "system", "content": QUICK_SYSTEM.format(user=os.environ.get("BATSY_USER_NAME") or getpass.getuser())},
+        messages = [{"role": "system", "content": QUICK_SYSTEM.format(**who(self.cfg))},
                     {"role": "user", "content": (f"{recent}\n\n" if recent else "") + text}]
         body = {"model": self.model, "stream": True, "keep_alive": self.cfg.get("local.keep_alive"),
                 "messages": messages, "options": {**self._options(), "num_predict": 80}}
@@ -346,6 +386,14 @@ class LocalBrain:
         if src and self.claude_ok:
             self.route = "look"
             self._look(src, text, context, emit, on_marker, on_tool, actions)
+            return self._finish(source, text, spoken, actions, abort)
+
+        if self.claude_ok and is_code_work(text):
+            # "create a python script that...", "build me a flask API": real code, written and tested by Claude
+            # Code in a project folder. Never the skill learner: a skill is a voice shortcut, not the thing asked for.
+            self.route = "claude"
+            emit("On it, I'll write that.")
+            self._claude(text + CODE_NOTE.format(code_dir=CODE_DIR), context, emit, on_marker, on_tool, actions)
             return self._finish(source, text, spoken, actions, abort)
 
         if self.claude_ok and self.skills and ACTION.match(norm(text)):
@@ -529,7 +577,7 @@ class LocalBrain:
 
 ASK_CLAUDE = re.compile(r"(?:hey |ok )?ask (?:claude|cloud|clawed|claud)(?: to| about| if| whether)?[,\s]+(.+)", re.I | re.S)
 CLAUDE_BRIEF = """You are the expert brain behind Batsy, a voice assistant on the user's Fedora laptop. Your reply is \
-spoken aloud. You can work anywhere on this laptop: read, edit and create files in any folder (use absolute paths; \
+spoken aloud. The user, {user}, is {about}: talk to them at that level, in their vocabulary.{github} You can work anywhere on this laptop: read, edit and create files in any folder (use absolute paths; \
 home is {home}, Batsy's own code is {code}: to change Batsy itself, edit those files in place, never copies \
 elsewhere, then tell them to say "restart yourself") and run any command. Risky commands are confirmed with the user by voice \
 automatically; for root use pkexec, never sudo. When asked to do something, do it fully, then say briefly what you did. Answer exactly what was asked and stop: usually one short sentence, two at most, unless they \
@@ -644,8 +692,14 @@ def ask_claude(prompt: str, context: str = "", timeout: int = 900, force: bool =
     from batsy import claude_code
 
     home = Path.home()
+    from batsy.config import Config
+
+    me = who(claude_code.CFG or Config.load())
+    github = (f" Their GitHub username is {me['github']} (use gh if it's installed, or the GitHub API with curl; "
+              f"GITHUB_TOKEN may be set). Their projects are listed under things you remember.") if me["github"] else ""
     full = CLAUDE_BRIEF.format(workspace=WORKSPACE, context=context, request=prompt, home=home,
-                               code=Path(__file__).resolve().parent.parent)
+                               code=Path(__file__).resolve().parent.parent, user=me["user"], about=me["about"],
+                               github=github)
     return claude_code.run(full, "ask: " + prompt[:40], cwd=home, timeout=timeout, force=force, on_text=on_text, args=[
         "--permission-mode", "acceptEdits", "--add-dir", "/",
         "--allowedTools", "Read,Write,Edit,MultiEdit,Glob,Grep,Bash,WebSearch,WebFetch,TodoWrite"])

@@ -209,6 +209,42 @@ def cmd_skills(cfg, args) -> None:
             print(f"    “{t}”")
 
 
+def cmd_projects(cfg, args) -> None:
+    from batsy import projects
+
+    if args.scan or args.find or args.update:
+        idx = projects.build_index(cfg) if args.scan else projects.index(cfg)
+        if args.scan:
+            kinds: dict[str, int] = {}
+            for c in idx["candidates"]:
+                kinds[c["source"]] = kinds.get(c["source"], 0) + 1
+            print(f"GitHub user: {idx['user'] or '(unknown: set [github] user)'}; "
+                  f"{len(idx['candidates'])} projects ({', '.join(f'{v} {k}' for k, v in kinds.items())})")
+    if args.find:
+        r = projects.identify(args.find, cfg)
+        print(("Best: " if r["confident"] else "Unsure; best guess: ") + (projects.label(r["best"]) if r["best"] else "none"))
+        for o in r["options"][1:]:
+            print("   or:", projects.label(o))
+        return
+    if args.update:
+        store = projects.Store()
+        p = store.find(args.update)
+        if p is None:
+            r = projects.identify(args.update, cfg)
+            p = dict(r["best"], title=r["best"]["name"]) if r["best"] else None
+        if p is None:
+            print("No project like that.")
+            return
+        spoken, card = projects.summary(p, projects.activity(p))
+        print(spoken + "\n\n" + card)
+        return
+    rows = projects.Store().all()
+    if not rows:
+        print('No tracked projects yet. Say "Batsy, I\'m doing a project on ..."')
+    for p in rows:
+        print(f"{p['title']:32} {p.get('repo') or '-':40} {projects.short_path(p['path']) if p.get('path') else '-'}")
+
+
 def cmd_spotify_login(cfg, args) -> None:
     from batsy.spotify import Spotify, login
 
@@ -344,10 +380,15 @@ def main() -> None:
     p.add_argument("--forget", metavar="NAME")
     p = sub.add_parser("vocab", help="list (or --forget) the phrases Batsy knows for showing things")
     p.add_argument("--forget", metavar="PHRASE")
+    p = sub.add_parser("projects", help="your tracked projects; --scan GitHub + folders, --find TEXT, --update NAME")
+    p.add_argument("--scan", action="store_true", help="rebuild the index of your GitHub repos and project folders")
+    p.add_argument("--find", metavar="TEXT", help="which project a description matches")
+    p.add_argument("--update", metavar="NAME", help="what's happened on a project this week")
     args = parser.parse_args()
 
     cfg = Config.load()
     _setup_logging(args.verbose or args.cmd in (None, "run") and sys.stderr.isatty())
     {"run": cmd_run, None: cmd_run, "chat": cmd_chat, "ask": cmd_ask,
      "doctor": cmd_doctor, "reset": cmd_reset, "usage": cmd_usage,
-     "spotify-login": cmd_spotify_login, "vocab": cmd_vocab, "skills": cmd_skills}[args.cmd](cfg, args)
+     "spotify-login": cmd_spotify_login, "vocab": cmd_vocab, "skills": cmd_skills,
+     "projects": cmd_projects}[args.cmd](cfg, args)

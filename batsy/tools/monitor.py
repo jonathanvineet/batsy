@@ -12,6 +12,7 @@ from batsy.config import DATA_DIR
 STATE_FILE = DATA_DIR / "monitors.json"
 _lock = threading.RLock()
 _items: dict[str, dict] = {}
+last_fired: dict | None = None  # the reminder that just went off, for "snooze" / "remind me again in 10 minutes"
 
 
 def _save() -> None:
@@ -44,13 +45,19 @@ def _check(item: dict) -> tuple[bool, str]:
 
 
 def _loop(ctx) -> None:
+    global last_fired
     while True:
         now = time.time()
         for mid, item in list(_items.items()):
             if now < item["next_run"]:
                 continue
             if item["kind"] == "timer":
-                ctx.announce(item["message"])
+                late = now - item["next_run"]
+                message = item["message"]
+                if late > 300 and item.get("what"):  # the laptop was asleep or off when it was due
+                    message += time.strftime(" It was due at %-I:%M %p.", time.localtime(item["next_run"]))
+                ctx.announce(message)
+                last_fired = {**item, "fired": now}
                 with _lock:
                     _items.pop(mid, None)
                 _save()
@@ -101,6 +108,31 @@ class _Health:
             except Exception:
                 pass
             time.sleep(cfg.get("monitor.health_interval"))
+
+
+def add_reminder(due: float, what: str | None, message: str | None = None) -> str:
+    """A one-off reminder (or timer when `what` is None) at an absolute time. Returns its id."""
+    mid = uuid.uuid4().hex[:6]
+    with _lock:
+        _items[mid] = {"kind": "timer", "message": message or (f"Reminder: {what}." if what else "Your timer is done."),
+                       "what": what or "", "next_run": due, "created": time.time()}
+    _save()
+    return mid
+
+
+def reminders() -> list[tuple[str, dict]]:
+    """Pending timers and reminders, soonest first."""
+    with _lock:
+        items = [(mid, dict(it)) for mid, it in _items.items() if it["kind"] == "timer"]
+    return sorted(items, key=lambda x: x[1]["next_run"])
+
+
+def cancel(mid: str) -> bool:
+    with _lock:
+        gone = _items.pop(mid, None) is not None
+    if gone:
+        _save()
+    return gone
 
 
 def start_background(ctx) -> None:

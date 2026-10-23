@@ -26,9 +26,11 @@ function makeViewer() {
   }
 }
 const ui = {
-  state: 'idle', status: '', statusT0: 0, answer: '', heard: '', partial: '', image: null, card: null,
+  state: 'idle', status: '', statusT0: 0, partial: '', image: null, card: null,
   camera: false, model: false, saver: false, shown: false, lastInput: 0, mouse0: null,
+  turns: [], turnOpen: false,  // the conversation: [{you, batsy}], oldest first; the last one is happening now
 };
+const MAX_TURNS = 4;
 const STATE_LABEL = {listen: 'Listening', think: 'Thinking', speak: 'Speaking'};
 
 // --- layout: where the voice line sits, and which mode the screen is in -----------------------------------------
@@ -63,17 +65,43 @@ function followSignal(sig) {
   s.setProperty('--sr', `${sig.r * h}px`);
 }
 
-// --- text -------------------------------------------------------------------------------------------------
+// --- text: one block per exchange (what you said, then Batsy's reply), newest at the bottom ---------------
+function newTurn(you) {
+  ui.turns.push({you, batsy: ''});
+  ui.turns = ui.turns.slice(-MAX_TURNS);
+  ui.turnOpen = true;
+}
+
+function para(cls, text) {
+  const p = document.createElement('p');
+  p.className = cls;
+  p.textContent = text;
+  return p;
+}
+
 function renderText() {
-  const heard = $('#heard');
-  heard.textContent = ui.heard ? `“${ui.heard}”` : ui.partial;
-  heard.classList.toggle('live', !ui.heard && !!ui.partial);
-  $('#answer').textContent = ui.answer;
-  // subtitles under media: the latest sentence or two
-  const sentences = ui.answer.match(/[^.!?]+[.!?]*\s*/g) || [];
+  const thread = $('#thread');
+  thread.replaceChildren();
+  ui.turns.forEach((t, i) => {
+    const el = document.createElement('div');
+    el.className = 'turn' + (i < ui.turns.length - 1 ? ' old' : '');
+    if (t.you) el.appendChild(para('you', `“${t.you}”`));
+    if (t.batsy) el.appendChild(para('batsy', t.batsy));
+    thread.appendChild(el);
+  });
+  if (ui.partial) {  // your words as you speak them, under everything said so far
+    const el = document.createElement('div');
+    el.className = 'turn';
+    el.appendChild(para('you live', ui.partial));
+    thread.appendChild(el);
+  }
+  thread.classList.toggle('clipped', thread.scrollHeight > thread.clientHeight + 2);
+  // subtitles under media: the latest sentence or two of the latest reply
+  const last = ui.turns[ui.turns.length - 1] || {you: '', batsy: ''};
+  const sentences = last.batsy.match(/[^.!?]+[.!?]*\s*/g) || [];
   let sub = '';
   for (let i = sentences.length - 1; i >= 0 && (sub.length + sentences[i].length) < 220; i--) sub = sentences[i] + sub;
-  $('#subtitle').textContent = (sub || ui.answer.slice(-220)).trim() || (hasMedia() ? (ui.heard || ui.partial) : '');
+  $('#subtitle').textContent = (sub || last.batsy.slice(-220)).trim() || (hasMedia() ? (ui.partial || last.you) : '');
   renderStatus();
 }
 
@@ -145,22 +173,28 @@ const handlers = {
   listen(m) {
     leaveSaver();
     if (m.fresh) {
-      Object.assign(ui, {answer: '', heard: '', partial: '', card: null, status: ''});
+      Object.assign(ui, {turns: [], turnOpen: false, partial: '', card: null, status: ''});
       if (!ui.camera) ui.image = null;
     }
     setState('listen'); layout();
   },
   level(m) { sky.target.level = Math.max(0, Math.min(1, +m.v || 0)); },
   partial(m) { ui.partial = m.text || ''; renderText(); },
-  heard(m) { ui.heard = m.text || ''; ui.partial = ''; renderText(); },
+  heard(m) { ui.partial = ''; newTurn(m.text || ''); renderText(); },
   think() { leaveSaver(); setState('think'); },
-  say(m) { leaveSaver(); ui.status = ''; ui.answer = (ui.answer + ' ' + (m.text || '')).trim().slice(-900); setState('speak'); renderText(); },
+  say(m) {
+    leaveSaver(); ui.status = '';
+    if (!ui.turnOpen || !ui.turns.length) newTurn('');  // Batsy speaking up on its own (a reminder, a question)
+    const t = ui.turns[ui.turns.length - 1];
+    t.batsy = (t.batsy + ' ' + (m.text || '')).trim();
+    setState('speak'); renderText();
+  },
   status(m) {
     const text = m.text || '';
     if (text !== ui.status) { ui.status = text; ui.statusT0 = Date.now(); }
     renderStatus();
   },
-  done() { ui.status = ''; setState('idle'); },
+  done() { ui.status = ''; ui.turnOpen = false; setState('idle'); },
   image(m) { leaveSaver(); ui.image = m.url; showImage(m.url, m.caption); layout(); },
   card(m) { leaveSaver(); ui.card = [m.title, m.text]; renderCard(m.title, m.text); layout(); },
   camera(m) {

@@ -79,7 +79,7 @@ class Routines:
         today = dt.date.today()
         items = get_store().agenda_for(today.isoformat())
         reply = self.app._reply
-        tracked = self.app.tasks.morning_line() if hasattr(self.app, "tasks") else ""
+        tracked = (self.app.tasks.morning_line() + self.app.tasks.morning_projects()) if hasattr(self.app, "tasks") else ""
         if items:
             plan = "; ".join(i["text"].rstrip(".!") for i in items)
             reply(f"Good morning! It's {day_name(today)}. Here's your day: {plan}.{tracked}")

@@ -13,6 +13,7 @@ import json
 import math
 import os
 import random
+import re
 import sys
 import threading
 import time
@@ -35,6 +36,15 @@ BODY_FONT = "Cantarell"
 STATE_LABEL = {"listen": "Listening", "think": "Thinking", "speak": "Speaking", "idle": ""}
 
 
+def _tail(text: str, n: int) -> str:
+    """The end of a long reply, starting at a sentence (or word) boundary."""
+    if len(text) <= n:
+        return text
+    cut = text[-n:]
+    m = re.search(r"[.!?]\s+", cut)
+    return "…" + (cut[m.end():] if m and m.end() < n * 0.6 else cut.split(" ", 1)[-1])
+
+
 class Bridge(QObject):
     message = Signal(dict)
 
@@ -50,7 +60,9 @@ class Overlay(QWidget):
         self.smooth = 0.0
         self.partial = ""
         self.heard = ""
-        self.answer = ""
+        self.answer = ""            # Batsy's reply in this exchange only
+        self.prev = ("", "")        # the exchange before it (you, Batsy), drawn small above
+        self.turn_open = False
         self.card: tuple[str, str] | None = None
         self.image: QPixmap | None = None
         self.caption = ""
@@ -99,6 +111,7 @@ class Overlay(QWidget):
             self.hide_timer.stop()
             if m.get("fresh"):
                 self.partial = self.heard = self.answer = ""
+                self.prev, self.turn_open = ("", ""), False
                 self.card = None
                 if self.camera_path is None:
                     self.image, self.caption = None, ""
@@ -108,15 +121,21 @@ class Overlay(QWidget):
             self.level = max(0.0, min(1.0, float(m.get("v", 0))))
         elif cmd == "partial":
             self.partial = m.get("text", "")
-        elif cmd == "heard":
-            self.heard, self.partial = m.get("text", ""), ""
+        elif cmd == "heard":  # a new exchange: the last one moves up, small
+            if self.heard or self.answer:
+                self.prev = (self.heard, self.answer)
+            self.heard, self.partial, self.answer, self.turn_open = m.get("text", ""), "", "", True
         elif cmd == "think":
             self.state = "think"
             self._appear()
         elif cmd == "say":
             self.hide_timer.stop()
             self.state = "speak"
-            self.answer = (self.answer + " " + m.get("text", "")).strip()[-900:]
+            if not self.turn_open:  # Batsy speaking up on its own: its own exchange
+                if self.heard or self.answer:
+                    self.prev = (self.heard, self.answer)
+                self.heard, self.answer, self.turn_open = "", "", True
+            self.answer = (self.answer + " " + m.get("text", "")).strip()
             self._appear()
         elif cmd == "image":
             pix = QPixmap(m.get("path", ""))
@@ -139,6 +158,7 @@ class Overlay(QWidget):
                 self.image, self.caption = None, ""
         elif cmd == "done":
             self.state = "idle"
+            self.turn_open = False
             self.level = 0.0
             busy = self.camera_path  # the live camera stays up until closed or idle a while
             linger = max(float(m.get("linger", 6)), 180) if busy else float(m.get("linger", 6))
@@ -234,13 +254,18 @@ class Overlay(QWidget):
         text_w = w * 0.70
         y = (sig_c.y() + h * 0.12 + 62) if not has_media else h * 0.80
         if not has_media:
+            prev = " · ".join(x for x in (f"“{self.prev[0]}”" if self.prev[0] else "", self.prev[1]) if x)
+            if prev:  # the exchange before, dim and short, so the new one reads as its own
+                prev = prev if len(prev) <= 160 else prev[:157].rsplit(" ", 1)[0] + "…"
+                y = self._text(p, prev, QRectF((w - text_w) / 2, y, text_w, 90), 14,
+                               QColor(STEEL.red(), STEEL.green(), STEEL.blue(), 120)) + 26
             line = self.heard or self.partial
             if line:
                 col = STEEL if self.heard else QColor(STEEL.red(), STEEL.green(), STEEL.blue(), 150)
                 y = self._text(p, f"“{line}”" if self.heard else line, QRectF((w - text_w) / 2, y, text_w, 200),
                                20, col, italic=not self.heard) + 22
-            if self.answer:
-                self._text(p, self.answer, QRectF((w - text_w) / 2, y, text_w, h - y - 40), 30, TEXT)
+            if self.answer:  # a long reply shows its latest part, never runs off the bottom
+                self._text(p, _tail(self.answer, 520), QRectF((w - text_w) / 2, y, text_w, h - y - 40), 30, TEXT)
         else:
             top = h * 0.07
             if self.image is not None and self.card is not None:  # side by side: picture left, card right
@@ -250,7 +275,7 @@ class Overlay(QWidget):
                 self._image(p, QRectF(w * 0.18, top, w * 0.64, h * 0.68))
             elif self.card is not None:
                 self._card(p, QRectF(w * 0.18, top, w * 0.64, h * 0.68))
-            sub = self.answer or self.heard or self.partial
+            sub = _tail(self.answer, 200) or self.heard or self.partial
             if sub:
                 self._text(p, sub, QRectF(w * 0.12, h * 0.83, w * 0.76, h * 0.15), 22, TEXT, center=True)
         p.setOpacity(0.5 * self.fade)

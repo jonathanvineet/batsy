@@ -4,7 +4,8 @@ Its own small process on XWayland (GNOME on Wayland won't let a normal window pi
 X11 windows can). Driven by JSON lines on stdin from the daemon (batsy/overlay.py):
   {"cmd": "standby"}                        just the bat
   {"cmd": "away"}                           the overlay is opening from here: swell and fade out
-  {"cmd": "rest", "text", "image", "title"} the overlay closed into here: bat back, the last answer in a bubble
+  {"cmd": "rest", "you", "text", "image", "title"} the overlay closed into here: bat back, and a bubble with
+                                                    the latest exchange (what you asked, Batsy's reply)
 Events out: {"event": "open"} (bat or bubble clicked), {"event": "origin", "x", "y"} (the bat's centre on screen,
 so the overlay can grow out of exactly this spot).
 """
@@ -33,6 +34,7 @@ TOP = 54                   # below the top bar: clear of maximised windows' titl
 BAT_W = 46                 # bat width in px at rest
 BUBBLE_W = 330
 BUBBLE_SECONDS = 25
+YOU_H = 20                 # the "what you asked" line at the top of the bubble
 
 
 def emit(ev: dict) -> None:
@@ -76,7 +78,7 @@ class Dock(QWidget):
         self.t0 = time.time()
         self.swell = 0.0       # 0 at rest; 1 = swollen and gone (the overlay took over)
         self.bubble = 0.0      # 0 hidden .. 1 fully open
-        self.text, self.title, self.thumb = "", "", None
+        self.you, self.text, self.title, self.thumb = "", "", "", None
         self.anim = QVariantAnimation(self, duration=280, easingCurve=QEasingCurve.OutCubic)
         self.anim.valueChanged.connect(self._swell_to)
         self.banim = QVariantAnimation(self, duration=320, easingCurve=QEasingCurve.OutBack)
@@ -96,6 +98,7 @@ class Dock(QWidget):
             self._animate(self.banim, self.bubble, 0.0, 160)
             QTimer.singleShot(280, self._gone)
         elif cmd == "rest":
+            self.you = " ".join((m.get("you") or "").split())
             self.text = " ".join((m.get("text") or "").split())
             self.title = m.get("title") or ""
             self.thumb = None
@@ -153,13 +156,14 @@ class Dock(QWidget):
         f = QFont("Cantarell", 11)
         text_w = BUBBLE_W - 32 - (78 if self.thumb else 0)
         lines = QFontMetrics(f).boundingRect(QRect(0, 0, int(text_w), 2000), Qt.TextWordWrap, self._clip_text())
-        h = max(lines.height() + (22 if self.title else 0) + 26, 92 if self.thumb else 0)
+        h = max(lines.height() + (22 if self.title else 0) + (YOU_H if self.you else 0) + 26, 92 if self.thumb else 0)
         top = self.center.y() + BAT_W * 0.3 + 12
         return QRectF(W - 12 - BUBBLE_W, top, BUBBLE_W, min(h, H - top - 8))
 
     def _clip_text(self) -> str:
+        """The latest reply, from its start (it's one answer, read in order), cut at a word if it's long."""
         t = self.text
-        return t if len(t) <= 220 else t[:217].rsplit(" ", 1)[0] + "…"
+        return t if len(t) <= 260 else t[:257].rsplit(" ", 1)[0] + "…"
 
     def _shape(self) -> None:
         region = QRegion(self._bat_rect().toRect())
@@ -244,6 +248,14 @@ class Dock(QWidget):
             p.restore()
             inner.setLeft(inner.left() + 78)
         y = inner.top()
+        if self.you:  # what you asked, one line, so the reply under it makes sense on its own
+            f = QFont("Cantarell", 10)
+            f.setItalic(True)
+            p.setFont(f)
+            p.setPen(STEEL)
+            said = QFontMetrics(f).elidedText(f"“{self.you}”", Qt.ElideRight, int(inner.width()))
+            p.drawText(QRectF(inner.left(), y, inner.width(), YOU_H - 4), Qt.AlignLeft | Qt.AlignVCenter, said)
+            y += YOU_H
         if self.title:
             f = QFont("Barlow Condensed", 13)
             f.setWeight(QFont.DemiBold)

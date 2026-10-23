@@ -432,26 +432,279 @@ def _duration(s: str) -> float | None:
     return total or None
 
 
-@handles(r"(?:set |start )?(?:a )?timer (?:for )?(.+?)(?: called (.+))?", r"(.+?) timer",
-         r"remind me in (.+?) to (.+)", r"remind me to (.+?) in (.+)")
+@handles(r"(?:set |start )?(?:a )?timer (?:for )?(.+?)(?: called (.+))?", r"(.+?) timer")
 def _timer(app, m, text):
-    pat = m.re.pattern
-    if "remind me to" in pat:
-        what, when = m.group(1), m.group(2)
-    elif "remind me in" in pat:
-        when, what = m.group(1), m.group(2)
-    else:
-        when, what = m.group(1), (m.group(2) if m.lastindex and m.lastindex >= 2 else None)
+    when, what = m.group(1), (m.group(2) if m.lastindex and m.lastindex >= 2 else None)
     secs = _duration(when)
     if not secs:
         return None
-    message = f"Reminder: {what}." if what else "Your timer is done."
-    out, err = app.registry.execute("set_timer", {"seconds": secs, "message": message})
-    if err:
+    from batsy.tools import monitor
+
+    monitor.add_reminder(time.time() + secs, what)
+    return f"Okay, I'll remind you to {_yours(what)} {_span(secs)}." if what else f"Timer set for {_span(secs)[3:]}."
+
+
+# --- reminders at a time ("remind me at 5 pm to call mom", "remind me tomorrow morning to submit the assignment") --
+WEEKDAYS = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
+PART_OF_DAY = {"morning": (9, 0), "afternoon": (14, 0), "evening": (18, 0), "night": (20, 0), "tonight": (20, 0)}
+_MONTH = "(?:" + "|".join(MONTHS) + ")"
+_CLOCK = (r"(?:(?:half|quarter) (?:past|to) [a-z0-9]+|\d{1,4}(?: \d{2})?|noon|midday|midnight|[a-z]+(?: [a-z]+)?)"
+          r"(?: ?(?:am|pm|a m|p m|oclock|o'clock))?")
+WHEN = re.compile(
+    rf"\b(?:(?:on |this |next |coming )?(?P<wd>{'|'.join(WEEKDAYS)})|(?P<rel>day after tomorrow|tomorrow|today)|"
+    rf"(?:(?:this|in the|tomorrow|at) )?(?P<part>morning|afternoon|evening|night|tonight)|"
+    rf"(?:at|by|around|for) (?P<clock>{_CLOCK})|"
+    rf"(?:on )?(?:the )?(?P<date>\d{{1,2}}(?:st|nd|rd|th)? (?:of )?{_MONTH}|{_MONTH} \d{{1,2}}(?:st|nd|rd|th)?))\b")
+_PRONOUNS = {"my": "your", "me": "you", "i": "you", "i'm": "you're", "im": "you're", "myself": "yourself",
+             "mine": "yours", "am": "are", "your": "my"}
+
+
+def _yours(what: str | None) -> str:
+    """'call my mom' -> 'call your mom' (it's said back to you)."""
+    return " ".join(_PRONOUNS.get(w, w) for w in (what or "").split())
+
+
+def _span(secs: float) -> str:
+    secs = round(secs)
+    mins = round(secs / 60)
+    if secs < 60 or secs < 300 and secs % 60:
+        return f"in {secs} seconds"
+    if mins < 90:
+        return f"in {mins:g} minute{'s' if mins != 1 else ''}"
+    h = mins / 60
+    return f"in {h:.1f}".rstrip("0").rstrip(".") + " hours"
+
+
+def _clock_of(s: str) -> tuple[int, int, str] | None:
+    """'5 pm' -> (5, 0, 'pm'); '530' -> (5, 30, ''); 'noon' -> (12, 0, 'pm'); 'five thirty' -> (5, 30, '')."""
+    s = s.strip().replace("o'clock", "").replace("oclock", "").replace("a m", "am").replace("p m", "pm").strip()
+    if s in ("noon", "midday"):
+        return 12, 0, "pm"
+    q = re.fullmatch(r"(half|quarter) (past|to) ([a-z0-9]+)(?: (am|pm))?", s)
+    if q:
+        base = _clock_of(q.group(3) + (" " + q.group(4) if q.group(4) else ""))
+        if base is None:
+            return None
+        mins = 30 if q.group(1) == "half" else 15
+        h, mi = (base[0], mins) if q.group(2) == "past" else ((base[0] - 1) % 24, 60 - mins)
+        return h, mi, base[2]
+    if s == "midnight":
+        return 0, 0, "am"
+    ap = ""
+    m = re.search(r" ?(am|pm)$", s)
+    if m:
+        ap, s = m.group(1), s[:m.start()].strip()
+    from batsy.calc import _words_to_numbers
+
+    parts = [_words_to_numbers(w) for w in s.split()]  # word by word: "five thirty" is 5:30, not 35
+    try:
+        nums = [int(float(x)) for x in parts]
+    except ValueError:
         return None
-    mins = secs / 60
-    span = f"{mins:g} minute{'s' if mins != 1 else ''}" if secs >= 60 else f"{secs:g} seconds"
-    return f"Okay, I'll remind you to {what} in {span}." if what else f"Timer set for {span}."
+    if len(nums) == 1 and nums[0] >= 100:  # "530" / "1730" (speech-to-text drops the colon)
+        nums = [nums[0] // 100, nums[0] % 100]
+    if len(nums) == 1:
+        nums.append(0)
+    if len(nums) != 2 or not (0 <= nums[0] <= 23 and 0 <= nums[1] <= 59):
+        return None
+    return nums[0], nums[1], ap
+
+
+def _when(rest: str) -> tuple[dt.datetime, list[tuple[int, int]]] | None:
+    """Find the time in a reminder. Returns (when, spans of the text that said it) or None."""
+    now = dt.datetime.now()
+    day, clock, part, spans, explicit_day = now.date(), None, None, [], False
+    for m in WHEN.finditer(rest):
+        if m.group("clock"):
+            c = _clock_of(m.group("clock"))
+            span = m.span()
+            if c is None and " " in m.group("clock"):  # "at seven to call home": the clock is just "seven"
+                first = m.group("clock").split()[0]
+                c, span = _clock_of(first), (m.start(), m.start("clock") + len(first))
+            if c is None:
+                continue
+            clock = c
+            spans.append(span)
+            continue
+        elif m.group("wd"):
+            ahead = (WEEKDAYS.index(m.group("wd")) - now.weekday()) % 7
+            if m.group(0).startswith("next ") and ahead == 0:
+                ahead = 7
+            day, explicit_day = now.date() + dt.timedelta(days=ahead), True
+        elif m.group("rel"):
+            day = now.date() + dt.timedelta(days={"today": 0, "tomorrow": 1, "day after tomorrow": 2}[m.group("rel")])
+            explicit_day = True
+        elif m.group("part"):
+            part = m.group("part")
+            if m.group(0).startswith("tomorrow"):
+                day, explicit_day = now.date() + dt.timedelta(days=1), True
+        elif m.group("date"):
+            d = _parse_day(m.group("date").replace("the ", ""))
+            if d is None:
+                continue
+            day, explicit_day = d, True
+        spans.append(m.span())
+    if not spans:
+        return None
+    if clock:
+        h, mi, ap = clock
+        if ap == "pm" and h < 12:
+            h += 12
+        elif ap == "am" and h == 12:
+            h = 0
+        elif not ap and h <= 12:
+            if part in ("afternoon", "evening", "night", "tonight") and h < 12:
+                h += 12
+            elif part != "morning":  # "at 5": the next 5 o'clock that's sensible
+                options = [h, h + 12] if h < 12 else [12]
+                if day == now.date() and not explicit_day:
+                    later = [x for x in options if dt.datetime.combine(day, dt.time(x % 24, mi)) > now]
+                    h = later[0] if later else options[0]
+                else:
+                    h = h + 12 if h < 7 else h
+        when = dt.datetime.combine(day, dt.time(h % 24, mi))
+    else:
+        h, mi = PART_OF_DAY.get(part, (9, 0)) if (part or explicit_day) else (9, 0)
+        when = dt.datetime.combine(day, dt.time(h, mi))
+    if when <= now:
+        if explicit_day and day > now.date():
+            return None
+        when += dt.timedelta(days=1)  # "at 7 am" said at 8 am: tomorrow
+    return when, spans
+
+
+def _say_when(when: dt.datetime) -> str:
+    t = when.strftime("%-I:%M %p").replace(":00", "")
+    days = (when.date() - dt.date.today()).days
+    if days == 0:
+        return f"at {t}" if when.hour < 18 or when.hour >= 22 else f"tonight at {t}" if when.hour >= 20 else f"at {t}"
+    if days == 1:
+        return f"tomorrow at {t}"
+    if days < 7:
+        return f"on {when.strftime('%A')} at {t}"
+    return f"on {when.strftime('%A, %B %-d')} at {t}"
+
+
+@handles(r"snooze(?: (?:it|that))?(?: for (.+))?", r"remind me (?:again|later)(?: in (.+))?")
+def _snooze(app, m, text):
+    from batsy.tools import monitor
+
+    last = monitor.last_fired
+    if not last or time.time() - last.get("fired", 0) > 1800:
+        return None
+    secs = _duration(m.group(1)) if m.group(1) else 600
+    if not secs:
+        return None
+    monitor.add_reminder(time.time() + secs, last.get("what") or None, last.get("message"))
+    monitor.last_fired = None
+    return f"Okay, again {_span(secs)}."
+
+
+@handles(r"(?:can you |please )?remind me (.+)", r"(?:set|create|add|make)(?: me)? (?:a |an )?reminder (.+)",
+         r"(?:a )?reminder (?:for|at|on|to) (.+)")
+def _remind(app, m, text):
+    rest = re.sub(r"\b(?:please|thanks|thank you)$", "", m.group(1)).strip()
+    if re.search(r"\b(every|daily|weekly|monthly|each|weekdays|weekends|nightly)\b", rest):
+        return None  # a recurring one: the chores/habits tracker handles that
+    from batsy.tools import monitor
+
+    rel = re.fullmatch(r"in (.+?) (?:to|about|that|of) (.+)", rest) or re.fullmatch(r"(?:to |about |that |of )?(.+?) in (.+)", rest)
+    if rel:
+        when_s, what = (rel.group(1), rel.group(2)) if rest.startswith("in ") else (rel.group(2), rel.group(1))
+        secs = _duration(when_s)
+        if secs:
+            what = _as_said(what, text)
+            monitor.add_reminder(time.time() + secs, what)
+            return f"Okay, I'll remind you to {_yours(what)} {_span(secs)}."
+    found = _when(rest)
+    if found is None:
+        return None
+    when, spans = found
+    what = rest
+    for a, b in sorted(spans, reverse=True):
+        what = what[:a] + " " + what[b:]
+    what = re.sub(r"\s+", " ", what).strip()
+    what = re.sub(r"^(?:for|at|on|in)\s+", "", what)
+    what = re.sub(r"^(?:to|about|that|of)\s+|\s+(?:to|about|that|at|on|by)$", "", what).strip()
+    about = bool(re.match(r"(?:about|of)\s", what)) or bool(re.search(r"\b(?:about|of) " + re.escape(what) + "$", rest))
+    what = re.sub(r"^(?:to|about|that)\s+", "", what).strip()
+    what = _as_said(what, text)
+    monitor.add_reminder(when.timestamp(), (f"about {what}" if about else what) or None,
+                         None if what else when.strftime("This is your %-I:%M %p reminder.").replace(":00", ""))
+    said = _say_when(when)
+    if not what:
+        return f"Okay, reminder set for {said[3:] if said.startswith('at ') else said}."
+    return f"Okay, I'll remind you {'about' if about else 'to'} {_yours(what)} {said}."
+
+
+def _as_said(words: str, text: str) -> str:
+    """The words as you said them ("DBMS", "Ender 3"), not lowercased: matching runs on normalised text."""
+    if not words:
+        return words
+    rx = r"[\s,.!?'-]*".join(re.escape(w) for w in words.split())
+    m = re.search(rx, text, re.I)
+    return m.group(0) if m else words
+
+
+@handles(r"(?:what are|list|tell me|show me|read me|read out|whats|what's|what is) (?:all )?(?:my |the )?(?:reminders|timers)"
+         r"(?: (?:for )?today| left| set| coming up)?",
+         r"(?:do i have )?any (?:reminders|timers)(?: (?:for )?today| left| set| coming up)?",
+         r"what (?:reminders|timers) do i have(?: (?:for )?today| left| set)?",
+         r"what (?:did|have) i (?:ask|asked|tell|told) you to remind me(?: about| of)?")
+def _list_reminders(app, m, text):
+    from batsy.tools import monitor
+
+    items = monitor.reminders()
+    if not items:
+        return "You don't have any reminders set."
+    lines = []
+    for _, it in items:
+        due = dt.datetime.fromtimestamp(it["next_run"])
+        soon = it["next_run"] - time.time() < 3600
+        when = _span(max(1, it["next_run"] - time.time())) if soon else _say_when(due)
+        what = _yours(it["what"]) if it.get("what") else ""
+        lines.append(f"{what} {when}" if what.startswith("about ") else f"to {what} {when}" if what else f"a timer {when}")
+    if hasattr(app, "show_visual"):
+        app.show_visual("card", "Reminders | " + "\n".join(
+            f"- {re.sub(r'^(?:to|about) ', '', x)[0].upper() + re.sub(r'^(?:to|about) ', '', x)[1:]}" for x in lines))
+    head = f"You have {len(lines)} reminder{'s' if len(lines) != 1 else ''}: "
+    return head + (lines[0] if len(lines) == 1 else ", ".join(lines[:-1]) + " and " + lines[-1]) + "."
+
+
+@handles(r"(?:cancel|delete|remove|clear|stop|forget|turn off) (?:all )?(?:of )?(?:my |the )?(?:reminders|timers)",
+         r"(?:cancel|delete|remove|clear|stop|forget|turn off) (?:my |the |that )?(?:reminder|timer)"
+         r"(?: (?:about|to|for|at|on|of) (.+))?")
+def _cancel_reminder(app, m, text):
+    from batsy.tools import monitor
+
+    items = monitor.reminders()
+    if not items:
+        return "There aren't any reminders to cancel."
+    if re.search(r"\b(reminders|timers)\b", m.group(0)) and not m.lastindex:
+        for mid, _ in items:
+            monitor.cancel(mid)
+        return f"Cancelled all {len(items)} reminder{'s' if len(items) != 1 else ''}." if len(items) > 1 else "Cancelled it."
+    target = (m.group(1) or "") if m.lastindex else ""
+    if not target:
+        if len(items) == 1:
+            monitor.cancel(items[0][0])
+            return "Cancelled it."
+        return f"You have {len(items)} reminders. Which one? Say cancel the reminder about, and what it's for."
+    want = set(target.split()) - {"the", "my", "a", "to", "about"}
+    found = _when(target)
+    best, best_score = None, 0.0
+    for mid, it in items:
+        sc = len(want & set((it.get("what") or "").split())) / max(1, len(want))
+        if found and abs(it["next_run"] - found[0].timestamp()) < 120:
+            sc += 1
+        if sc > best_score:
+            best, best_score = (mid, it), sc
+    if not best or best_score < 0.34:
+        return "I couldn't find a reminder like that."
+    monitor.cancel(best[0])
+    what = _yours(best[1].get("what") or "")
+    return (f"Cancelled the reminder {what}." if what.startswith("about ") else f"Cancelled the reminder to {what}.") \
+        if what else "Cancelled that timer."
 
 
 # --- little tools ---------------------------------------------------------------------------------------------

@@ -88,6 +88,8 @@ def describe(s: dict) -> str:
         base = "on weekdays"
     elif s.get("days") == [5, 6]:
         base = "every weekend"
+    elif not s.get("days"):
+        base = "with no fixed schedule"
     else:
         names = [DAYS[d].capitalize() for d in s.get("days", [])]
         base = "every " + (" and ".join(names) if len(names) < 3 else ", ".join(names[:-1]) + " and " + names[-1])
@@ -371,6 +373,11 @@ class TaskTalk:
                     continue  # ask once you're back at the laptop
                 s.asked.add(key)
                 s.pending = {"id": t["id"], "until": time.time() + 300}
+                if t["kind"] == "project" and getattr(self.app, "projects", None):
+                    try:  # "I saw 2 commits on it today. How did the robot project go today?"
+                        q = self.app.projects.checkin_hint(t["id"]) + q
+                    except Exception:
+                        pass
                 self.app.ask_user(q)
                 return  # one question at a time
 
@@ -386,3 +393,10 @@ class TaskTalk:
         if projects:
             bits.append("project time: " + ", ".join(projects))
         return " Also " + "; ".join(bits) + "."
+
+    def morning_projects(self) -> str:
+        """New commits on your projects since yesterday, for "good morning"."""
+        try:
+            return self.app.projects.morning_news() if getattr(self.app, "projects", None) else ""
+        except Exception:
+            return ""

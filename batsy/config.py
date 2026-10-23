@@ -52,6 +52,19 @@ DEFAULTS = {
         "all_facts_below": 15,     # send every remembered fact while there are this few...
         "max_facts": 8,            # ...otherwise only the most relevant ones
     },
+    # Who you are: both brains (local and Claude) use this to pitch answers and expect your vocabulary.
+    "user": {
+        "name": "",               # what Batsy calls you; empty = your login name
+        "about": "a college student who codes every day (Python, web, Arduino and ESP32) and does 3D design, "
+                 "modelling and 3D printing (Blender, Fusion 360, OpenSCAD, slicers, PLA and PETG)",
+    },
+    # Your projects ("I'm doing a project on...") are matched to your GitHub repos and project folders.
+    "github": {
+        "user": "",               # your GitHub username; empty = detected from your clones / GITHUB_TOKEN / gh
+    },
+    "projects": {
+        "roots": [],              # folders to look for projects in; empty = your whole home folder
+    },
     "spotify": {
         "client_id": "",        # from developer.spotify.com (see README)
         "device": "ipad",       # preferred Spotify Connect device (name contains this)
@@ -106,6 +119,9 @@ DEFAULTS = {
                      "Arduino", "ESP32", "GPIO", "Docker", "Kubernetes", "Fedora", "npm", "Bluetooth", "repo", "commit",
                      "sketch", "serial monitor"],
         "hotwords_score": 1.0,       # keep at 1.0; higher invents hotwords out of background noise
+        # Everyday vocabulary to expect and to repair after recognition (batsy/lexicon.py): your project names are
+        # always added. Drop a domain you don't use.
+        "lexicon": ["developer", "3d", "student"],
         "speaker_model": "wespeaker_en_voxceleb_resnet34_LM.onnx",  # after "learn my voice", only you trigger Batsy
         "speaker_match": 0.5,        # 0..1; raise if others still trigger it, lower if it ignores you
         "whisper_model": "base.en",  # fast on CPU; small.en is more accurate but slower

@@ -2,9 +2,11 @@
 or Vosk (light fallback)."""
 import json
 import logging
+import re
 
 import numpy as np
 
+from batsy import lexicon
 from batsy.config import DATA_DIR, MODELS_DIR
 
 log = logging.getLogger("batsy.stt")
@@ -16,6 +18,8 @@ PROMPT = ("Batsy, Arduino, Fedora, terminal, sketch, upload, compile, serial mon
 class Transcriber:
     def __init__(self, cfg, vosk_model=None):
         self.engine = None
+        self.cfg = cfg
+        self.prompt = lexicon.whisper_prompt(cfg, PROMPT)  # your everyday words, so Whisper expects them
         want = cfg.get("voice.stt_engine")
         if want in ("auto", "parakeet"):
             self._load_parakeet(cfg)
@@ -59,14 +63,18 @@ class Transcriber:
 
     @staticmethod
     def _hotwords(cfg, d) -> dict:
-        """Bias Parakeet toward words it doesn't know ("Batsy", "Arduino"), like Whisper's PROMPT does."""
-        words = cfg.get("voice.hotwords")
+        """Bias Parakeet toward words it doesn't know ("Batsy", "PETG", your project names), like Whisper's prompt.
+        The list comes from batsy/lexicon.py: the config's words, your domains, and your projects."""
+        pieces = [ln.rsplit(" ", 1) for ln in (d / "tokens.txt").read_text().splitlines()]
+        chars = set("".join(p for p, _ in pieces).replace("\u2581", "")) | {" "}
+        # a hotword the model can't spell (a character missing from its tokens) would break hotwords for all
+        words = [w for w in (" ".join(re.sub(r"[^\w' ]", " ", w).split()) for w in lexicon.hotwords(cfg))
+                 if w and set(w) <= chars]
         if not words:
             return {}
         vocab = d / "bpe.vocab"  # sherpa-onnx encodes hotwords with this; Parakeet ships only tokens.txt
         if not vocab.exists():
-            lines = (ln.rsplit(" ", 1) for ln in (d / "tokens.txt").read_text().splitlines())
-            vocab.write_text("".join(f"{piece}\t{-int(i)}\n" for piece, i in lines))
+            vocab.write_text("".join(f"{piece}\t{-int(i)}\n" for piece, i in pieces))
         hot = DATA_DIR / "hotwords.txt"
         hot.write_text("\n".join(words) + "\n")
         return dict(decoding_method="modified_beam_search", hotwords_file=str(hot),
@@ -83,7 +91,7 @@ class Transcriber:
         elif self.engine == "whisper":
             segments, _ = self.whisper.transcribe(
                 audio.astype(np.float32) / 32768.0, language="en", beam_size=3,
-                initial_prompt=PROMPT, vad_filter=True, condition_on_previous_text=False,
+                initial_prompt=self.prompt, vad_filter=True, condition_on_previous_text=False,
             )
             text = " ".join(s.text.strip() for s in segments).strip()
         else:
@@ -92,6 +100,8 @@ class Transcriber:
             rec = KaldiRecognizer(self.vosk_model, 16000)
             rec.AcceptWaveform(audio.tobytes())
             text = json.loads(rec.FinalResult()).get("text", "")
-        if not quiet:
-            log.info("heard: %s", text)
+        if not quiet:  # (wake-word checks stay raw)
+            fixed = lexicon.fix(text, self.cfg)
+            log.info("heard: %s%s", text, f"  ->  {fixed}" if fixed != text else "")
+            text = fixed
         return text

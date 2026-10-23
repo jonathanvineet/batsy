@@ -42,7 +42,8 @@ class Overlay:
         self.dock_lock = threading.Lock()
         self.dock_deaths: list[float] = []
         self.origin: dict | None = None
-        self.convo = {"text": "", "image": None, "title": "", "fresh": False}  # what the bubble will show
+        # what the bubble will show: the latest exchange only (your words + Batsy's reply to them)
+        self.convo = {"you": "", "text": "", "image": None, "title": "", "fresh": False, "open": False}
         want = cfg.get("overlay.renderer") or "auto"
         self.renderer = "web" if want in ("auto", "web") and _has_webengine() else "classic"
         self.safe_gpu = False
@@ -176,7 +177,7 @@ class Overlay:
         """The overlay closed: the bat comes back, with this conversation's answer (or picture) in a bubble."""
         c = self.convo
         if c["fresh"] and (c["text"] or c["image"] or c["title"]):
-            self._dock_send("rest", text=c["text"], image=c["image"], title=c["title"])
+            self._dock_send("rest", you=c["you"], text=c["text"], image=c["image"], title=c["title"])
             c["fresh"] = False  # shown once; a later screensaver exit just brings back the bat
         else:
             self._dock_send("standby")
@@ -184,10 +185,16 @@ class Overlay:
     def _track(self, cmd: str, kw: dict) -> None:
         c = self.convo
         if cmd == "listen" and kw.get("fresh"):
-            c.update(text="", image=None, title="", fresh=False)
+            c.update(you="", text="", image=None, title="", fresh=False, open=False)
+        elif cmd == "heard":  # a new exchange: the bubble is about this one, not everything said before
+            c.update(you=kw.get("text", ""), text="", open=True)
         elif cmd == "say":
-            c["text"] = (c["text"] + " " + kw.get("text", "")).strip()[-600:]
+            if not c["open"]:  # Batsy speaking up on its own (a reminder, a check-in question)
+                c.update(you="", text="", open=True)
+            c["text"] = (c["text"] + " " + kw.get("text", "")).strip()[:1200]
             c["fresh"] = True
+        elif cmd == "done":
+            c["open"] = False
         elif cmd == "image":
             c["image"], c["fresh"] = kw.get("path"), True
         elif cmd == "card":

@@ -91,6 +91,9 @@ class Batsy:
         claude_code.CFG, claude_code.announce = cfg, self.announce
         self.listen_requested = threading.Event()  # Batsy asked something: listen without the wake word
         self.tasks = TaskTalk(self)
+        from batsy.projects import ProjectTalk
+
+        self.projects = ProjectTalk(self)  # "I'm doing a project on...", updates from GitHub/the laptop, finding files
         self.vocab = get_vocab()
         self.skills = SkillBook(claude_cli, show=lambda q: self.show_visual("show", q))
         self.learner = Learner()  # logs every request, remembers answers, turns repeats into code
@@ -538,6 +541,12 @@ class Batsy:
             if said:
                 self._reply(said)
             return True
+        try:
+            if self.projects.handle(n, text):  # "I'm doing a project on...", "update on my robot project", "find my notes"
+                self._route = "command"
+                return True
+        except Exception:
+            log.exception("projects")
         if self.tasks.handle(n, text):  # chores/projects: check-in answers, "I do laundry every Sunday"...
             return True
         if self._skill_feedback(n, text):
@@ -680,7 +689,8 @@ class Batsy:
                     text = self.stt.transcribe(audio)
                     if was_wake_only:  # "Batsy ... Batsy, open YouTube"
                         text = strip_wake_word(text, self.cfg.get("voice.wake_words"))[1] or text
-                    awaiting = self.routines.capturing or self.last_skill or self.tasks.store.pending  # "no" is an answer
+                    awaiting = self.routines.capturing or self.last_skill or self.tasks.store.pending or \
+                        self.projects.pending  # "no" is an answer
                     ignore = NOISE_TRANSCRIPTS if awaiting or was_wake_only else END_FOLLOWUP | NOISE_TRANSCRIPTS
                     # Without the wake word, a short "mm-hmm" / "they got this" is you talking to someone else,
                     # unless Batsy just asked you something.
@@ -998,6 +1008,8 @@ class ControlServer(threading.Thread):
                     send({"yes": bool(yes)})
                 return
             text = req.get("text", "").strip()
+            if text:
+                self.app.overlay.heard(text)  # typed turns are their own exchange on screen too
             try:
                 if text and not self.app.local_command(text):
                     self.app.run_turn(text, "typed", say, threading.Event(), confirm)
