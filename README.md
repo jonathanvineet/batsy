@@ -28,7 +28,10 @@ Log out and back in once so the Arduino serial-port permission (`dialout` group)
 | "Batsy, play three upbeat songs for my workout, then shuffle" | Claude works it out with the `spotify` tool |
 | "Batsy, what's on my screen?" | takes a screenshot and looks at it |
 | "Batsy, tell me when my build finishes" / "when the website is back up" | background job or monitor that speaks up when it happens |
-| "Batsy, remind me in 20 minutes to check the oven" | timer (survives restarts) |
+| "Batsy, remind me in 20 minutes to check the oven" / "remind me tomorrow at 9 to submit the assignment" | reminder (survives restarts, no tokens) |
+| "Batsy, I'm doing a project on a line following robot" | remembers it and finds its GitHub repo / folder from the description |
+| "Batsy, give me an update on my robot project" | commits, unpushed and uncommitted work, issues and your notes |
+| "Batsy, create a Python script that converts PNGs to JPG" | Claude Code writes and tests it in `~/Batsy/code/`, then opens it |
 | "Batsy, remember my ESP32 is on ttyUSB0" | long-term memory |
 | "Batsy, make yourself a skill that summarises my unread GitHub notifications" | writes the Python, tests it, saves it for next time |
 | "Batsy, new conversation" | clears the conversation (long-term memory is kept) |
@@ -46,7 +49,7 @@ When you say "Batsy", the screen fades to a dark Batsy view, drawn by the GPU (t
 - **While you talk,** a glowing line ripples with your voice, particles gather into it, and your words appear live. This is local and uses no tokens.
 - **While it works,** a pulse sweeps along the line and the particles stream through it; a status pill says what it's doing ("Asking Claude · 12s").
 - **Saying just "Batsy"** gives a chime and the listening line, nothing spoken, so it never talks over you. Pause as long as you like (up to 8 s) before the request.
-- **When it answers,** the reply appears as big captions while it speaks.
+- **When it answers,** the reply appears as big captions while it speaks. Each exchange is its own block: what you said, then Batsy's reply. The newest is at full size at the bottom, and earlier ones dim and scroll off the top, so a follow-up never runs into the previous answer. When the overlay folds back into the corner bat, its bubble shows your last question and the reply to it.
 - **Pictures without special phrases.** Ask in any words: "what does a capybara look like", "who's the CEO of Nvidia", "how big is a blue whale", "I wanna see that bridge in Prague". Claude decides when a picture helps and adds a hidden `[[show: …]]` note to its reply. Batsy cuts the note out of the speech, finds one picture (Wikipedia, then Openverse) and puts it on screen while still talking. There's no extra request to Claude, and Claude never has to see the picture.
 - **Details** (lists, steps, numbers) appear on a text card, from a hidden `[[card: Title | text]]` note, instead of being read aloud.
 
@@ -59,6 +62,7 @@ The overlay closes by itself a few seconds after the answer, or 30 seconds after
 - **Opening and closing are instant, with no AI:** "open VS Code / Files / Firefox / YouTube / Downloads / github.com", "close Spotify". Batsy finds your installed apps (including Flatpaks) by name, with a few nicknames like "vs code", "files" and "browser".
 - **New actions are learned once.** The first time you ask for something it doesn't know how to do, like "turn on dark mode", "connect my earbuds" or "set brightness to 40", Claude Code writes a small Python skill for it, covering the different ways you might say it. Batsy checks the code, runs it for you, and saves it ("Next time that'll be instant"). After that, any of those phrasings runs the saved code directly: no AI, no Pro usage.
 - **No duplicates.** Before writing anything new, Claude sees a short list of the skills you already have. If your request is just a new way of saying one of them ("I'd prefer the dark theme" for "turn on dark mode"), Batsy adds your phrase to that skill and runs it. Next time that phrase is instant too. Opposites like "turn *off* dark mode" are never merged.
+- **Writing code is never turned into a skill.** "Create a Python script that…", "build me a Flask API", "write unit tests for my parser" go to Claude Code as a coding job: it makes a folder under `~/Batsy/code/` (or works in the project you named), writes the code, runs it on a small example, fixes errors, then tells you the file name and how to run it and opens it in your editor.
 - **Things the local AI already did** (for example "what's my battery") are turned into skills in the background, so they're instant next time too.
 - **Feedback teaches it.** Say "no, that's wrong" / "didn't work" right after a skill runs, or let it crash, and Claude rewrites it using your complaint. Two failures in a row switch the skill off until it's relearned. Every clean use counts as a success.
 - **Safety:** skills can only run commands through Batsy's checked shell, so risky ones (deleting, uninstalling, shutting down…) still ask "Should I go ahead?". Code that tries to get around that is rejected. Questions and chat are never turned into code: Claude just answers them.
@@ -123,6 +127,36 @@ Tell Batsy what you do regularly, in your own words:
 - logs what you say: done, skipped, or your progress update. It keeps streaks and mentions today's chores and projects in "good morning".
 
 **Ask anytime:** "what are my projects?" · "what do I have to do today?" · "how's my robot project going?" (shows the update history) · "I finished the laundry" · "update on robot project: motors wired" · "stop tracking gym".
+
+## Your projects: remembered, found, followed (no tokens)
+
+Tell Batsy what you're working on in your own words. You don't need the repo's exact name:
+- "I'm doing a project on the alumni election website" · "I started a new project, it's a portfolio site" · "I'm building a drone for my college project" · "my final year project is about attendance with face recognition"
+
+Batsy says "Got it", then works out **which repo or folder it is**. It matches what you said against the names, descriptions, topics, READMEs and files of your GitHub repos and of the project folders on the laptop (anything with a `.git`, `package.json`, `pyproject.toml`, `.ino`, `.blend`, `.scad`, `.tex`…, including repos inside other repos). Joined-up names (`licetalumnielection`) and initials ("flight controller" → `fc_documentation`) are understood. If two projects are too close to call it asks "Is it humanrecog or humanrecog web?" (answer "the second one", or the name). With Claude Code set up, a quick one-line check usually settles it without asking.
+
+**Then ask anytime:**
+- "Give me an update on my robot project" / "how's the portfolio going" / "what did I do on the weather app this week": commits on GitHub and locally (unpushed ones too), uncommitted changes, recently edited files, open issues and PRs, and your own notes. Spoken in a sentence or two, with details on a card.
+- "Update on my robot project: motors are wired" logs a note. "Any updates?" / "how are my projects going" covers all of them. "What are my projects?" lists them.
+- "Where is my gazebo world editor project?" · "open my portfolio project" (opens the folder in VS Code, or the GitHub page).
+- Check-ins and "good morning" mention new commits ("I saw 2 commits on it today. How did it go?").
+
+**Finding files by what they're about:** "find my thermodynamics notes" · "where's the STL for the phone stand" · "find my arduino sketch for the servo". Batsy names the best match and asks "Want me to open it?"; say "yes", "the second one" or "no".
+
+**GitHub access:** public repos work straight away. Batsy uses `[github] user`, or works your username out from your git identity and your clones. For private repos, put `GITHUB_TOKEN=...` (a fine-grained read-only token) in `~/.config/batsy/env`, or run `gh auth login`. Check what it sees with `batsy projects --scan`, `batsy projects --find "the drone docs"` and `batsy projects --update robot`. The index refreshes in the background every 6 hours. `[projects] roots` limits where it looks.
+
+## Reminders (no tokens)
+
+- "Remind me in 20 minutes to take the print off the bed" · "remind me at 5 pm to call mom" · "remind me tomorrow at 9 to submit the DBMS assignment" · "remind me on Friday at 4:30 to push the code" · "remind me tonight to charge the batteries" · "remind me at half past five to eat" · "set a reminder for 7 to go to the gym"
+- "What are my reminders?" · "cancel the reminder about the gym" · "cancel all reminders" · after one goes off: "snooze it" / "remind me again in 5 minutes"
+- Reminders survive restarts. If the laptop was asleep when one was due, it still goes off and says when it was due. Anything with "every…" ("remind me every Sunday to do laundry") becomes a tracked chore instead (see above).
+
+## Speaks your language: developer, 3D and college vocabulary
+
+Parakeet (the speech recogniser) was trained on general speech, so it used to write "Bamboo Studio", "Cubectil", "Ladek" and "red apology". `batsy/lexicon.py` fixes that in two ways. It **biases Parakeet** (and Whisper) toward the words you actually use: tools, file formats, materials and course terms, plus **your own project names**. It also **repairs the usual mishearings** afterwards ("fusion three sixty" → Fusion 360, "pet g" → PETG, "cube control" → kubectl, "mat lab" → MATLAB, "nsam" → end-sem). On a test of 10 jargon-heavy sentences, recognition went from 17 to 30 of 30 technical words. Ordinary speech is left alone: only distinctive forms are rewritten.
+
+- Domains: `[voice] lexicon = ["developer", "3d", "student"]`. Drop one you don't use, or add your own words to `hotwords`.
+- Both brains also know who you are, from `[user] about` (by default a college student who codes and does 3D design and printing). They pitch answers at that level and use your jargon.
 
 ## Claude budget (your Pro plan)
 

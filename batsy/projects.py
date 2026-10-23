@@ -514,7 +514,8 @@ def spoken(c: dict) -> str:
         where.append("on GitHub" if mine else f"on GitHub under {owner}")
     if c.get("path"):
         where.append(f"in your {Path(c['path']).parent.name or 'home'} folder")
-    name = " ".join(words(c.get("name", ""))) if re.search(r"[_-]", c.get("name", "")) else c.get("name", "")
+    raw = c.get("title") or c.get("name") or "it"
+    name = " ".join(words(raw)) if re.search(r"[_-]", raw) else raw
     return f"{name}, " + " and ".join(where) if where else name
 
 

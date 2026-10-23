@@ -8,6 +8,16 @@ web_tools = true            # web search + fetch
 compact_at_tokens = 50000   # summarise older conversation beyond this
 clear_tool_results_at = 20000  # drop old tool outputs/images beyond this (0 = never)
 
+[user]
+# name = "Jonathan"
+# about = "a college student who codes every day (Python, web, Arduino and ESP32) and does 3D design, modelling and 3D printing"
+
+[github]
+# user = "your-github-username"   # empty = worked out from your git identity; GITHUB_TOKEN in env for private repos
+
+[projects]
+# roots = ["~/code", "~/Documents"]   # where to look for project folders; empty = your whole home folder
+
 [spotify]
 client_id = ""              # from developer.spotify.com, then run: batsy spotify-login
 device = "ipad"             # control the Spotify device whose name contains this
@@ -18,6 +28,7 @@ name = "lenovo"             # picks the webcam whose name contains this
 snapshot_edge = 768         # pixels per look; smaller = fewer tokens
 
 [voice]
+# lexicon = ["developer", "3d", "student"]   # vocabulary Parakeet expects and repairs (batsy/lexicon.py)
 wake_words = ["batsy", "bat see", "bats see", "betsy", "batsie", "bitsy", "patsy"]
 whisper_model = "base.en"  # tiny.en = faster, small.en / medium.en = more accurate but slower
 piper_voice = "en_GB-alan-medium"
