@@ -38,6 +38,7 @@ class Overlay:
         self.on_viewer_event = None  # 3D viewer hosted in the overlay: click-to-measure etc.
         # The standby bat in the top-right corner (batsy/dock.py) while the overlay is closed.
         self.on_dock_open = None  # the bat or its bubble was clicked
+        self.on_stop = None  # "~" pressed in the overlay: end the whole conversation
         self.dock: subprocess.Popen | None = None
         self.dock_lock = threading.Lock()
         self.dock_deaths: list[float] = []
@@ -96,7 +97,9 @@ class Overlay:
             except ValueError:
                 continue
             try:
-                if ev.get("event") == "dismissed" and self.on_dismiss:
+                if ev.get("event") == "stop" and self.on_stop:
+                    self.on_stop()
+                elif ev.get("event") == "dismissed" and self.on_dismiss:
                     self.on_dismiss()
                 elif ev.get("event") == "saver_exit" and self.on_saver_exit:
                     self.on_saver_exit()

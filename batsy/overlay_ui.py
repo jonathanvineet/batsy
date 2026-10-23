@@ -163,6 +163,8 @@ class Overlay(QWidget):
             busy = self.camera_path  # the live camera stays up until closed or idle a while
             linger = max(float(m.get("linger", 6)), 180) if busy else float(m.get("linger", 6))
             self.hide_timer.start(int(1000 * linger))
+        elif cmd == "quiet" and self.state == "speak":  # the voice stopped: stop showing "Speaking"
+            self.state = "idle"
         elif cmd == "hide" and self.camera_path is None:  # the live camera stays up until it's closed
             self._dismiss(notify=False)
         self.update()
@@ -206,6 +208,10 @@ class Overlay(QWidget):
             print(json.dumps({"event": "dismissed"}), flush=True)
 
     def keyPressEvent(self, e):
+        if self.saver is None and e.key() in (Qt.Key_AsciiTilde, Qt.Key_QuoteLeft):  # "~": end the conversation
+            print(json.dumps({"event": "stop"}), flush=True)
+            self._dismiss(notify=False)
+            return
         if self.saver is not None or e.key() in (Qt.Key_Escape, Qt.Key_Space, Qt.Key_Q):
             self._dismiss()
 

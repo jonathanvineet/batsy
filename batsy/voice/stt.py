@@ -80,10 +80,24 @@ class Transcriber:
         return dict(decoding_method="modified_beam_search", hotwords_file=str(hot),
                     hotwords_score=cfg.get("voice.hotwords_score"), modeling_unit="bpe", bpe_vocab=str(vocab))
 
-    def transcribe(self, audio: np.ndarray, quiet: bool = False) -> str:
+    def live(self, preroll: list[bytes] | None = None) -> "LiveTranscript":
+        """Transcribe while you're still talking (Parakeet only): see LiveTranscript."""
+        return LiveTranscript(self, preroll)
+
+    def raw(self, audio: np.ndarray) -> str:
+        """Just the model's transcript of some audio, nothing fixed up."""
+        stream = self.parakeet.create_stream()
+        stream.accept_waveform(16000, audio.astype(np.float32) / 32768.0)
+        self.parakeet.decode_stream(stream)
+        return stream.result.text.strip()
+
+    def transcribe(self, audio: np.ndarray, quiet: bool = False, live: "LiveTranscript | None" = None) -> str:
         if audio is None or audio.size == 0:
             return ""
-        if self.engine == "parakeet":
+        done = live.finish(len(audio)) if live is not None and self.engine == "parakeet" else None
+        if done is not None:  # most of it was transcribed while you were talking
+            text = done
+        elif self.engine == "parakeet":
             stream = self.parakeet.create_stream()
             stream.accept_waveform(16000, audio.astype(np.float32) / 32768.0)
             self.parakeet.decode_stream(stream)
@@ -101,7 +115,87 @@ class Transcriber:
             rec.AcceptWaveform(audio.tobytes())
             text = json.loads(rec.FinalResult()).get("text", "")
         if not quiet:  # (wake-word checks stay raw)
+            text = self._by_topic(audio, text)
             fixed = lexicon.fix(text, self.cfg)
             log.info("heard: %s%s", text, f"  ->  {fixed}" if fixed != text else "")
             text = fixed
         return text
+
+    def _by_topic(self, audio: np.ndarray, text: str) -> str:
+        """Music or a command (voice/topics.py): decode again, biased to that topic's words that sound closest to
+        what was heard, then repair what still came out wrong ("pseudo" -> "sudo"). ~0.5 s, only for these."""
+        from batsy.voice import topics
+
+        kind = topics.topic(text)
+        if not kind:
+            return text
+        first = text
+        try:
+            # A second decode costs as much as the first: only for music the first one didn't match well.
+            # Commands are fixed by repair() alone (milliseconds).
+            needed = kind == "music" and topics.music_fit(text) < 90
+            hw = topics.hotwords(kind, text) if needed and self.engine == "parakeet" else ""
+            if hw:
+                stream = self.parakeet.create_stream(hotwords=hw)
+                stream.accept_waveform(16000, audio.astype(np.float32) / 32768.0)
+                self.parakeet.decode_stream(stream)
+                second = stream.result.text.strip()
+                # keep the biased decode only if it's still the same kind of request and, for music, it now
+                # matches a real song or artist better than the first decode did
+                if topics.topic(second) == kind and (kind != "music" or
+                                                     topics.music_fit(second) > topics.music_fit(text) + 5):
+                    text = second
+            text = topics.repair(kind, text)
+        except Exception as e:
+            log.warning("topic pass failed: %s", e)
+            return first
+        if text != first:
+            log.info("heard (%s): %s  ->  %s", kind, first, text)
+        return text
+
+
+class LiveTranscript:
+    """Transcribes a recording in pieces while it's still being made. Each time you pause (0.3 s) after at least a
+    second of speech, the audio so far goes to a background worker; when you stop, only the last stretch is left
+    to transcribe. Pauses are natural word boundaries, so words aren't cut in half."""
+
+    PAUSE_FRAMES = 8   # 0.4 s of quiet (50 ms frames): a real pause, not a gap between syllables
+    MIN_FRAMES = 40    # at least 2 s per piece: the model needs some context to get words right
+
+    def __init__(self, stt: Transcriber, preroll: list[bytes] | None):
+        from concurrent.futures import ThreadPoolExecutor
+
+        self.stt = stt
+        self.frames: list[bytes] = list(preroll or [])
+        self.cut = 0           # frames before this index are sent off
+        self.quiet = 0
+        self.spoke = False
+        self.pieces = []       # futures, in order
+        self.pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="live-stt")
+
+    def feed(self, frame: bytes, loud: bool) -> None:
+        self.frames.append(frame)
+        self.quiet = 0 if loud else self.quiet + 1
+        self.spoke = self.spoke or loud
+        pending = len(self.frames) - self.cut
+        if self.spoke and self.quiet >= self.PAUSE_FRAMES and pending >= self.MIN_FRAMES:
+            end = len(self.frames) - self.quiet // 2  # cut in the middle of the pause
+            self._send(self.cut, end)
+            self.cut, self.spoke = end, False
+
+    def _send(self, start: int, end: int) -> None:
+        audio = np.frombuffer(b"".join(self.frames[start:end]), dtype=np.int16)
+        self.pieces.append(self.pool.submit(self.stt.raw, audio))
+
+    def finish(self, samples: int) -> str | None:
+        """The whole transcript, or None if this doesn't cover the same audio (then decode it normally)."""
+        if sum(len(f) for f in self.frames) // 2 != samples:
+            self.pool.shutdown(wait=False, cancel_futures=True)
+            return None
+        if self.cut < len(self.frames):
+            self._send(self.cut, len(self.frames))
+        try:
+            text = " ".join(p.result(timeout=30) for p in self.pieces)
+        finally:
+            self.pool.shutdown(wait=False)
+        return " ".join(text.split())

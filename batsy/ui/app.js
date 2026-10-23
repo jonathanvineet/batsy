@@ -183,6 +183,7 @@ const handlers = {
   heard(m) { ui.partial = ''; newTurn(m.text || ''); renderText(); },
   think() { leaveSaver(); setState('think'); },
   say(m) {
+    clearTimeout(ui.quietTimer);
     leaveSaver(); ui.status = '';
     if (!ui.turnOpen || !ui.turns.length) newTurn('');  // Batsy speaking up on its own (a reminder, a question)
     const t = ui.turns[ui.turns.length - 1];
@@ -195,6 +196,10 @@ const handlers = {
     renderStatus();
   },
   done() { ui.status = ''; ui.turnOpen = false; setState('idle'); },
+  quiet() {  // the voice finished its last sentence; wait a moment in case the next one is still on its way
+    clearTimeout(ui.quietTimer);
+    ui.quietTimer = setTimeout(() => { if (ui.state === 'speak' && !ui.status) setState('idle'); }, 600);
+  },
   image(m) { leaveSaver(); ui.image = m.url; showImage(m.url, m.caption); layout(); },
   card(m) { leaveSaver(); ui.card = [m.title, m.text]; renderCard(m.title, m.text); layout(); },
   camera(m) {
@@ -297,6 +302,7 @@ function closeIntoBat() {
 addEventListener('keydown', e => {
   if (viewerOnly) return;
   if (ui.saver) return send({event: 'saver_exit'});
+  if (['~', '`'].includes(e.key)) return send({event: 'stop'});  // end the conversation: stop talking and listening
   if (['Escape', ' ', 'q', 'Q'].includes(e.key)) send({event: 'dismiss'});
 });
 addEventListener('pointerdown', e => {

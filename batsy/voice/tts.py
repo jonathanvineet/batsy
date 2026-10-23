@@ -51,6 +51,7 @@ class Speaker:
         self.piper = None
         self.engine = "none"
         self.chime_path = DATA_DIR / "chime.wav"
+        self.on_idle = None  # called when the last queued sentence has finished playing (or speech was stopped)
         if enabled:
             self._init_engine()
             if not self.chime_path.exists():
@@ -106,6 +107,14 @@ class Speaker:
         proc = self.proc
         if proc and proc.poll() is None:
             proc.kill()
+        self._maybe_idle()
+
+    def _maybe_idle(self) -> None:
+        if self.q.unfinished_tasks == 0 and self.on_idle:
+            try:
+                self.on_idle()
+            except Exception:
+                log.exception("on_idle")
 
     def idle(self) -> bool:
         return self.q.unfinished_tasks == 0
@@ -136,6 +145,7 @@ class Speaker:
                     log.error("tts failed: %s", e)
                 finally:
                     self.q.task_done()
+                    self._maybe_idle()
             else:
                 self.pq.put((gen, path))
 
@@ -149,6 +159,7 @@ class Speaker:
             finally:
                 Path(path).unlink(missing_ok=True)
                 self.q.task_done()
+                self._maybe_idle()
 
     def _discard(self, path: str) -> None:
         Path(path).unlink(missing_ok=True)

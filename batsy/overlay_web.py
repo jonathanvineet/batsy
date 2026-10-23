@@ -184,6 +184,9 @@ class Shell(QWidget):
         kind = ev.get("event")
         if kind in ("dismiss", "saver_exit"):
             self._dismiss(notify=True)
+        elif kind == "stop":  # "~": end the conversation, not just hide
+            emit({"event": "stop"})
+            self._dismiss(notify=False)
         elif kind == "collapsed":
             self._finish_dismiss()
         elif kind == "measured":

@@ -412,7 +412,17 @@ def _ip(app, m, text):
         return "I'm not connected to a network."
 
 
-@handles(r"how long (?:have you|has the laptop|has the computer) been (?:on|running|up)", r"uptime")
+@handles(r"(?:have you|did you) (?:just )?(?:restart|restarted|reboot|rebooted|update|updated)(?: yourself)?(?: already| yet)?",
+         r"when did you (?:last )?(?:restart|start|update|reboot)(?: yourself)?",
+         r"how long have you been (?:on|running|up|awake|online)", r"(?:what(?:'s| is) )?your uptime",
+         r"are you (?:back|updated|restarted)")
+def _batsy_uptime(app, m, text):
+    from batsy import lifecycle
+
+    return lifecycle.describe()
+
+
+@handles(r"how long (?:has the laptop|has the computer|has this laptop) been (?:on|running|up)", r"uptime")
 def _uptime(app, m, text):
     secs = time.time() - psutil.boot_time()
     h, mnt = int(secs // 3600), int(secs % 3600 // 60)

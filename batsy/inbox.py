@@ -111,6 +111,7 @@ class Inbox:
         delay = 10
         while True:
             t0 = time.time()
+            self.problem = None  # fixed since last time (e.g. the operator was just set)? find out afresh
             try:
                 p = subprocess.Popen([tailscale(), "file", "get", "--loop", "--wait", "--conflict=rename", "--verbose",
                                       str(self.dir)], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)

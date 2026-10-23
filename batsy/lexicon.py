@@ -249,7 +249,7 @@ def hotwords(cfg, extra: list[str] | None = None) -> list[str]:
     words = list(cfg.get("voice.hotwords") or [])
     for d in domains(cfg):
         words += HOTWORDS.get(d, [])
-    words += extra if extra is not None else _project_words()
+    words += extra if extra is not None else _project_words() + _music_words()
     seen, out = set(), []
     for w in words:
         w = " ".join(str(w).split())
@@ -267,6 +267,23 @@ def _project_words() -> list[str]:
         return projects.spoken_names(limit=40)
     except Exception:
         return []
+
+
+def _music_words(limit: int = 20) -> list[str]:
+    """The artists you listen to most (from Spotify, see spotify.INDEX_FILE), so "play Billie Eilish" is heard
+    right. Only names of two or more letters that aren't everyday words."""
+    import json
+
+    from batsy.config import DATA_DIR
+
+    try:
+        idx = json.loads((DATA_DIR / "music_index.json").read_text())
+    except (OSError, ValueError):
+        return []
+    return [a[0] for a in idx.get("artists", [])[:limit] if len(a[0]) >= 3 and not a[0].lower() in COMMON]
+
+
+COMMON = {"the", "you", "her", "him", "yes", "no", "love", "home", "music", "girl", "boy"}
 
 
 def whisper_prompt(cfg, base: str) -> str:

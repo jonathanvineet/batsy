@@ -40,6 +40,15 @@ class Ears:
         if hasattr(self.model, "find_word"):  # vosk >= 0.3.45; older versions just log a warning
             grammar = [w for w in grammar if all(self.model.find_word(x) >= 0 for x in w.split())]
         self.wake = KaldiRecognizer(self.model, RATE, json.dumps(grammar + ["[unk]"]))
+        self.spotter = None  # the dedicated "Batsy" keyword spotter (batsy/voice/wake.py); Vosk is the fallback
+        self.wake_source = None  # which one fired last: "kws" (precise, answer at once) or "vosk" (check first)
+        try:
+            from batsy.voice import wake
+
+            if wake.available():
+                self.spotter = wake.Spotter()
+        except Exception as e:
+            log.warning("keyword spotter unavailable (%s); using Vosk only", e)
         self.q: queue.Queue[bytes] = queue.Queue()
         self.history = collections.deque(maxlen=FRAMES_PER_SEC * 3)  # pre-roll buffer
         # Background level = a low percentile of the last few seconds, so it follows the room both ways
@@ -105,6 +114,8 @@ class Ears:
         except queue.Empty:
             pass
         self.wake.Reset()
+        if self.spotter is not None:
+            self.spotter.reset()
 
     def read(self, timeout: float = 0.5) -> bytes | None:
         try:
@@ -127,6 +138,12 @@ class Ears:
     def wake_hit(self, frame: bytes, strict: bool = False) -> bool:
         """Feed a frame to the wake spotter. strict=True waits for a finished phrase (fewer false hits,
         used while Batsy is talking)."""
+        if self.spotter is not None and self.spotter.hit(frame):
+            self.wake.Reset()
+            self.wake_source = "kws"
+            log.info("wake word heard (keyword spotter)")
+            return True
+        self.wake_source = "vosk"
         if self.wake.AcceptWaveform(frame):
             hit = self._hit(json.loads(self.wake.Result()).get("text", ""))
         elif strict:

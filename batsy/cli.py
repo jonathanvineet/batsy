@@ -149,6 +149,14 @@ def cmd_chat(cfg, args) -> None:
             _local_turn(app, text)
 
 
+def cmd_stop(cfg, args) -> None:
+    """Stop the conversation: Batsy stops talking, cancels what it's doing and stops listening (for a hotkey)."""
+    from batsy.app import ask_daemon
+
+    if not ask_daemon("stop"):
+        print("Batsy isn't running.")
+
+
 def cmd_ask(cfg, args) -> None:
     from batsy.app import ask_daemon
 
@@ -378,6 +386,7 @@ def main() -> None:
     p.add_argument("--speak", action="store_true")
     sub.add_parser("doctor", help="check the setup")
     sub.add_parser("reset", help="start a fresh conversation")
+    sub.add_parser("stop", help="stop the conversation now (bind it to a keyboard shortcut)")
     sub.add_parser("usage", help="show token usage")
     sub.add_parser("spotify-login", help="connect your Spotify account")
     p = sub.add_parser("skills", help="list (or --forget) skills Batsy learned")
@@ -395,4 +404,4 @@ def main() -> None:
     {"run": cmd_run, None: cmd_run, "chat": cmd_chat, "ask": cmd_ask,
      "doctor": cmd_doctor, "reset": cmd_reset, "usage": cmd_usage,
      "spotify-login": cmd_spotify_login, "vocab": cmd_vocab, "skills": cmd_skills,
-     "projects": cmd_projects}[args.cmd](cfg, args)
+     "projects": cmd_projects, "stop": cmd_stop}[args.cmd](cfg, args)
