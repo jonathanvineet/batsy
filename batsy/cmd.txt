@@ -2,3 +2,118 @@ sudo dnf install tailscale && sudo systemctl enable --now tailscaled
 sudo tailscale up                       
 sudo tailscale set --operator=$USER     
 batsy doctor
+
+
+#include <WiFi.h>
+#include <WebServer.h>
+
+// Enter your Wi-Fi credentials
+const char* ssid = "Airtel_Vineet J";
+const char* password = "Clem_6623";
+
+WebServer server(80);
+
+const int RELAY_PIN = 2;  // D2 / GPIO2
+
+// Change these if your relay works in reverse
+const int RELAY_ON = HIGH;
+const int RELAY_OFF = LOW;
+
+bool lightOn = false;
+
+void handleRoot() {
+  String page = R"rawliteral(
+  <!DOCTYPE html>
+  <html>
+  <head>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Light Control</title>
+    <style>
+      body {
+        font-family: Arial;
+        text-align: center;
+        background: #f2f4f8;
+        padding-top: 50px;
+      }
+      .card {
+        background: white;
+        padding: 25px;
+        margin: auto;
+        max-width: 320px;
+        border-radius: 15px;
+      }
+      button {
+        padding: 15px 25px;
+        margin: 10px;
+        font-size: 18px;
+        border: none;
+        border-radius: 8px;
+        color: white;
+      }
+      .on { background: #16a34a; }
+      .off { background: #dc2626; }
+    </style>
+  </head>
+  <body>
+    <div class="card">
+      <h2>ESP32 Light Control</h2>
+      <p>Light status: <b>)rawliteral";
+
+  page += lightOn ? "ON" : "OFF";
+
+  page += R"rawliteral(</b></p>
+      <button class="on" onclick="location.href='/on'">LIGHT ON</button>
+      <button class="off" onclick="location.href='/off'">LIGHT OFF</button>
+    </div>
+  </body>
+  </html>
+  )rawliteral";
+
+  server.send(200, "text/html", page);
+}
+
+void handleOn() {
+  digitalWrite(RELAY_PIN, RELAY_ON);
+  lightOn = true;
+  server.sendHeader("Location", "/");
+  server.send(303);
+}
+
+void handleOff() {
+  digitalWrite(RELAY_PIN, RELAY_OFF);
+  lightOn = false;
+  server.sendHeader("Location", "/");
+  server.send(303);
+}
+
+void setup() {
+  Serial.begin(115200);
+
+  digitalWrite(RELAY_PIN, RELAY_OFF);
+  pinMode(RELAY_PIN, OUTPUT);
+
+  WiFi.mode(WIFI_STA);
+  WiFi.begin(ssid, password);
+
+  Serial.print("Connecting to Wi-Fi");
+
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    Serial.print(".");
+  }
+
+  Serial.println();
+  Serial.print("Open this address on your phone: http://");
+  Serial.println(WiFi.localIP());
+
+  server.on("/", handleRoot);
+  server.on("/on", handleOn);
+  server.on("/off", handleOff);
+
+  server.begin();
+  Serial.println("Web server started");
+}
+
+void loop() {
+  server.handleClient();
+}
