@@ -190,14 +190,23 @@ class Batsy:
         abort = getattr(self, "_turn_abort", None)
         if abort is not None:
             abort.set()
+        from batsy import claude_code
+
+        claude_code.cancel()  # stop the Claude Code run itself, not just its voice
+        self.overlay.muted = True
         self.listen_requested.clear()
         self.speaker.stop()
         self._close_camera()
         self.routines.capture = None
         self.overlay.hide()
 
-    def _overlay_dismissed(self) -> None:
+    def _overlay_dismissed(self, user: bool = False) -> None:
+        """The screen closed. You closing it (Esc, click) means you're done: the request is cancelled too, or it
+        would reopen the screen and start talking when its answer arrived. Timing out after an answer is not that."""
         self.overlay_dismissed = True
+        if user:
+            self.end_conversation()
+            return
         self.speaker.stop()
         self._close_camera()
 
@@ -308,7 +317,9 @@ class Batsy:
 
     def ask_user(self, question: str) -> None:
         """Ask something out of the blue and listen for the answer without needing the wake word."""
-        self._reply(question)
+        self.last_said = question
+        self.speaker.say(question)
+        self.overlay.say(question, force=True)  # worth reopening the screen for, even after you closed it
         if self.overlay.enabled:
             self.overlay.done()
         self.listen_requested.set()
@@ -429,6 +440,9 @@ class Batsy:
 
     def _confirm_voice(self, question: str) -> bool:
         # Called on the brain thread; the main voice loop owns the mic and answers it.
+        abort = getattr(self, "_turn_abort", None)
+        if abort is not None and abort.is_set():
+            return False  # the request was cancelled: never ask (or do) anything more for it
         req = {"question": question, "done": threading.Event(), "answer": False}
         self.confirm_request = req
         req["done"].wait(timeout=60)
@@ -453,7 +467,7 @@ class Batsy:
         spoke = []
 
         def on_tool(name: str) -> None:
-            if not spoke and self.speaker.idle() and source == "voice":
+            if not spoke and self.speaker.idle() and source == "voice" and not abort.is_set():
                 self.speaker.say(random.choice(FILLERS))
             spoke.append(name)
 

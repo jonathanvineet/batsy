@@ -118,12 +118,44 @@ def settings() -> str:
                                                                                  "timeout": 120}]}]}})
 
 
+_running: dict[subprocess.Popen, str] = {}  # live `claude` processes -> the thread that started them
+
+
+def _start(argv, cwd, env) -> subprocess.Popen:
+    proc = subprocess.Popen(argv, cwd=cwd, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                            start_new_session=True)  # its own process group: cancelling also stops its tools
+    with _lock:
+        _running[proc] = threading.current_thread().name
+    return proc
+
+
+def _kill(proc: subprocess.Popen) -> None:
+    try:
+        os.killpg(proc.pid, 9)
+    except (ProcessLookupError, PermissionError, OSError):
+        try:
+            proc.kill()
+        except OSError:
+            pass
+
+
+def cancel(thread: str = "turn") -> int:
+    """Stop the Claude Code runs started by a voice turn (you said "stop", pressed "~" or closed the screen).
+    Background work (learning skills, picking pictures) carries on. Returns how many were stopped."""
+    with _lock:
+        procs = [p for p, t in _running.items() if t == thread and p.poll() is None]
+    for p in procs:
+        _kill(p)
+    if procs:
+        log.info("cancelled %d Claude Code run(s)", len(procs))
+    return len(procs)
+
+
 def _stream(exe, prompt, args, cwd, timeout, env, on_text) -> dict | str:
     """Stream-json mode: text deltas go to on_text as they arrive; returns the final result object."""
-    proc = subprocess.Popen([exe, "-p", prompt, "--output-format", "stream-json", "--verbose",
-                             "--include-partial-messages", "--settings", settings(), *(args or [])], cwd=cwd, env=env,
-                            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-    killer = threading.Timer(timeout, proc.kill)
+    proc = _start([exe, "-p", prompt, "--output-format", "stream-json", "--verbose",
+                   "--include-partial-messages", "--settings", settings(), *(args or [])], cwd, env)
+    killer = threading.Timer(timeout, _kill, args=(proc,))
     killer.start()
     result, turn_text = None, False
     try:
@@ -145,6 +177,8 @@ def _stream(exe, prompt, args, cwd, timeout, env, on_text) -> dict | str:
         proc.wait()
     finally:
         killer.cancel()
+        with _lock:
+            _running.pop(proc, None)
     if result is None:
         return "That took too long." if proc.returncode in (-9, 137) else \
             (proc.stderr.read().strip()[-300:] or "Claude didn't answer.")
@@ -171,16 +205,21 @@ def run(prompt: str, label: str, args: list[str] | None = None, cwd=WORKSPACE, t
             if isinstance(data, str):
                 return data
         else:
+            proc = _start([exe, "-p", prompt, "--output-format", "json", "--settings", settings(), *(args or [])],
+                          cwd, env)
             try:
-                p = subprocess.run([exe, "-p", prompt, "--output-format", "json", "--settings", settings(), *(args or [])],
-                                   cwd=cwd,
-                                   capture_output=True, text=True, timeout=timeout, env=env)
+                out, err = proc.communicate(timeout=timeout)
             except subprocess.TimeoutExpired:
+                _kill(proc)
+                proc.communicate()
                 return "That took too long."
+            finally:
+                with _lock:
+                    _running.pop(proc, None)
             try:
-                data = json.loads(p.stdout)
+                data = json.loads(out)
             except ValueError:
-                return (p.stdout.strip() or p.stderr.strip() or "Claude didn't answer.")[:3000]
+                return (out.strip() or err.strip() or "Claude didn't answer.")[:3000]
     u = data.get("usage") or {}
     row = {"t": int(time.time()), "model": "claude-code", "label": label,
            "in": int(u.get("input_tokens", 0)), "out": int(u.get("output_tokens", 0)),

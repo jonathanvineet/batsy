@@ -25,6 +25,9 @@ def _has_webengine() -> bool:
         return False
 
 
+MUTED_CMDS = {"say", "status", "think", "image", "card", "listen", "partial", "level"}
+
+
 class Overlay:
     def __init__(self, cfg, on_dismiss=None, enabled: bool = True):
         self.cfg = cfg
@@ -39,6 +42,9 @@ class Overlay:
         # The standby bat in the top-right corner (batsy/dock.py) while the overlay is closed.
         self.on_dock_open = None  # the bat or its bubble was clicked
         self.on_stop = None  # "~" pressed in the overlay: end the whole conversation
+        # You closed it (Esc, click, "~", "stop"): drop everything the cancelled request still sends, so nothing
+        # pops back up. Cleared by the wake word (a fresh listen) or by something Batsy must tell you (force=True).
+        self.muted = False
         self.dock: subprocess.Popen | None = None
         self.dock_lock = threading.Lock()
         self.dock_deaths: list[float] = []
@@ -97,10 +103,15 @@ class Overlay:
             except ValueError:
                 continue
             try:
-                if ev.get("event") == "stop" and self.on_stop:
-                    self.on_stop()
-                elif ev.get("event") == "dismissed" and self.on_dismiss:
-                    self.on_dismiss()
+                if ev.get("event") == "stop":
+                    self.muted = True
+                    if self.on_stop:
+                        self.on_stop()
+                elif ev.get("event") == "dismissed":
+                    if ev.get("user"):
+                        self.muted = True
+                    if self.on_dismiss:
+                        self.on_dismiss(user=bool(ev.get("user")))
                 elif ev.get("event") == "saver_exit" and self.on_saver_exit:
                     self.on_saver_exit()
                 elif ev.get("event") == "measured" and self.on_viewer_event:
@@ -206,6 +217,10 @@ class Overlay:
     def send(self, cmd: str, **kw) -> None:
         if not self.enabled:
             return
+        if kw.pop("force", False) or (cmd == "listen" and kw.get("fresh")):
+            self.muted = False
+        elif self.muted and cmd in MUTED_CMDS:
+            return  # what the request you cancelled is still sending: it must not reopen the screen
         self._track(cmd, kw)
         if cmd != "saver":
             self.last_active = time.time()
@@ -252,8 +267,8 @@ class Overlay:
     def think(self) -> None:
         self.send("think")
 
-    def say(self, text: str) -> None:
-        self.send("say", text=text)
+    def say(self, text: str, force: bool = False) -> None:
+        self.send("say", text=text, force=force)
 
     def image(self, path: str, caption: str = "") -> None:
         self.has_media = True
