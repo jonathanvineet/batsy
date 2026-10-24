@@ -193,7 +193,8 @@ class Overlay(QWidget):
         elif abs(pos.x() - self.mouse_origin.x()) + abs(pos.y() - self.mouse_origin.y()) > 12:
             self._dismiss()
 
-    def _dismiss(self, notify: bool = True) -> None:
+    def _dismiss(self, notify: bool = True, user: bool = False) -> None:
+        """user=True: you closed it (Esc, click), which also cancels what Batsy was still working on."""
         was_saver = self.saver is not None
         self._leave_saver()
         if was_saver and notify:
@@ -205,7 +206,7 @@ class Overlay(QWidget):
         self.anim.stop()
         self.state = "idle"
         if notify:
-            print(json.dumps({"event": "dismissed"}), flush=True)
+            print(json.dumps({"event": "dismissed", **({"user": True} if user and not was_saver else {})}), flush=True)
 
     def keyPressEvent(self, e):
         if self.saver is None and e.key() in (Qt.Key_AsciiTilde, Qt.Key_QuoteLeft):  # "~": end the conversation
@@ -213,10 +214,10 @@ class Overlay(QWidget):
             self._dismiss(notify=False)
             return
         if self.saver is not None or e.key() in (Qt.Key_Escape, Qt.Key_Space, Qt.Key_Q):
-            self._dismiss()
+            self._dismiss(user=True)
 
     def mousePressEvent(self, e):
-        self._dismiss()
+        self._dismiss(user=True)
 
     def _camera_frame(self) -> None:
         try:

@@ -155,9 +155,13 @@ class Shell(QWidget):
             self.web.view.setFocus()
             emit({"event": "shown"})
 
-    def _dismiss(self, notify: bool = True) -> None:
-        """Fold back into the corner bat (the page animates; we hide when it says it's done, or after 1.2 s)."""
+    def _dismiss(self, notify: bool = True, user: bool = False) -> None:
+        """Fold back into the corner bat (the page animates; we hide when it says it's done, or after 1.2 s).
+        user=True: you closed it (Esc, click), which also cancels whatever Batsy was still working on."""
         self.hide_timer.stop()
+        if user:
+            emit({"event": "dismissed", "user": True})  # at once: the daemon cancels the turn while we animate
+            notify = False
         if not self.isVisible():
             return
         self.collapse_notify = self.collapse_notify or notify
@@ -182,7 +186,9 @@ class Shell(QWidget):
 
     def _ui_event(self, ev: dict) -> None:
         kind = ev.get("event")
-        if kind in ("dismiss", "saver_exit"):
+        if kind == "dismiss":
+            self._dismiss(notify=True, user=not self.saver)
+        elif kind == "saver_exit":
             self._dismiss(notify=True)
         elif kind == "stop":  # "~": end the conversation, not just hide
             emit({"event": "stop"})
