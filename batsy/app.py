@@ -183,6 +183,37 @@ class Batsy:
         self.overlay.listen(fresh=True)
         self.listen_requested.set()
 
+    def _close_thing(self, n: str) -> bool:
+        """"Close it / that / the file / the PDF / the video / the model / what you opened"."""
+        if not re.fullmatch(r"(?:please )?(?:close|shut|hide|get rid of)(?: up)? (?:it|that|this|(?:the|my|that|this) "
+                            r"(?:file|pdf|document|doc|video|movie|picture|photo|image|model|3d model|3d|viewer|window|"
+                            r"app)|what you (?:just )?opened|the thing you opened)(?: please| now)?", n):
+            return False
+        self._route = "command"
+        if model3d.VIEWER.is_open() and not re.search(r"\b(pdf|video|movie|document|doc|app|window)\b", n):
+            try:
+                model3d.VIEWER.send({"cmd": "close"})
+            except OSError:
+                pass
+            self.overlay.hide()
+            self._reply("Closed it.")
+            return True
+        opened = getattr(self, "_opened", [])
+        for path in reversed(opened):  # the most recent thing Batsy opened that's still open in some app
+            if not path.startswith("/"):
+                continue
+            p = subprocess.run(["pkill", "-f", "--", path], capture_output=True)
+            if p.returncode == 0:
+                self._opened.remove(path)
+                self._reply(f"Closed {os.path.basename(path)}.")
+                return True
+        if self.overlay.has_media:  # a picture or card on Batsy's screen
+            self.overlay.hide()
+            self._reply("Closed it.")
+            return True
+        self._reply("I don't have anything open to close.")
+        return True
+
     def end_conversation(self) -> None:
         """"~" in the overlay, "stop", or `batsy stop`: stop talking, cancel what's being worked on, don't listen
         for a follow-up, and close the screen."""
@@ -297,7 +328,8 @@ class Batsy:
             self._reply(f"I need {argv[0]} for that. Run batsy doctor to see what's missing.")
 
     def _open(self, path) -> None:
-        """Open a file or URL in its default app."""
+        """Open a file or URL in its default app (and remember it, for "close it")."""
+        self._opened = [p for p in getattr(self, "_opened", []) if p != str(path)][-9:] + [str(path)]
         for opener in (["xdg-open"], ["gio", "open"]):
             try:
                 subprocess.Popen([*opener, str(path)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -564,6 +596,8 @@ class Batsy:
             self._reply(said)
             return True
         if self._learner_command(n):
+            return True
+        if self._close_thing(n):
             return True
         if CLOSE_CAMERA.search(n):
             self._close_camera()

@@ -52,7 +52,7 @@ class Viewer3D:
 
     def active(self) -> bool:
         """Open and used recently: plain phrases like "rotate it" are meant for the viewer."""
-        return self.is_open() and time.time() - self.last_used < 1800
+        return self.is_open() and time.time() - self.last_used < 300  # 5 minutes after the last 3D command
 
     def _start(self) -> None:
         if self.host is not None and self.host():

@@ -80,9 +80,10 @@ SCREEN_WORDS = re.compile(r"\b(screen|window|page|tab|error|message|browser|code
 
 
 # While a model is in the viewer, these are about it (anything the local phrase parser didn't handle).
-THREE_D_TALK = re.compile(r"\b(it|this|that|model|part|mesh|print|printable|hole|holes|wall|walls|fillet|chamfer|"
-                          r"thread|screw|mount|base|edge|corner|face|support|overhang|infill|tolerance|fit|design|"
-                          r"add|cut|extrude|combine|join|subtract|engrave|text|logo|what is|why|how)\b")
+# Only real 3D words: "it" / "this" / "what is" alone are everyday talk (and the room's chatter), not the model.
+THREE_D_TALK = re.compile(r"\b(model|part|mesh|print|printable|printing|hole|holes|wall|walls|fillet|chamfer|"
+                          r"thread|screw|mount|edge|corner|face|support|overhang|infill|tolerance|design|stl|3d|"
+                          r"extrude|combine|join|subtract|engrave|logo|rotate|dimensions?|thickness|millimet\w+)\b")
 DESIGN = re.compile(r"\b(design|model|make|create|build|generate|draw)\b.*\b(3d|three d|stl|printable|"
                     r"to print|for printing|3d print|enclosure|bracket|mount|stand|holder|case|box|gear|knob)\b")
 
