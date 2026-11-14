@@ -271,15 +271,20 @@ body.showcase #subtitle { bottom: 5vh; font-size: 22px; }
   #showcase .sweep, #showcase .tile.on::before, #showcase .rec { animation: none; }
 }
 
-/* --- typing to Batsy ------------------------------------------------------------------------------------- */
-#typebox { position: fixed; left: 50%; bottom: 11vh; transform: translateX(-50%); width: min(40em, 86vw);
-  display: flex; flex-direction: column; align-items: center; gap: 8px; z-index: 40; }
-#typebox[hidden] { display: none; }
-#typebox input { width: 100%; height: 52px; padding: 0 20px; border: 0; border-radius: 26px; outline: none;
-  background: rgba(8, 9, 12, .9); color: var(--bone); font: 400 20px/1 var(--body); caret-color: var(--signal);
-  box-shadow: inset 0 0 0 1px rgba(255, 194, 14, .32); user-select: text; }
-#typebox input:focus { box-shadow: inset 0 0 0 1.5px rgba(255, 194, 14, .7), 0 0 24px rgba(255, 194, 14, .12); }
+/* --- typing to Batsy: a bar of its own at the bottom, always there while Batsy is on screen ------------- */
+#typebox { position: fixed; left: 50%; bottom: 3.2vh; transform: translateX(-50%); width: min(36em, 80vw);
+  display: flex; align-items: center; gap: 14px; z-index: 40; }
+#typebox input { flex: 1; min-width: 0; height: 44px; padding: 0 18px; border: 0; border-radius: 22px; outline: none;
+  background: rgba(255, 255, 255, .04); color: var(--bone); font: 400 18px/1 var(--body); caret-color: var(--signal);
+  box-shadow: inset 0 0 0 1px rgba(141, 149, 165, .22); user-select: text; transition: box-shadow 160ms, background 160ms; }
+#typebox input:focus { background: rgba(8, 9, 12, .7); box-shadow: inset 0 0 0 1.5px rgba(255, 194, 14, .55); }
 #typebox input::placeholder { color: var(--steel-dim); }
-#esc { cursor: pointer; }
-#typebox .hint { font: 500 13px/1 var(--display); letter-spacing: .06em; color: var(--steel-dim); }
-body.saver #typebox { display: none; }
+#typebox .hint { flex: none; font: 500 13px/1 var(--display); letter-spacing: .06em; color: var(--steel-dim);
+  white-space: nowrap; }
+@media (max-width: 720px) { #typebox .hint { display: none; } }
+/* make room for the bar: nothing sits under it */
+#subtitle { bottom: calc(3.2vh + 64px); }
+#stage { bottom: calc(3.2vh + 84px); }
+body.model #stage { bottom: calc(3.2vh + 76px); }
+body.showcase #subtitle { bottom: calc(3.2vh + 64px); }
+body.saver #typebox, body.viewer-only #typebox { display: none; }

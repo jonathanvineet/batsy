@@ -372,6 +372,9 @@ class Forwarder:
                 code, out = self._copy(p, job["user"])
                 if code == 0:
                     log.info("saved %s to %s's Inbox on the PC (%s)", p.name, job["user"], out)
+                    from batsy import received
+
+                    received.on_pc(p, out.splitlines()[-1] if out else "")
                 else:
                     left.append(job)
                     if code not in (255, 124):

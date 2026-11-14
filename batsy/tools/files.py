@@ -91,3 +91,29 @@ def register(reg):
             else:
                 rows.append(f"{entry.name}  {entry.stat().st_size} B")
         return truncate(f"{p}:\n" + "\n".join(rows[:500]) + (f"\n... {len(rows) - 500} more" if len(rows) > 500 else ""))
+
+    @reg.tool(
+        "received_files",
+        "Search Batsy's permanent record of every file sent to the user over Tailscale: name, who sent it "
+        "(Jonathan = the user, Karan = Nightwing, Rehaan = Superman), when, how (taildrop / upload page), the "
+        "laptop path and the copy on the PC. Use it for 'who sent...', 'what did Karan send', 'open the file "
+        "about X' (then open its path). Empty query = the newest files.",
+        {
+            "query": {"type": "string", "description": "words from the file's name or topic; empty for newest"},
+            "sender": {"type": "string", "description": "only files from this person (Jonathan, Karan, Rehaan)"},
+            "limit": {"type": "integer", "description": "how many to return (default 10)"},
+        },
+    )
+    def received_files(ctx, query="", sender=None, limit=10):
+        import time
+
+        from batsy import received
+
+        rows = [h[1] for h in received.search(query, sender) if h[0] >= 50][:limit] if query else \
+            received.all_rows(sender, limit=limit)
+        if not rows:
+            return "No received files match."
+        return "\n".join(
+            f"{r['name']} | from {r['sender']} | {time.strftime('%Y-%m-%d %H:%M', time.localtime(r['received']))} "
+            f"| via {r['via']} | {r['path']}{' (moved/deleted)' if r.get('missing') else ''}"
+            + (f" | PC: {r['pc_path']}" if r.get("pc_path") else "") for r in rows)

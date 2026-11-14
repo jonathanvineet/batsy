@@ -30,6 +30,7 @@ import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
+from batsy import received
 from batsy.config import HOME
 
 log = logging.getLogger("batsy.inbox")
@@ -51,6 +52,23 @@ FROM_LIST = re.compile(r"^(?:what|which files?) (?:did|has) (?P<who>[a-z]+) (?:s
 OPEN_FROM = re.compile(r"^open (?P<who>[a-z]+)'?s? (?:inbox |files? )?folder$|"
                        r"^open (?:the )?(?:inbox |files? )?folder (?:for|from) (?P<who2>[a-z]+)$")
 STAGING = ".taildrop"  # Taildrop lands here first, then moves into your folder
+# --- questions about what was received, answered from batsy/received.py ---
+_ANY = r"(?:file|files|thing|things|one|pdf|pdfs|photo|photos|picture|pictures|image|video|document|doc|model|zip)"
+WHO_SENT = re.compile(rf"^who (?:sent|shared|gave me|dropped) (?:me )?(?:the |that |this |those |these |my )?"
+                      rf"(?:last |latest |newest |most recent |new )?(?:{_ANY}|it|that|this|those|these)?"
+                      r"(?: (?:just )?now| today| just| earlier)?$|"
+                      rf"^who (?:was|is|were) (?:the |that |this )?(?:last |latest )?(?:{_ANY} )?(?:that )?from$|"
+                      rf"^(?:where|who) did (?:the |that |this )?(?:last |latest )?{_ANY}? ?come from$")
+WHO_SENT_NAMED = re.compile(r"^who (?:sent|shared|gave me) (?:me )?(?:the |that |my )?(?P<what>.+)$")
+LAST_FILE = re.compile(rf"^what(?:'s| is| was|s) (?:the |my )?(?:last|latest|newest|most recent) (?:{_ANY})"
+                       r"(?: (?:i|you) (?:got|received))?$|^what did (?:i|you) (?:just )?(?:get|receive)$|"
+                       r"^what (?:just )?(?:came|arrived)(?: in)?$")
+EVERYTHING = re.compile(r"^(?:list|show me|show|what are) (?:all |everything |all the )?(?:the )?(?:files )?"
+                        r"(?:i'?ve|i have|you'?ve|you have) (?:got|received|gotten)(?: so far)?$|"
+                        r"^(?:list|show me|show) (?:all )?(?:the )?(?:received files|everything (?:i|you) (?:got|received))$")
+WHERE = re.compile(r"^where (?:is|did you (?:save|put)|are) (?:the |my |that )?(?P<what>.+?)(?: saved| stored| kept)?$")
+OPEN_FILE = re.compile(r"^(?:open|show me|show|pull up|bring up) (?P<rest>.+)$")
+WHEN = ("today", "yesterday", "this week", "this month")
 DEVICE_WORDS = {"mac": "mac", "macbook": "mac", "mac book": "mac", "laptop": "mac", "other laptop": "mac",
                 "computer": "mac", "ipad": "ipad", "phone": "phone", "iphone": "phone", "android": "phone",
                 "mobile": "phone"}
@@ -146,6 +164,13 @@ class Inbox:
         self.last: Path | None = None     # the newest file that arrived
         self.problem = ""                 # why Taildrop collection isn't working, if it isn't
         self._known = {self._key(p) for p in self._files() if p.parent != self.staging}  # what's there isn't news
+        self._taildropped: set[str] = set()  # arrived by Taildrop (the rest came through the upload page)
+        try:
+            n = received.backfill(self.dir, self.mine, {STAGING})
+            if n:
+                log.info("remembered %d files already in the inbox", n)
+        except Exception:
+            log.exception("received files: backfill")
         self._growing: dict[str, tuple[int, float]] = {}
         self._batch: list[Path] = []
         self._batch_t = 0.0
@@ -252,6 +277,7 @@ class Inbox:
                         self._growing.pop(key, None)
                         if p.parent == self.staging:
                             p = _place(p, self.dir / self.mine)
+                            self._taildropped.add(str(p))
                         self._known.add(self._key(p))
                         self._batch.append(p)
                         self._batch_t = now
@@ -267,6 +293,9 @@ class Inbox:
         from batsy import docs
 
         log.info("arrived: %s", ", ".join(p.name for p in files))
+        for p in files:  # remembered for good: "who sent the last file?", "open the audit report"
+            received.record(p, self.sender_of(p) or self.mine,
+                            "taildrop" if str(p) in self._taildropped else "upload page")
         fw = getattr(self.app, "pc_forward", None)
         if fw is not None:  # a copy to the sender's Inbox on the PC (Karan -> nightwing, ...)
             fw.send(files, self.sender_of)
@@ -358,6 +387,8 @@ class Inbox:
 
     # --- talking ------------------------------------------------------------------------------------------
     def handle(self, n: str, raw: str) -> bool:
+        if self._remembered(n):
+            return True
         m = SEND.match(n)
         if m and self._looks_like_device(m.group("dev")):
             return self._send(m.group("what"), m.group("dev"))
@@ -386,6 +417,114 @@ class Inbox:
                 self.app._reply(f"Opening {self.last.name}.")
             return True
         return False
+
+    # --- what was received (batsy/received.py) -------------------------------------------------------------
+    def _who(self, word: str) -> str | None:
+        """'karan' / 'nightwing' / 'me' / 'batman' -> the sender folder."""
+        word = word.lower().strip().removesuffix("'s").removesuffix("s'")
+        heroes = {v.lower(): k for k, v in (self.cfg.get("files.pc_users") or {}).items()}
+        return self._folder(heroes.get(word, word)) or (self._folder(word[:-1]) if word.endswith("s") else None)
+
+    def _say_from(self, r: dict) -> str:
+        return "you" if r["sender"] == self.mine else r["sender"] or "someone"
+
+    def _remembered(self, n: str) -> bool:
+        if WHO_SENT.match(n) or LAST_FILE.match(n):
+            r = received.last()
+            if not r:
+                self.app._reply("Nothing has been sent to me yet.")
+                return True
+            self.last = Path(r["path"])
+            who = self._say_from(r)
+            self.app._reply(f"{who[0].upper() + who[1:]} sent {received.spoken(r['name'])}, a {r['kind']}, "
+                            f"{received.ago(r['received'])}" + (" by Taildrop." if r["via"] == "taildrop" else "."))
+            return True
+        if EVERYTHING.match(n):
+            rows = received.all_rows(limit=500)
+            if not rows:
+                self.app._reply("Nothing has been sent to me yet.")
+                return True
+            by = {}
+            for r in rows:
+                by[self._say_from(r)] = by.get(self._say_from(r), 0) + 1
+            self.app._reply(f"{len(rows)} files so far: " + ", ".join(f"{c} from {w}" for w, c in by.items()) + ".")
+            self.app.show_visual("card", "Everything received | " + "\n".join(
+                f"- {r['name']} · {self._say_from(r)} · {received.ago(r['received'])}" for r in rows[:14]))
+            return True
+        m = WHO_SENT_NAMED.match(n)
+        if m and not WHO_SENT.match(n):
+            hits = received.search(m["what"])
+            if hits and hits[0][0] >= 75:
+                r = hits[0][1]
+                self.app._reply(f"{self._say_from(r)[0].upper() + self._say_from(r)[1:]} sent {received.spoken(r['name'])}, "
+                                f"{received.ago(r['received'])}.")
+                return True
+        m = WHERE.match(n)
+        if m:
+            r = self._find(m["what"])
+            if r and "none" in r:
+                self.app._reply(r["none"])
+                return True
+            if r:
+                whose = "your" if r["sender"] == self.mine else f"{r['sender']}'s"
+                said = f"{r['name']} is in {whose} folder in the inbox"
+                pc_user = (self.cfg.get("files.pc_users") or {}).get(r["sender"])
+                self.app._reply(said + (f", and on the PC in {pc_user}'s Inbox." if r.get("pc_path") and pc_user else "."))
+                return True
+        m = OPEN_FILE.match(n)
+        if m:
+            r = self._find(m["rest"])
+            if r and "none" in r:
+                self.app._reply(r["none"])
+                return True
+            if r:
+                path = Path(r["path"])
+                if not path.exists():
+                    self.app._reply(f"I remember {r['name']}, but it's been moved or deleted from the inbox.")
+                    return True
+                self.last = path
+                self.app.last_file = path
+                self.app.open_result(str(path))
+                self.app._reply(f"Opening {received.spoken(r['name'])}, from {self._say_from(r)}.")
+                return True
+        return False
+
+    def _find(self, said: str) -> dict | None:
+        """'the audit report' / 'the file karan sent' / 'karan's last pdf' / 'the photo from yesterday' -> a row.
+        None if it isn't clearly a received file (so "open youtube" still opens YouTube)."""
+        s = re.sub(r"^(?:the|that|this|my) ", "", said.strip())
+        mine = said.strip().startswith("my ")
+        since, until = 0.0, None
+        for word in WHEN:
+            if re.search(rf"\b(?:from |of )?{word}\b", s):
+                s = re.sub(rf"\s*\b(?:from |of )?{word}\b", "", s).strip()
+                since, until = received.day_range(word)
+        sender = self.mine if mine else None
+        m = re.match(r"^(?P<who>[a-z]+)'s (?P<rest>.+)$", s) or \
+            re.match(r"^(?P<rest>.+?) (?:that |which )?(?P<who>[a-z]+) (?:sent|shared|gave me)(?: me)?$", s) or \
+            re.match(r"^(?P<rest>.+?) (?:from|by) (?P<who>[a-z]+)$", s)
+        if m and (who := self._who(m["who"])):
+            sender, s = who, m["rest"].strip()
+        elif re.search(r"\b(?:i|you) (?:just )?(?:sent|got|received)\b", s):
+            s = re.sub(r"\s*(?:that |which )?\b(?:i|you) (?:just )?(?:sent|got|received)\b(?: me| you)?", "", s).strip()
+        latest = bool(re.match(r"^(?:last|latest|newest|most recent|new) ", s)) or s in ("last one", "latest one")
+        s = re.sub(r"^(?:last|latest|newest|most recent|new) ", "", s).strip()
+        kind = received.KIND_WORDS.get(s.removesuffix(" file"))
+        generic = s in ("file", "files", "one", "thing", "last one", "latest one", "") or kind is not None
+        if generic:  # "karan's last pdf", "the file rehaan sent", "the photo from yesterday"
+            if not (sender or latest or since or "file" in said):
+                return None
+            rows = received.all_rows(None if mine and not latest and not since and sender == self.mine and
+                                     "file" not in said else sender, since=since, kind=kind, limit=1, until=until)
+            if rows:
+                return rows[0]
+            who = "You haven't" if sender == self.mine else f"{sender} hasn't" if sender else "Nobody has"
+            when = {0.0: ""}.get(since, " then")
+            return {"none": f"{who} sent {('any ' + kind + 's') if kind else 'anything'}{when}."}
+        hits = [h for h in received.search(s, sender) if since <= h[1]["received"] < (until or 1e12)]
+        if hits and hits[0][0] >= (70 if sender or since else 86):
+            return hits[0][1]
+        return None
 
     def _looks_like_device(self, dev: str) -> bool:
         dev = dev.strip()
@@ -464,7 +603,9 @@ class Inbox:
 
     def _list(self, sender: str | None = None) -> bool:
         """What came in (from everyone, or from one sender), newest first."""
-        files = sorted(self._files(sender), key=lambda p: p.stat().st_mtime, reverse=True)[:6]
+        rows = [r for r in received.all_rows(sender, limit=6) if not r.get("missing")]
+        files = [Path(r["path"]) for r in rows] or \
+            sorted(self._files(sender), key=lambda p: p.stat().st_mtime, reverse=True)[:6]
         who = "you" if sender == self.mine else sender
         if not files:
             self.app._reply(f"{who.title()} haven't sent anything yet." if who == "you" else

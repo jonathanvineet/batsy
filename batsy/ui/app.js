@@ -164,7 +164,7 @@ function renderCard(title, text) {
 
 // --- commands from Python ---------------------------------------------------------------------------------
 const handlers = {
-  appear() { ui.shown = true; body.classList.add('on'); sky.target.fade = 1; kick(); openFromBat(); },
+  appear() { ui.shown = true; body.classList.add('on'); sky.target.fade = 1; kick(); openFromBat(); focusBox(); reportFocus(); },
   collapse() { closeIntoBat(); },
   origin(m) {
     ui.origin = {x: +m.x, y: +m.y};
@@ -173,7 +173,7 @@ const handlers = {
   hidden() {
     for (const el of [$('#world'), $('#flybat')]) el.getAnimations().forEach(a => a.cancel());
     ui.shown = false; ui.saver = false; ui.showcase = false; body.classList.remove('on'); sky.target.fade = 0;
-    sky.u.uFade.value = 0; $('#saver').hidden = true; setState('idle'); layout(); closeBox();
+    sky.u.uFade.value = 0; $('#saver').hidden = true; setState('idle'); layout(); clearBox();
   },
   listen(m) {
     leaveSaver();
@@ -312,42 +312,46 @@ function closeIntoBat() {
   shrink.onfinish = () => send({event: 'collapsed'});
 }
 
-// --- typing to Batsy: start typing while Batsy is on screen (or Super+T); Enter sends, Esc cancels ---------
+// --- typing to Batsy: the bar is always there while Batsy is on screen; Enter sends, Esc closes ------------
 const typebox = $('#typebox'), field = $('#typebox input');
 let typingPing = 0;
-function openBox(first = '') {
-  typebox.hidden = false; field.value = first; field.focus();
-  send({event: 'typing'});
+function focusBox(first = '') {
+  if (first) field.value += first;
+  field.focus();
 }
-function closeBox() { typebox.hidden = true; field.value = ''; field.blur(); }
-handlers.type = () => openBox();
+function clearBox() { field.value = ''; }
+handlers.type = () => focusBox();
 typebox.addEventListener('submit', e => e.preventDefault());
 field.addEventListener('keydown', e => {
   e.stopPropagation();  // keys here are words, not shortcuts
   if (e.key === 'Enter') {
     const text = field.value.trim();
-    closeBox();
+    clearBox();
     if (text) send({event: 'typed', text});
   } else if (e.key === 'Escape') {
-    closeBox(); send({event: 'typing_done'});
+    if (field.value) clearBox(); else send({event: 'dismiss'});
+  } else if (['~', '`'].includes(e.key) && !field.value) {
+    e.preventDefault(); send({event: 'stop'});
   } else if (Date.now() - typingPing > 2000) {  // still typing: keep the screen open
     typingPing = Date.now(); send({event: 'typing'});
   }
 });
+// does the window actually have the keyboard? (GNOME may refuse focus to a window that pops up by itself)
+function reportFocus() { setTimeout(() => send({event: 'focus', has: document.hasFocus()}), 400); }
+addEventListener('focus', () => field.focus());
 
 // --- input: Esc / click closes; any input ends the screensaver --------------------------------------------
 addEventListener('keydown', e => {
   if (viewerOnly) return;
   if (ui.saver) return send({event: 'saver_exit'});
   if (['~', '`'].includes(e.key)) return send({event: 'stop'});  // end the conversation: stop talking and listening
-  if (['Escape', ' '].includes(e.key)) return send({event: 'dismiss'});
-  if (e.key.length === 1 && !e.ctrlKey && !e.altKey && !e.metaKey) { e.preventDefault(); openBox(e.key); }
+  if (e.key === 'Escape') return send({event: 'dismiss'});
+  if (e.key.length === 1 && !e.ctrlKey && !e.altKey && !e.metaKey) { e.preventDefault(); focusBox(e.key); }
 });
 addEventListener('pointerdown', e => {
   if (viewerOnly) return;
   if (ui.saver) return send({event: 'saver_exit'});
   if (typebox.contains(e.target)) return;  // clicking into the text box
-  if (e.target === $('#esc')) { e.preventDefault(); return openBox(); }  // "type to ask": a click gives the focus
   if (ui.model && $('#viewer').contains(e.target)) return;  // orbiting the model, not closing
   send({event: 'dismiss'});
 });

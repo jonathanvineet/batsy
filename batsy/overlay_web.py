@@ -216,6 +216,12 @@ class Shell(QWidget):
             self.hide_timer.start(4000)
         elif kind == "typed":
             emit({"event": "typed", "text": ev.get("text", "")})
+        elif kind == "focus":
+            log.info("overlay has the keyboard: %s", ev.get("has"))
+            if not ev.get("has"):  # ask once more: raise + activate
+                self.raise_()
+                self.activateWindow()
+                self.web.view.setFocus()
         elif kind == "measured":
             if self.scene is not None:
                 threading.Thread(target=self.scene.measured, args=(ev.get("mm", 0),), daemon=True).start()
