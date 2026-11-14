@@ -191,6 +191,9 @@ class Inbox:
         your folder. Restarts if it stops."""
         delay = 10
         self.staging.mkdir(exist_ok=True)
+        # a restart (os.execv) leaves the old collector running: only one may collect, or they fight over files
+        subprocess.run(["pkill", "-f", f"^{tailscale()} file get --loop .*{re.escape(str(self.staging))}$"],
+                       capture_output=True)
         while True:
             t0 = time.time()
             self.problem = None  # fixed since last time (e.g. the operator was just set)? find out afresh
@@ -264,6 +267,9 @@ class Inbox:
         from batsy import docs
 
         log.info("arrived: %s", ", ".join(p.name for p in files))
+        fw = getattr(self.app, "pc_forward", None)
+        if fw is not None:  # a copy to the sender's Inbox on the PC (Karan -> nightwing, ...)
+            fw.send(files, self.sender_of)
         self.last = files[-1]
         self.app.last_file = files[0]
         first = files[0]

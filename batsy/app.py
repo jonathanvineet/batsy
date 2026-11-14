@@ -118,6 +118,7 @@ class Batsy:
         self.last_file = None  # the file last made, opened or received: what "send this to my Mac" means
         from batsy.inbox import Inbox
 
+        self.pc_forward = pc.Forwarder(self)  # a copy of what people send you goes to their Inbox on the PC
         self.inbox = Inbox(self)  # files sent over Tailscale land in ~/Batsy/inbox; "send it to my Mac"
         from batsy.shopping import ShopTalk
 

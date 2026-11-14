@@ -72,6 +72,8 @@ DEFAULTS = {
         "devices": {"mac": "c"},      # what "my Mac" / "my iPad" / "my phone" mean: names from `tailscale status`
         # Who may send you files, by Tailscale login -> the inbox folder they land in. You're always allowed.
         "senders": {},
+        # inbox folder -> the user on the PC whose Inbox gets a copy (batsy/pc.py Forwarder)
+        "pc_users": {},
         "receive": True,              # accept files from senders at http://<this laptop>:<receive_port>
         "receive_port": 8765,
         "receive_max_mb": 4096,

@@ -9,15 +9,21 @@ Shutting down, restarting and updating need root on the PC: "set up the PC" open
 PC's password once; it allows exactly those commands without a password (/etc/sudoers.d/batsy) and turns on
 Wake-on-LAN. One SSH connection is kept open (ControlMaster), so each command takes ~0.1 s.
 """
+import json
+import logging
 import re
 import shlex
 import socket
 import subprocess
+import threading
 import time
 from pathlib import Path
 
 from batsy import safety
+from batsy.config import DATA_DIR
 from batsy.keyboard import SERVICE, UDEV_RULE
+
+log = logging.getLogger("batsy.pc")
 
 # Everything that names the PC. "Computer" stays the laptop (system.py), as it always was.
 PC = r"(?:the |my )?(?:pc|p c|desktop|desktop pc|other computer|big computer|bob|bob'?s computer)"
@@ -194,6 +200,15 @@ def handle(app, n: str) -> str | None:
         return "I've opened a terminal on the laptop. Type the PC's password there, just this once." if ok else \
             "I couldn't open a terminal."
 
+    if re.match(rf"{pre}(?:set ?up|make|create) (?:the )?(?:inbox|inboxes|inbox folders?)(?: (?:on|for|in) {PC})?$", n):
+        fw = getattr(app, "pc_forward", None)
+        if fw is None or not fw.users:
+            return "I don't know whose files go where. Add files.pc_users to the config."
+        cmd = " ".join(shlex.quote(a) for a in pc.ssh_args(tty=True)) + " " + \
+            shlex.quote("sudo bash -c " + shlex.quote(fw.setup_script()))
+        return "I've opened a terminal. Type the PC's password there, just this once." if _terminal(cmd, "PC inboxes") \
+            else "I couldn't open a terminal."
+
     if re.match(rf"{pre}(?:is {PC} (?:on|up|awake|running|alive)|(?:how'?s|how is|check(?: on)?) {PC}(?: doing)?|"
                 rf"{PC} status|status of {PC})$", n):
         return pc.status()
@@ -310,3 +325,89 @@ def handle(app, n: str) -> str | None:
     if m:
         return pc.open(m["what"])
     return None  # something else about the PC: the AI handles it, with the run_on_pc tool
+
+
+# --- files that arrive on the laptop -> the right person's Inbox on the PC ------------------------------------
+OUTBOX = DATA_DIR / "pc_outbox.json"  # waiting for the PC (it was off): [{"path": ..., "user": ...}]
+INBOX_SETUP = """set -e
+for u in {users}; do
+  home=$(getent passwd "$u" | cut -d: -f6); [ -n "$home" ] || {{ echo "no user $u"; continue; }}
+  mkdir -p "$home/Inbox"; chown "$u:$u" "$home/Inbox"; chmod 700 "$home/Inbox"
+  setfacl -m u:bob:x "$home"                       # bob may pass through the home, not look around in it
+  setfacl -m u:bob:rwx "$home/Inbox"               # ...and drop files in Inbox
+  setfacl -d -m u:"$u":rwx,u:bob:rwx "$home/Inbox"  # files bob drops there are the owner's to read and delete
+  echo "$u: $home/Inbox"
+done
+echo; echo 'Done. Files sent to Batsy now land in each person'"'"'s Inbox on the PC. You can close this.'"""
+
+
+class Forwarder:
+    """Copies each received file to its sender's Inbox on the PC (files.pc_users: inbox folder -> PC user).
+    The laptop keeps its copy. If the PC is off, files wait in pc_outbox.json and go when it's back."""
+
+    def __init__(self, app):
+        self.app, self.pc = app, Remote(app.cfg)
+        self.users = {k.lower(): v for k, v in (app.cfg.get("files.pc_users") or {}).items()}
+        self.lock = threading.Lock()
+        if self.pc.configured and self.users:
+            threading.Thread(target=self._retry, daemon=True, name="pc-outbox").start()
+
+    def user_for(self, folder: str | None) -> str | None:
+        return self.users.get((folder or "").lower())
+
+    def send(self, files: list[Path], folder_of) -> None:
+        jobs = [{"path": str(p), "user": u} for p in files if (u := self.user_for(folder_of(p)))]
+        if jobs:
+            with self.lock:
+                self._save(self._load() + jobs)
+            threading.Thread(target=self.flush, daemon=True, name="pc-forward").start()
+
+    def flush(self) -> None:
+        with self.lock:
+            left = []
+            for job in self._load():
+                p = Path(job["path"])
+                if not p.exists():
+                    continue
+                code, out = self._copy(p, job["user"])
+                if code == 0:
+                    log.info("saved %s to %s's Inbox on the PC (%s)", p.name, job["user"], out)
+                else:
+                    left.append(job)
+                    if code not in (255, 124):
+                        log.warning("couldn't save %s for %s on the PC: %s", p.name, job["user"], out[-200:])
+            self._save(left)
+
+    def _copy(self, p: Path, user: str) -> tuple[int, str]:
+        """Stream the file over SSH; a name already there gets " (2)" etc. Returns (code, where it went)."""
+        script = ('home=$(getent passwd "$1" | cut -d: -f6); d="$home/Inbox"; [ -w "$d" ] || { echo "no Inbox"; exit 3; }; '
+                  'n="$2"; b="${n%.*}"; e="${n##*.}"; [ "$b" = "$n" ] && e="" || e=".$e"; f="$d/$n"; i=2; '
+                  'while [ -e "$f" ]; do f="$d/$b ($i)$e"; i=$((i+1)); done; cat > "$f.part" && mv "$f.part" "$f" && echo "$f"')
+        try:
+            with open(p, "rb") as fh:
+                r = subprocess.run(self.pc.ssh_args() + [f"bash -c {shlex.quote(script)} _ {shlex.quote(user)} "
+                                                         f"{shlex.quote(p.name)}"],
+                                   stdin=fh, capture_output=True, text=True, timeout=600, errors="replace")
+        except (OSError, subprocess.TimeoutExpired) as e:
+            return 124, str(e)
+        return r.returncode, (r.stdout + r.stderr).strip()
+
+    def _retry(self) -> None:
+        while True:
+            time.sleep(60)
+            if self._load() and self.pc.up():
+                self.flush()
+
+    def setup_script(self) -> str:
+        return INBOX_SETUP.format(users=" ".join(shlex.quote(u) for u in sorted(set(self.users.values()))))
+
+    @staticmethod
+    def _load() -> list[dict]:
+        try:
+            return json.loads(OUTBOX.read_text())
+        except (OSError, ValueError):
+            return []
+
+    @staticmethod
+    def _save(jobs: list[dict]) -> None:
+        OUTBOX.write_text(json.dumps(jobs))
