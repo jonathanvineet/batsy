@@ -22,9 +22,10 @@ UPDATE = re.compile(r"^(?:please )?(?:run |do |install |check for |get )?(?:the 
                     r"?updates?(?: (?:on )?(?:the |my )?(?:system|laptop|computer|fedora|packages))?$|"
                     r"^(?:please )?(?:update|upgrade) (?:the |my )?(?:system|laptop|computer|fedora|packages|os)"
                     r"(?: packages)?$")
-REBOOT = re.compile(r"^(?:please )?(?:restart|reboot) (?:the |my )?(?:whole )?(?:laptop|computer|system|pc|machine)(?: now)?$")
+# "the PC" is the desktop (batsy/pc.py), not this laptop
+REBOOT = re.compile(r"^(?:please )?(?:restart|reboot) (?:the |my )?(?:whole )?(?:laptop|computer|system|machine)(?: now)?$")
 POWEROFF = re.compile(r"^(?:please )?(?:shut ?down|power off|turn off|switch off) (?:the |my )?(?:whole )?"
-                      r"(?:laptop|computer|system|pc|machine)(?: now)?$")
+                      r"(?:laptop|computer|system|machine)(?: now)?$")
 
 
 def _terminal(command: str, title: str = "") -> bool:

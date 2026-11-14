@@ -108,9 +108,9 @@ class ToolRegistry:
 
 
 def build_registry(ctx: ToolContext) -> ToolRegistry:
-    from batsy.tools import agenda, arduino, display, files, memory, monitor, music, screen, shell, skills, system
+    from batsy.tools import agenda, arduino, display, files, memory, monitor, music, pc, screen, shell, skills, system
 
     reg = ToolRegistry(ctx)
-    for mod in (shell, files, system, screen, display, arduino, music, monitor, agenda, memory, skills):
+    for mod in (shell, files, system, screen, display, arduino, music, monitor, agenda, memory, skills, pc):
         mod.register(reg)
     return reg

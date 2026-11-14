@@ -109,6 +109,7 @@ DEFAULTS = {
         "dock": True,                 # a small Batman bat in the top-right corner while the overlay is closed
         "renderer": "auto",           # auto | web (GPU, line + particles, 3D inside) | classic (plain Qt painting)
     },
+    "pc": {"host": "", "mac": "", "broadcast": ""},  # the desktop PC, controlled over SSH (batsy/pc.py)
     "home": {
         "lights": {},                 # name -> ESP32 address, e.g. {"light": "http://192.168.1.70"} (GET /on, /off)
     },
