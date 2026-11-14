@@ -173,7 +173,7 @@ const handlers = {
   hidden() {
     for (const el of [$('#world'), $('#flybat')]) el.getAnimations().forEach(a => a.cancel());
     ui.shown = false; ui.saver = false; ui.showcase = false; body.classList.remove('on'); sky.target.fade = 0;
-    sky.u.uFade.value = 0; $('#saver').hidden = true; setState('idle'); layout();
+    sky.u.uFade.value = 0; $('#saver').hidden = true; setState('idle'); layout(); closeBox();
   },
   listen(m) {
     leaveSaver();
@@ -312,16 +312,42 @@ function closeIntoBat() {
   shrink.onfinish = () => send({event: 'collapsed'});
 }
 
+// --- typing to Batsy: start typing while Batsy is on screen (or Super+T); Enter sends, Esc cancels ---------
+const typebox = $('#typebox'), field = $('#typebox input');
+let typingPing = 0;
+function openBox(first = '') {
+  typebox.hidden = false; field.value = first; field.focus();
+  send({event: 'typing'});
+}
+function closeBox() { typebox.hidden = true; field.value = ''; field.blur(); }
+handlers.type = () => openBox();
+typebox.addEventListener('submit', e => e.preventDefault());
+field.addEventListener('keydown', e => {
+  e.stopPropagation();  // keys here are words, not shortcuts
+  if (e.key === 'Enter') {
+    const text = field.value.trim();
+    closeBox();
+    if (text) send({event: 'typed', text});
+  } else if (e.key === 'Escape') {
+    closeBox(); send({event: 'typing_done'});
+  } else if (Date.now() - typingPing > 2000) {  // still typing: keep the screen open
+    typingPing = Date.now(); send({event: 'typing'});
+  }
+});
+
 // --- input: Esc / click closes; any input ends the screensaver --------------------------------------------
 addEventListener('keydown', e => {
   if (viewerOnly) return;
   if (ui.saver) return send({event: 'saver_exit'});
   if (['~', '`'].includes(e.key)) return send({event: 'stop'});  // end the conversation: stop talking and listening
-  if (['Escape', ' ', 'q', 'Q'].includes(e.key)) send({event: 'dismiss'});
+  if (['Escape', ' '].includes(e.key)) return send({event: 'dismiss'});
+  if (e.key.length === 1 && !e.ctrlKey && !e.altKey && !e.metaKey) { e.preventDefault(); openBox(e.key); }
 });
 addEventListener('pointerdown', e => {
   if (viewerOnly) return;
   if (ui.saver) return send({event: 'saver_exit'});
+  if (typebox.contains(e.target)) return;  // clicking into the text box
+  if (e.target === $('#esc')) { e.preventDefault(); return openBox(); }  // "type to ask": a click gives the focus
   if (ui.model && $('#viewer').contains(e.target)) return;  // orbiting the model, not closing
   send({event: 'dismiss'});
 });

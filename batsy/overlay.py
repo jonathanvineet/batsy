@@ -43,6 +43,7 @@ class Overlay:
         # The standby bat in the top-right corner (batsy/dock.py) while the overlay is closed.
         self.on_dock_open = None  # the bat or its bubble was clicked
         self.on_stop = None  # "~" pressed in the overlay: end the whole conversation
+        self.on_typed = None  # a request typed into the overlay's text box
         # You closed it (Esc, click, "~", "stop"): drop everything the cancelled request still sends, so nothing
         # pops back up. Cleared by the wake word (a fresh listen) or by something Batsy must tell you (force=True).
         self.muted = False
@@ -113,6 +114,9 @@ class Overlay:
                         self.muted = True
                     if self.on_dismiss:
                         self.on_dismiss(user=bool(ev.get("user")))
+                elif ev.get("event") == "typed" and self.on_typed:
+                    self.muted = False
+                    self.on_typed(ev.get("text", ""))
                 elif ev.get("event") == "saver_exit" and self.on_saver_exit:
                     self.on_saver_exit()
                 elif ev.get("event") == "measured" and self.on_viewer_event:

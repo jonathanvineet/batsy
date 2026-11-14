@@ -17,6 +17,7 @@ import time
 from pathlib import Path
 
 from batsy import safety
+from batsy.keyboard import SERVICE, UDEV_RULE
 
 # Everything that names the PC. "Computer" stays the laptop (system.py), as it always was.
 PC = r"(?:the |my )?(?:pc|p c|desktop|desktop pc|other computer|big computer|bob|bob'?s computer)"
@@ -183,7 +184,12 @@ def handle(app, n: str) -> str | None:
                   "(con=$(nmcli -t -f NAME,DEVICE con show --active | grep -m1 ':enp' | cut -d: -f1); "
                   "sudo nmcli con modify \"$con\" 802-3-ethernet.wake-on-lan magic 2>/dev/null; "
                   "sudo /usr/sbin/ethtool -s enp2s0 wol g 2>/dev/null); "
-                  "echo; echo 'Done. Batsy can now shut down, restart, update and wake the PC. You can close this.'")
+                  "sudo apt-get install -y ydotool >/dev/null && "
+                  f"echo {shlex.quote(UDEV_RULE)} | sudo tee /etc/udev/rules.d/80-batsy-uinput.rules >/dev/null && "
+                  "sudo modprobe uinput && sudo udevadm control --reload && sudo udevadm trigger --name-match=uinput; "
+                  f"mkdir -p ~/.config/systemd/user && printf %s {shlex.quote(SERVICE)} > ~/.config/systemd/user/ydotoold.service && "
+                  "systemctl --user daemon-reload && systemctl --user enable --now ydotoold; "
+                  "echo; echo 'Done. Batsy can now shut down, restart, update, wake and type on the PC. You can close this.'")
         ok = _terminal(" ".join(shlex.quote(a) for a in pc.ssh_args(tty=True)) + " " + shlex.quote(script), "Set up the PC")
         return "I've opened a terminal on the laptop. Type the PC's password there, just this once." if ok else \
             "I couldn't open a terminal."
@@ -263,7 +269,27 @@ def handle(app, n: str) -> str | None:
         ok = _terminal(" ".join(shlex.quote(a) for a in pc.ssh_args(tty=True)) + " " + shlex.quote(script), "PC update")
         return "I've opened the PC's update in a terminal here, so you can watch it." if ok else "I couldn't open a terminal."
 
-    run = re.match(rf"{pre}(?:run|type|execute) (?P<cmd>.+?) (?:on|in) {PC}$", n)
+    typed = re.match(rf"{pre}(?:type|write)(?: out)? (?P<t>.+?) (?:on|in) {PC}$", n)
+    keys = re.match(rf"{pre}(?:press|hit|tap)(?: the)? (?P<k>.+?)(?: key)? (?:on|in) {PC}$", n)
+    if typed or keys:
+        from batsy import keyboard
+
+        if typed:
+            raw = re.search(r"(?i)\b(?:type|write)(?: out)?[,:]?\s+(.+?)\s+(?:on|in)\s+(?:the |my )?(?:pc|p\.c\.|desktop)\W*$",
+                            getattr(app, "last_raw_text", "") or "")
+            args = ["type", "--key-delay", "8", "--", raw.group(1) if raw else typed["t"]]
+        else:
+            codes = keyboard.parse_keys(keys["k"])
+            if codes is None:
+                return None
+            args = ["key", *[f"{c}:1" for c in codes], *[f"{c}:0" for c in reversed(codes)]]
+        code, out = pc.run("YDOTOOL_SOCKET=/run/user/$(id -u)/.ydotool_socket ydotool " + shlex.join(args), gui=True)
+        if code in (255, 124):
+            return pc._why(code, out)
+        if code != 0:
+            return "I can't type on the PC yet. Say set up the PC once, and type its password in the window."
+        return ""
+    run = re.match(rf"{pre}(?:run|execute) (?P<cmd>.+?) (?:on|in) {PC}$", n)
     if run:
         from batsy.system import _spoken_command
 

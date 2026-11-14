@@ -165,6 +165,26 @@ def cmd_listen(cfg, args) -> None:
         print("Batsy isn't running.")
 
 
+def cmd_type(cfg, args) -> None:
+    """Type a request to Batsy (bound to Super+T). A small box of its own: GNOME gives keyboard focus to a window
+    started from a shortcut, but not to Batsy's overlay, which is already running in the background."""
+    import shutil
+    import subprocess
+
+    from batsy.app import listen_now, send_typed
+
+    text = " ".join(args.text or [])
+    if not text and shutil.which("zenity") and (os.environ.get("WAYLAND_DISPLAY") or os.environ.get("DISPLAY")):
+        p = subprocess.run(["zenity", "--entry", "--title=Batsy", "--text=Type to Batsy", "--width=520",
+                            "--ok-label=Send"], capture_output=True, text=True)
+        text = p.stdout.strip()
+        if not text:
+            return
+    ok = send_typed(text) if text else listen_now("type")  # no zenity: the overlay's own box
+    if not ok:
+        print("Batsy isn't running.")
+
+
 def cmd_ask(cfg, args) -> None:
     from batsy.app import ask_daemon
 
@@ -396,6 +416,8 @@ def main() -> None:
     sub.add_parser("reset", help="start a fresh conversation")
     sub.add_parser("stop", help="stop the conversation now (bind it to a keyboard shortcut)")
     sub.add_parser("listen", help="listen now without the wake word (push-to-talk; bind it to a shortcut)")
+    p = sub.add_parser("type", help="type a request to Batsy, as if you'd said it (bind it to a shortcut)")
+    p.add_argument("text", nargs="*", help="the request; without it a small text box opens")
     sub.add_parser("usage", help="show token usage")
     sub.add_parser("spotify-login", help="connect your Spotify account")
     p = sub.add_parser("skills", help="list (or --forget) skills Batsy learned")
@@ -413,4 +435,4 @@ def main() -> None:
     {"run": cmd_run, None: cmd_run, "chat": cmd_chat, "ask": cmd_ask,
      "doctor": cmd_doctor, "reset": cmd_reset, "usage": cmd_usage,
      "spotify-login": cmd_spotify_login, "vocab": cmd_vocab, "skills": cmd_skills,
-     "projects": cmd_projects, "stop": cmd_stop, "listen": cmd_listen}[args.cmd](cfg, args)
+     "projects": cmd_projects, "stop": cmd_stop, "listen": cmd_listen, "type": cmd_type}[args.cmd](cfg, args)

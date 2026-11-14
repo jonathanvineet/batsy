@@ -270,3 +270,16 @@ body.showcase #subtitle { bottom: 5vh; font-size: 22px; }
 @media (prefers-reduced-motion: reduce) {
   #showcase .sweep, #showcase .tile.on::before, #showcase .rec { animation: none; }
 }
+
+/* --- typing to Batsy ------------------------------------------------------------------------------------- */
+#typebox { position: fixed; left: 50%; bottom: 11vh; transform: translateX(-50%); width: min(40em, 86vw);
+  display: flex; flex-direction: column; align-items: center; gap: 8px; z-index: 40; }
+#typebox[hidden] { display: none; }
+#typebox input { width: 100%; height: 52px; padding: 0 20px; border: 0; border-radius: 26px; outline: none;
+  background: rgba(8, 9, 12, .9); color: var(--bone); font: 400 20px/1 var(--body); caret-color: var(--signal);
+  box-shadow: inset 0 0 0 1px rgba(255, 194, 14, .32); user-select: text; }
+#typebox input:focus { box-shadow: inset 0 0 0 1.5px rgba(255, 194, 14, .7), 0 0 24px rgba(255, 194, 14, .12); }
+#typebox input::placeholder { color: var(--steel-dim); }
+#esc { cursor: pointer; }
+#typebox .hint { font: 500 13px/1 var(--display); letter-spacing: .06em; color: var(--steel-dim); }
+body.saver #typebox { display: none; }

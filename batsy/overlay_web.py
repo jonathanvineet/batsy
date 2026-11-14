@@ -97,6 +97,15 @@ class Shell(QWidget):
         if cmd == "model3d":
             self._ensure_scene()
             return
+        if cmd == "type":  # Super+T / `batsy type`: open with the text box focused
+            self.saver = False
+            self.hide_timer.stop()
+            self._appear()
+            self.raise_()
+            self.activateWindow()
+            self.web.view.setFocus()
+            self.web.send(m)
+            return
         if cmd in ("listen", "say"):
             self.hide_timer.stop()
         if cmd in SHOWN_CMDS:
@@ -201,6 +210,12 @@ class Shell(QWidget):
             self._dismiss(notify=False)
         elif kind == "collapsed":
             self._finish_dismiss()
+        elif kind == "typing":  # keep the screen up while you type
+            self.hide_timer.stop()
+        elif kind == "typing_done":
+            self.hide_timer.start(4000)
+        elif kind == "typed":
+            emit({"event": "typed", "text": ev.get("text", "")})
         elif kind == "measured":
             if self.scene is not None:
                 threading.Thread(target=self.scene.measured, args=(ev.get("mm", 0),), daemon=True).start()

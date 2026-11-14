@@ -2,6 +2,7 @@
 import json
 import logging
 import os
+import queue
 import random
 import re
 import socket
@@ -15,7 +16,7 @@ from batsy import safety, spotify
 from batsy import images
 from batsy.overlay import Overlay
 from batsy.routines import Routines
-from batsy import apps, calc, home, instant, lifecycle, model3d, pc, system
+from batsy import apps, calc, home, instant, keyboard, lifecycle, model3d, pc, system
 from batsy.learner import Automator, Learner
 from batsy.learning import ACTION, NEGATIVE, SkillBook, claude_cli
 from batsy.vocab import get_vocab
@@ -109,6 +110,7 @@ class Batsy:
 
         claude_code.CFG, claude_code.announce = cfg, self.announce
         self.listen_requested = threading.Event()  # Batsy asked something: listen without the wake word
+        self.typed: queue.Queue[str] = queue.Queue()  # requests typed into the overlay's text box
         self.tasks = TaskTalk(self)
         from batsy.projects import ProjectTalk
 
@@ -135,6 +137,7 @@ class Batsy:
             self.overlay.on_viewer_event = self._viewer_event
             self.overlay.on_dock_open = self._dock_clicked
             self.overlay.on_stop = lambda: self.kill("~ in the overlay")
+            self.overlay.on_typed = self._typed
             self.speaker.on_idle = lambda: self.overlay.send("quiet")  # stopped talking: stop showing "Speaking"
         self._turn_markers: list[tuple[str, str]] = []
         self.saver_on = False
@@ -196,6 +199,16 @@ class Batsy:
             self._saver_wake.set()
         else:
             self.preview_saver(30)  # show what changed
+
+    def _typed(self, text: str) -> None:
+        """Typed into the overlay: handled exactly like something you said after "Batsy"."""
+        text = text.strip()
+        if not text:
+            return
+        log.info("typed: %s", text)
+        self.typed.put(text)
+        if self.ears is not None:
+            self.ears.cancel.set()  # stop waiting for a spoken follow-up: the typed one goes first
 
     def _dock_clicked(self) -> None:
         """The standby bat was clicked: open up and listen, as if you'd said "Batsy"."""
@@ -655,6 +668,8 @@ class Batsy:
                 self._reply(said)
             return True
         said = system.handle(self, n)  # terminal, system update, restart / shut down: built in, never improvised
+        if said is None:
+            said = keyboard.handle(self, n)  # "type hello world", "press control c": into the focused app
         if said is not None:
             self._route = "command"
             if said:
@@ -839,6 +854,10 @@ class Batsy:
         errors: list[float] = []
         while True:
             try:
+                if pending_text is None and not self.typed.empty():  # typed into the overlay
+                    pending_text = self.typed.get_nowait()
+                    self.overlay.heard(pending_text)
+                    self.conversation_ended = 0
                 if self.listen_requested.is_set():  # Batsy just asked a question: hear the answer, no wake word
                     self.listen_requested.clear()
                     self.speaker.wait_idle()
@@ -1268,6 +1287,14 @@ class ControlServer(threading.Thread):
                 self.app._dock_clicked()
                 send({"done": True})
                 return
+            if req.get("typed"):  # `batsy type` / Super+T: a typed request, handled like a spoken one
+                self.app._typed(str(req["typed"]))
+                send({"done": True})
+                return
+            if req.get("type"):  # no text box of its own: open Batsy's overlay with its text box
+                self.app.overlay.send("type", force=True)
+                send({"done": True})
+                return
             text = req.get("text", "").strip()
             if text:
                 self.app.overlay.heard(text)  # typed turns are their own exchange on screen too
@@ -1282,15 +1309,29 @@ class ControlServer(threading.Thread):
             send({"done": True})
 
 
-def listen_now() -> bool:
-    """Make the running daemon listen right away, as if you'd said "Batsy". False if it isn't running."""
+def send_typed(text: str) -> bool:
+    """A typed request for the running daemon, handled as if you'd said it (spoken reply, on screen)."""
     s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     try:
         s.connect(str(SOCKET_PATH))
     except OSError:
         return False
     with s, s.makefile("rw") as f:
-        f.write(json.dumps({"listen": True}) + "\n")
+        f.write(json.dumps({"typed": text}) + "\n")
+        f.flush()
+        f.readline()
+    return True
+
+
+def listen_now(what: str = "listen") -> bool:
+    """Make the running daemon listen right away ("listen") or open its text box ("type"). False if not running."""
+    s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    try:
+        s.connect(str(SOCKET_PATH))
+    except OSError:
+        return False
+    with s, s.makefile("rw") as f:
+        f.write(json.dumps({what: True}) + "\n")
         f.flush()
         f.readline()
     return True
