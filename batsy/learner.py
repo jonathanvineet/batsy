@@ -33,6 +33,19 @@ QUESTION = re.compile(r"^(what|whats|what's|who|whos|who's|where|when|why|how|wh
                       r"define|explain|tell me about)\b")
 
 
+
+NOISE = {"uh", "um", "umm", "hmm", "mm", "mmm", "mmhmm", "mhm", "ah", "oh", "okay", "ok", "so", "yeah", "yes", "no",
+         "like", "hey", "huh", "right", "sorry", "what", "the", "a"}
+
+
+def clear_request(text: str) -> bool:
+    """Worth teaching a skill for? Not room noise or rambling: "Bluetooth. Mm-hmm." and "This fatal life can die.
+    I'm filled in the corner" became skills before this. At least 3 real words, few fillers, one sentence-ish."""
+    words = re.findall(r"[a-z0-9']+", text.lower().replace("mm-hmm", "mmhmm"))
+    real = [w for w in words if w not in NOISE]
+    sentences = len([s for s in re.split(r"[.?!]+", text) if s.strip()])
+    return len(real) >= 3 and len(real) >= 0.7 * len(words) and len(words) <= 25 and sentences <= 2
+
 class Learner:
     def __init__(self):
         self.lock = threading.Lock()
@@ -143,7 +156,7 @@ class Automator:
         instead of waiting for it to repeat. One at a time, at most 6 an hour, within the Claude budget."""
         now = time.time()
         self.recent = [t for t in getattr(self, "recent", []) if now - t < 3600]
-        if len(self.recent) >= 6 or self.learner.cacheable(norm):
+        if len(self.recent) >= 6 or self.learner.cacheable(norm) or not clear_request(text):
             return
         with self.learner.lock:
             if self.learner.db.execute("SELECT 1 FROM automated WHERE norm = ?", (norm,)).fetchone():
@@ -188,6 +201,8 @@ class Automator:
             for text, norm, n in self.learner.candidates():
                 if claude_code.over_budget(self.app.cfg):
                     break
+                if not clear_request(text):
+                    continue
                 log.info("automating %r (asked %d times)", norm, n)
                 out = skills.learn(text, lambda _q: False, execute=False)  # write the code; first real use tests it
                 if out.get("kind") == "skill" and out.get("ok"):

@@ -133,7 +133,7 @@ DEFAULTS = {
         # Words Parakeet rarely heard in training. Tested on mic recordings: at score 1.0 this list took tech words
         # from 11/21 to 15/21 with nothing invented in room noise; 1.5+ starts "hearing" them in silence.
         "hotwords": ["Batsy", "Claude", "Claude Code", "GitHub", "VS Code", "Python", "API", "JSON", "Ollama", "Llama",
-                     "Arduino", "ESP32", "GPIO", "Docker", "Kubernetes", "Fedora", "npm", "Bluetooth", "repo", "commit",
+                     "Arduino", "ESP32", "GPIO", "Docker", "Kubernetes", "Fedora", "npm", "repo", "commit",
                      "sketch", "serial monitor", "night mode"],
         "hotwords_score": 1.0,       # keep at 1.0; higher invents hotwords out of background noise
         # Everyday vocabulary to expect and to repair after recognition (batsy/lexicon.py): your project names are

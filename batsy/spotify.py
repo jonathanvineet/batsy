@@ -146,7 +146,10 @@ class Spotify:
         try:
             with urllib.request.urlopen(req, timeout=10) as r:
                 raw = r.read()
-                return json.loads(raw) if raw.strip() else None
+                try:
+                    return json.loads(raw) if raw.strip() else None
+                except ValueError:  # some player commands answer 200 with a non-JSON body: that's still success
+                    return None
         except urllib.error.HTTPError as e:
             try:
                 err = json.loads(e.read()).get("error", {})
@@ -226,7 +229,18 @@ class Spotify:
         return ""
 
     def resume(self) -> str:
-        self._req("PUT", "/me/player/play", self._dev_params())
+        try:
+            self._req("PUT", "/me/player/play", self._dev_params())
+        except SpotifyError as e:
+            if "Restriction violated" not in str(e):
+                raise
+            now = self._req("GET", "/me/player") or {}  # Spotify refuses "play" when it's already playing
+            if now.get("is_playing"):
+                item = now.get("item") or {}
+                artists = ", ".join(a["name"] for a in item.get("artists", [])[:2])
+                return f"It's already playing{': ' + item['name'] if item.get('name') else ''}" + \
+                    (f" by {artists}." if artists else ".")
+            raise SpotifyError("Spotify won't resume that. Pick something to play, like: play Anirudh.")
         return ""
 
     def next(self) -> str:

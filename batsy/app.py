@@ -208,6 +208,11 @@ class Batsy:
             return
         log.info("typed: %s", text)
         self.typed.put(text)
+        abort = getattr(self, "_turn_abort", None)
+        if abort is not None and getattr(self, "_turn_source", "") == "voice" and not abort.is_set():
+            log.info("typed request: cancelling the voice turn in progress")
+            abort.set()  # you typed instead: what the mic picked up (often noise) can wait / go
+            self.speaker.stop()
         if self.ears is not None:
             self.ears.cancel.set()  # stop waiting for a spoken follow-up: the typed one goes first
 
@@ -769,10 +774,6 @@ class Batsy:
             else:
                 self._reply("I don't have a learned skill for that.")
             return True
-        hit = self.skills.match(n)  # something Batsy learned before: run its code, no AI
-        if hit:
-            self._run_skill(hit[0], hit[1], text)
-            return True
         if re.match(r"(?:hey |ok )?ask (?:claude|cloud|clawed|claud)\b", text.strip(" .!?"), re.I):
             return False  # a full turn (status on screen, barge-in, voice confirmations), not a local command
         if n in RESET_PHRASES:
@@ -826,6 +827,12 @@ class Batsy:
         if n in ("next", "next song", "next track", "skip"):
             self._tool(["playerctl", "next"])
             return True
+        # Last: something Batsy taught itself. After every built-in command, so a learned skill can never take
+        # over one ("play spotify" is Spotify's, "turn off the light" the ESP32's, "restart" asks first).
+        hit = self.skills.match(n)
+        if hit:
+            self._run_skill(hit[0], hit[1], text)
+            return True
         return False
 
     # --- voice loop -------------------------------------------------------
@@ -855,8 +862,10 @@ class Batsy:
         errors: list[float] = []
         while True:
             try:
+                self._typed_turn = False
                 if pending_text is None and not self.typed.empty():  # typed into the overlay
                     pending_text = self.typed.get_nowait()
+                    self._typed_turn = True
                     self.overlay.heard(pending_text)
                     self.conversation_ended = 0
                 if self.listen_requested.is_set():  # Batsy just asked a question: hear the answer, no wake word
@@ -1192,6 +1201,7 @@ class Batsy:
         """Run a turn while still listening for barge-in. Returns (interrupting command or None, aborted)."""
         abort = threading.Event()
         self._turn_abort = abort  # so end_conversation() can cancel it
+        self._turn_source = "typed" if getattr(self, "_typed_turn", False) else "voice"
         done = threading.Event()
 
         def say(sentence: str) -> None:
