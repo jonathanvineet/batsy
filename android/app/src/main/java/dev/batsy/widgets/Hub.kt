@@ -7,7 +7,7 @@ import java.net.URL
 
 /**
  * Talking to Batsy on the laptop. Two routes, tried in order:
- *  - USB: the phone is plugged into the PC, which forwards 127.0.0.1:8765 to the laptop (Batsy sets that up).
+ *  - USB: the phone is plugged into the laptop (or the PC); Batsy maps 127.0.0.1:8765 to itself with adb reverse.
  *  - Remote: the laptop's Tailscale address, from anywhere.
  * The last status is kept, so widgets draw instantly and still show something when Batsy can't be reached.
  */

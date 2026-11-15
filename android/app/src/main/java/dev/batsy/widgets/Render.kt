@@ -65,7 +65,7 @@ object Render {
             v.setTextViewText(R.id.state, "Batsy")
             v.setInt(R.id.dot, "setColorFilter", STEEL)
             v.setTextViewText(R.id.line_main, r.error ?: "Connecting…")
-            v.setTextViewText(R.id.line_sub, "Plug into the PC, or connect Tailscale")
+            v.setTextViewText(R.id.line_sub, "Plug into the laptop, or connect Tailscale")
             v.removeAllViews(R.id.m1)
             v.removeAllViews(R.id.m2)
             return v

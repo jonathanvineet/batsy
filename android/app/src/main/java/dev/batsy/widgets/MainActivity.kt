@@ -82,7 +82,7 @@ class MainActivity : Activity() {
 
     private fun check() {
         if (!Hub.paired(this)) {
-            conn.text = "Not paired yet. Plug into the PC and say “Batsy, pair my phone”."
+            conn.text = "Not paired yet. Plug into the laptop and say “Batsy, pair my phone”."
             return
         }
         conn.text = "Checking…"

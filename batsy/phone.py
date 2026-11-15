@@ -9,9 +9,10 @@ GET  /app.apk      the app itself, to install from the phone's browser
 POST /api/pair     {"code": "123456"} -> {"token": ...}: the code `batsy phone` shows
 
 Two ways in, the app tries both:
-- USB: the phone is plugged into the PC. Batsy keeps an SSH tunnel PC:8765 -> laptop:8765 open and runs
-  `adb reverse tcp:8765 tcp:8765` on the PC, so the app just talks to 127.0.0.1:8765. Plug and go; it even
-  installs and pairs the app over USB ("install the widget app on my phone").
+- USB: the phone is plugged into this laptop (adb from android-tools), and Batsy runs `adb reverse tcp:8765
+  tcp:8765`, so the app just talks to 127.0.0.1:8765. Plugged into the PC instead, Batsy also keeps an SSH tunnel
+  PC:8765 -> laptop:8765 and runs adb there. It even installs and pairs the app over USB ("install the widget app
+  on my phone").
 - Tailscale: anywhere else, http://<laptop's Tailscale name>:8765.
 Every request needs the token from pairing; nothing is served to anyone else.
 """
@@ -105,49 +106,68 @@ class Hub:
             return
         threading.Thread(target=self.server.serve_forever, daemon=True, name="phone-api").start()
         log.info("phone API on port %d", self.port)
-        if self.cfg.get("phone.usb") and getattr(self.app, "pc", None) and self.app.pc.configured:
+        if self.cfg.get("phone.usb"):
             threading.Thread(target=self._usb_loop, daemon=True, name="phone-usb").start()
 
-    # --- USB through the PC -----------------------------------------------------------------------------
+    # --- USB: the phone plugged into this laptop (or into the PC) ----------------------------------------
+    def _pc(self):
+        pc = getattr(self.app, "pc", None)
+        return pc if pc and pc.configured else None
+
+    def _sh(self, where: str, command: str, timeout: float = 15) -> tuple[int, str]:
+        """Run a shell command here ("laptop") or on the PC ("pc"). (exit code, output)"""
+        if where == "pc":
+            return self._pc().run(command, timeout=timeout)
+        try:
+            p = subprocess.run(["bash", "-c", command], capture_output=True, text=True, timeout=timeout)
+            return p.returncode, (p.stdout + p.stderr).strip()
+        except subprocess.TimeoutExpired:
+            return 124, "timed out"
+
+    def _phone_on(self) -> str | None:
+        """Where the phone is plugged in with USB debugging allowed: "laptop", "pc", or None."""
+        if shutil.which("adb") and self._sh("laptop", "adb devices | grep -qw device", 8)[0] == 0:
+            return "laptop"
+        if self._pc() and self._sh("pc", "adb devices | grep -qw device", 8)[0] == 0:
+            return "pc"
+        return None
+
     def _usb_loop(self) -> None:
-        """Keep the path phone -> USB -> PC -> laptop open: an SSH tunnel to the PC, and `adb reverse` on the PC
-        whenever the phone is plugged in (it's lost on every reconnect, so it's re-applied every few seconds)."""
+        """Keep the cable path open. Plugged into the laptop: `adb reverse` here, and the app reaches Batsy at
+        127.0.0.1:8765 directly. Plugged into the PC: an SSH tunnel PC -> laptop plus `adb reverse` on the PC.
+        `adb reverse` is lost on every reconnect, so it's re-applied every few seconds."""
         while True:
             try:
-                if self._tunnel is None or self._tunnel.poll() is not None:
-                    if self.app.pc.up():
-                        self._tunnel = subprocess.Popen(
-                            self.app.pc.ssh_args()[:-1] + ["-N", "-o", "ExitOnForwardFailure=yes", "-R",
-                                                           f"127.0.0.1:{self.port}:127.0.0.1:{self.port}",
-                                                           self.app.pc.host],
-                            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                if self._tunnel is not None and self._tunnel.poll() is None:
-                    code, out = self.app.pc.run(f"adb devices | grep -w device >/dev/null && "
-                                                f"adb reverse tcp:{self.port} tcp:{self.port} >/dev/null && echo ok",
-                                                timeout=8)
-                    self.usb.update(phone=code == 0, reverse="ok" in out, checked=time.time())
+                where = self._phone_on()
+                if where == "pc" and (self._tunnel is None or self._tunnel.poll() is not None):
+                    pc = self._pc()
+                    self._tunnel = subprocess.Popen(
+                        pc.ssh_args()[:-1] + ["-N", "-o", "ExitOnForwardFailure=yes", "-R",
+                                              f"127.0.0.1:{self.port}:127.0.0.1:{self.port}", pc.host],
+                        stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                ok = bool(where) and self._sh(where, f"adb reverse tcp:{self.port} tcp:{self.port}", 8)[0] == 0
+                self.usb.update(phone=where, reverse=ok, checked=time.time())
             except Exception:
                 log.exception("phone usb link")
-            time.sleep(10)
+            time.sleep(5)
 
     def install_over_usb(self) -> str:
-        """Copy the app to the PC and `adb install` it on the phone, then hand it its token. What to say back."""
-        pc = getattr(self.app, "pc", None)
-        if not (pc and pc.configured):
-            return "The PC isn't set up, so I can't reach the phone over USB."
+        """`adb install` the app on the phone (plugged into the laptop, or the PC), then hand it its token."""
         if not APK.exists():
             return "The app hasn't been built yet. Run android/build.sh on the Mac and pull the update."
-        code, out = pc.run("command -v adb && adb devices | grep -w device", timeout=8)
-        if "adb" not in out:
-            return "The PC needs adb: run sudo apt install adb on it."
-        if code != 0:
-            return ("I can't see the phone on the PC. Plug it in, turn on USB debugging, and tap Allow on the phone.")
-        dest = "/tmp/batsy-widgets.apk"
-        p = subprocess.run(["scp", "-q", "-o", f"ControlPath={Path.home()}/.ssh/batsy-%r@%h", str(APK),
-                            f"{pc.host}:{dest}"], capture_output=True, text=True, timeout=120)
-        if p.returncode != 0:
-            return f"Copying the app to the PC failed: {(p.stderr or p.stdout).strip()[:120]}"
-        code, out = pc.run(f"adb install -r {dest}", timeout=180)
+        where = self._phone_on()
+        if where is None:
+            if not shutil.which("adb"):
+                return "This laptop needs adb first: run sudo dnf install android-tools, then ask me again."
+            return "I can't see the phone. Plug it in, turn on USB debugging, and tap Allow on the phone."
+        apk = str(APK)
+        if where == "pc":
+            apk = "/tmp/batsy-widgets.apk"
+            p = subprocess.run(["scp", "-q", "-o", f"ControlPath={Path.home()}/.ssh/batsy-%r@%h", str(APK),
+                                f"{self._pc().host}:{apk}"], capture_output=True, text=True, timeout=120)
+            if p.returncode != 0:
+                return f"Copying the app to the PC failed: {(p.stderr or p.stdout).strip()[:120]}"
+        code, out = self._sh(where, f"adb install -r {_q(apk)}", 180)
         if code != 0 or "Success" not in out:
             return f"Installing failed: {out.strip().splitlines()[-1][:140] if out.strip() else 'no reason given'}"
         self.pair_over_usb()
@@ -155,13 +175,13 @@ class Hub:
 
     def pair_over_usb(self) -> bool:
         """Give the app its token and addresses directly (adb), so there's no code to type."""
-        pc = getattr(self.app, "pc", None)
-        if not (pc and pc.configured):
+        where = self._phone_on()
+        if where is None:
             return False
         remote = self.remote_url()
         extra = f"--es token {token()}" + (f" --es remote {_q(remote)}" if remote else "")
-        code, out = pc.run(f"adb reverse tcp:{self.port} tcp:{self.port}; am=$(adb shell am broadcast "
-                           f"-n {PACKAGE}/.PairReceiver -a {PACKAGE}.PAIR {extra}); echo \"$am\"", timeout=15)
+        code, out = self._sh(where, f"adb reverse tcp:{self.port} tcp:{self.port}; adb shell am broadcast "
+                                    f"-n {PACKAGE}/.PairReceiver -a {PACKAGE}.PAIR {extra}", 30)
         return code == 0 and "result=0" in out.replace(" ", "")
 
     def remote_url(self) -> str:
