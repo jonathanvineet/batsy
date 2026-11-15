@@ -206,33 +206,91 @@ function drawClaude(c) {
     || '<li class="empty">No sessions running</li>';
 }
 
-// --- music ------------------------------------------------------------------------------------------------
-let song = null, songAt = 0;
+// --- music --------------------------------------------------------------------------------------------------
+// The widget only changes what changed: a new song cross-fades its art and tint, the bar glides between updates,
+// and a tap on play/pause holds that state until Spotify has caught up (no flicker back).
+let song = null, songAt = 0, shownId = null, holdUntil = 0, artSlot = 0;
+const mw = $('#mw'), mwImgs = $$('.mw-art img'), mwBar = $('#mw-bar'), mwPP = $('.mw-pp');
+
+function tintFrom(img) {  // the album's average colour, darkened: the card's background
+  try {
+    const c = document.createElement('canvas'); c.width = c.height = 12;
+    const g = c.getContext('2d'); g.drawImage(img, 0, 0, 12, 12);
+    const d = g.getImageData(0, 0, 12, 12).data;
+    let r = 0, gg = 0, b = 0;
+    for (let i = 0; i < d.length; i += 4) { r += d[i]; gg += d[i + 1]; b += d[i + 2]; }
+    const n = d.length / 4, k = 0.55;
+    mw.style.setProperty('--tint', `${Math.round(r / n * k)}, ${Math.round(gg / n * k)}, ${Math.round(b / n * k)}`);
+  } catch { /* no colour: keep the last one */ }
+}
+function showArt(url) {
+  const next = mwImgs[1 - artSlot];
+  const img = new Image();
+  img.crossOrigin = 'anonymous';
+  img.onload = () => {
+    next.src = url;
+    next.classList.add('on'); mwImgs[artSlot].classList.remove('on');
+    artSlot = 1 - artSlot;
+    tintFrom(img);
+  };
+  img.src = url;
+}
+function drawWidget() {
+  const id = song ? (song.id || song.title) : null;
+  if (id !== shownId) {  // a different song (or none): text, art, and the bar jumps without gliding
+    shownId = id;
+    $('#mw-title').textContent = song ? song.title : 'Nothing playing';
+    $('#mw-artist').textContent = song ? song.artist : 'Spotify';
+    $('#mw-dev').textContent = song && song.device ? song.device : '';
+    mw.classList.toggle('idle', !song);
+    if (song && song.art) showArt(song.art);
+    else { mwImgs.forEach(i => i.classList.remove('on')); mw.style.setProperty('--tint', '40, 42, 50'); }
+    mwBar.style.transition = 'none'; tickSong(); void mwBar.offsetWidth; mwBar.style.transition = '';
+  }
+  if (Date.now() > holdUntil) mwPP.classList.toggle('playing', !!(song && song.playing));
+}
+
 function drawMusic(s) {
-  song = s && !s.error ? s : null; songAt = Date.now();
+  const fresh = s && !s.error ? s : null;
+  if (Date.now() < holdUntil && song && fresh && (fresh.id || fresh.title) === (song.id || song.title)) {
+    fresh.playing = song.playing;  // you just tapped play/pause: trust that over a slightly stale answer
+  }
+  song = fresh; songAt = Date.now();
+  drawWidget();
+  // full-screen view
   const art = song && song.art;
-  for (const id of ['#mw-art', '#mf-art']) { const el = $(id); if (art) { if (el.src !== art) el.src = art; el.style.visibility = ''; } else el.style.visibility = 'hidden'; }
-  for (const id of ['#mw-bg', '#mf-bg']) $(id).style.backgroundImage = art ? `url("${art}")` : 'none';
-  $('#mw-title').textContent = $('#mf-title').textContent = song ? song.title : (s && s.error ? 'Spotify error' : 'Nothing playing');
-  $('#mw-artist').textContent = $('#mf-artist').textContent = song ? song.artist : (s && s.error) || '';
-  $('#mw-dev').textContent = $('#mf-dev').textContent = song && song.device ? song.device : '';
-  $$('[data-sp="toggle"]').forEach(b => b.classList.toggle('playing', !!(song && song.playing)));
+  const el = $('#mf-art'); if (art) { if (el.src !== art) el.src = art; el.style.visibility = ''; } else el.style.visibility = 'hidden';
+  const bg = art ? `url("${art}")` : 'none'; if ($('#mf-bg').style.backgroundImage !== bg) $('#mf-bg').style.backgroundImage = bg;
+  $('#mf-title').textContent = song ? song.title : (s && s.error ? 'Spotify error' : 'Nothing playing');
+  $('#mf-artist').textContent = song ? song.artist : (s && s.error) || '';
+  $('#mf-dev').textContent = song && song.device ? song.device : '';
+  $$('.music-full [data-sp="toggle"]').forEach(b => b.classList.toggle('playing', !!(song && song.playing)));
   tickSong();
 }
 function tickSong() {
-  const pos = song ? Math.min(song.duration_ms, song.progress_ms + (song.playing ? Date.now() - songAt : 0)) : 0;
-  const pct = song ? 100 * pos / (song.duration_ms || 1) : 0;
-  $('#mw-bar').style.width = $('#mf-bar').style.width = pct + '%';
-  $('#mf-pos').textContent = clockOf(pos); $('#mf-dur').textContent = clockOf(song ? song.duration_ms : 0);
+  const dur = song ? song.duration_ms || 1 : 1;
+  const pos = song ? Math.min(dur, song.progress_ms + (song.playing ? Date.now() - songAt : 0)) : 0;
+  // the widget's bar is set one second ahead and glides there (CSS transition), so it moves smoothly
+  const ahead = song && song.playing ? Math.min(dur, pos + 1000) : pos;
+  mwBar.style.transform = `scaleX(${song ? ahead / dur : 0})`;
+  $('#mw-pos').textContent = clockOf(pos);
+  $('#mw-left').textContent = song ? '-' + clockOf(dur - pos) : '0:00';
+  $('#mf-bar').style.width = (song ? 100 * pos / dur : 0) + '%';
+  $('#mf-pos').textContent = clockOf(pos); $('#mf-dur').textContent = clockOf(song ? dur : 0);
 }
 setInterval(tickSong, 1000);
 $$('[data-sp]').forEach(b => b.addEventListener('click', async () => {
+  const act = b.dataset.sp;
+  if (song && act === 'toggle') {  // flip at once, and hold it while Spotify catches up
+    song.progress_ms = Math.min(song.duration_ms, song.progress_ms + (song.playing ? Date.now() - songAt : 0));
+    songAt = Date.now(); song.playing = !song.playing; holdUntil = Date.now() + 3000;
+    mwPP.classList.toggle('playing', song.playing); drawMusic(song);
+  }
   try {
-    const r = await api('/api/spotify', {action: b.dataset.sp});
-    if (r.say) toast(r.say);
-    if (song && b.dataset.sp === 'toggle') { song.playing = !song.playing; song.progress_ms += Date.now() - songAt; drawMusic(song); }
-    setTimeout(refresh, 900);
-  } catch (e) { toast(e.message); }
+    const r = await api('/api/spotify', {action: act});
+    if (r.say && !r.ok) toast(r.say);
+    setTimeout(refresh, act === 'toggle' ? 1500 : 700);
+  } catch (e) { toast(e.message); holdUntil = 0; }
 }));
 
 // --- files -----------------------------------------------------------------------------------------------

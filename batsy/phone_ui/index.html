@@ -35,14 +35,21 @@
     </div>
 
     <div class="stack" id="right">
-      <article class="w music-w">
-        <div class="bg" id="mw-bg"></div>
-        <div class="row"><img id="mw-art" alt=""><div class="meta"><b id="mw-title">Nothing playing</b><small id="mw-artist"></small><small class="dev" id="mw-dev"></small></div></div>
-        <div class="progress"><div id="mw-bar"></div></div>
-        <div class="controls">
-          <button data-sp="previous" aria-label="Previous"><svg class="i f" viewBox="0 0 24 24"><path d="M6 5h2v14H6zM19 5v14L9 12z"/></svg></button>
-          <button data-sp="toggle" class="big" aria-label="Play or pause"><span class="pp"></span></button>
-          <button data-sp="next" aria-label="Next"><svg class="i f" viewBox="0 0 24 24"><path d="M16 5h2v14h-2zM5 5v14l10-7z"/></svg></button>
+      <!-- now playing: only what changed is touched (art cross-fades, the bar glides), so nothing flickers -->
+      <article class="w mw" id="mw">
+        <div class="mw-tint"></div>
+        <div class="mw-top">
+          <div class="mw-art"><img alt=""><img alt=""></div>
+          <div class="mw-text"><b id="mw-title">Nothing playing</b><span id="mw-artist">Spotify</span></div>
+        </div>
+        <div class="mw-prog">
+          <div class="mw-track"><i id="mw-bar"></i></div>
+          <div class="mw-times"><span id="mw-pos">0:00</span><span id="mw-dev"></span><span id="mw-left">0:00</span></div>
+        </div>
+        <div class="mw-ctl">
+          <button data-sp="previous" aria-label="Previous"><svg class="i f" viewBox="0 0 24 24"><rect x="5" y="5" width="2.6" height="14" rx="1"/><path d="M19 6.2v11.6a1 1 0 0 1-1.6.8L9.6 12.8a1 1 0 0 1 0-1.6l7.8-5.8a1 1 0 0 1 1.6.8z"/></svg></button>
+          <button data-sp="toggle" class="mw-pp" aria-label="Play or pause"><svg class="i f ic-play" viewBox="0 0 24 24"><path d="M8 5.5v13a1 1 0 0 0 1.5.9l10.4-6.5a1 1 0 0 0 0-1.8L9.5 4.6A1 1 0 0 0 8 5.5z"/></svg><svg class="i f ic-pause" viewBox="0 0 24 24"><rect x="6" y="5" width="4.2" height="14" rx="1.2"/><rect x="13.8" y="5" width="4.2" height="14" rx="1.2"/></svg></button>
+          <button data-sp="next" aria-label="Next"><svg class="i f" viewBox="0 0 24 24"><rect x="16.4" y="5" width="2.6" height="14" rx="1"/><path d="M5 6.2v11.6a1 1 0 0 0 1.6.8l7.8-5.8a1 1 0 0 0 0-1.6L6.6 5.4A1 1 0 0 0 5 6.2z"/></svg></button>
         </div>
       </article>
       <article class="w machines-w" id="machines-w"></article>
