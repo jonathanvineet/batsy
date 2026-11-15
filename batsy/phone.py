@@ -316,7 +316,7 @@ class Hub:
                 "listening_paused": bool(getattr(self.app, "muted_mic", False))}
 
     # --- buttons -----------------------------------------------------------------------------------------
-    def spotify_action(self, action: str) -> dict:
+    def spotify_action(self, action: str, body: dict | None = None) -> dict:
         from batsy.tools import music
 
         sp = music.get_spotify(self.cfg)
@@ -328,6 +328,14 @@ class Hub:
                 said = sp.pause() if st.get("is_playing") else sp.resume()
             elif action in ("next", "previous", "pause", "resume"):
                 said = getattr(sp, action)()
+            elif action == "play_uri":  # the song the app kept on screen after it stopped: from where it stopped
+                uri = str((body or {}).get("uri", ""))
+                if not uri.startswith("spotify:track:"):
+                    return {"ok": False, "say": "Unknown song."}
+                target = sp.device()
+                sp._req("PUT", "/me/player/play", {"device_id": target["id"]},
+                        {"uris": [uri], "position_ms": max(0, int((body or {}).get("position_ms") or 0))})
+                said = ""
             else:
                 return {"ok": False, "say": f"Unknown action {action}"}
         except Exception as e:
@@ -528,7 +536,7 @@ def _handler(hub: Hub):
             body = self._body()
             try:
                 if self.path == "/api/spotify":
-                    return self._send(200, hub.spotify_action(str(body.get("action", ""))))
+                    return self._send(200, hub.spotify_action(str(body.get("action", "")), body))
                 if self.path == "/api/batsy":
                     return self._send(200, hub.batsy_action(body))
                 if self.path == "/api/pc":

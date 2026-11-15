@@ -20,7 +20,14 @@
   --r: clamp(20px, 6vmin, 36px);
 }
 /* night: everything a dim red, like StandBy at night (set by app.js, 23:00-06:00) */
-body.night { filter: grayscale(1) sepia(1) saturate(6) hue-rotate(-50deg) brightness(.55); }
+/* the theme follows the album art of what's playing (app.js sets these); registered so they fade, not jump */
+@property --signal { syntax: "<color>"; inherits: true; initial-value: #ffc20e; }
+@property --w { syntax: "<color>"; inherits: true; initial-value: #121418; }
+@property --w2 { syntax: "<color>"; inherits: true; initial-value: #1c1f26; }
+@property --ink { syntax: "<color>"; inherits: true; initial-value: #1a1404; }
+html { transition: --signal 1.2s ease, --w 1.2s ease, --w2 1.2s ease, --ink 1.2s ease; }
+/* night (23:00-06:00, app.js): the same colours, dimmed */
+body.night { filter: brightness(.5); }
 
 * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
 html, body { height: 100%; background: var(--bg); color: var(--text); font: 15px/1.35 var(--body); overflow: hidden;

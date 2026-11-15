@@ -212,16 +212,34 @@ function drawClaude(c) {
 let song = null, songAt = 0, shownId = null, holdUntil = 0, artSlot = 0;
 const mw = $('#mw'), mwImgs = $$('.mw-art img'), mwBar = $('#mw-bar'), mwPP = $('.mw-pp');
 
-function tintFrom(img) {  // the album's average colour, darkened: the card's background
+function theme(img) {
+  // the album's colours: its average (darkened) tints the music card; its most vivid colour becomes the app's
+  // accent, and a dark version of it the widgets' background, so the whole app wears what's playing
   try {
-    const c = document.createElement('canvas'); c.width = c.height = 12;
-    const g = c.getContext('2d'); g.drawImage(img, 0, 0, 12, 12);
-    const d = g.getImageData(0, 0, 12, 12).data;
-    let r = 0, gg = 0, b = 0;
-    for (let i = 0; i < d.length; i += 4) { r += d[i]; gg += d[i + 1]; b += d[i + 2]; }
-    const n = d.length / 4, k = 0.55;
-    mw.style.setProperty('--tint', `${Math.round(r / n * k)}, ${Math.round(gg / n * k)}, ${Math.round(b / n * k)}`);
-  } catch { /* no colour: keep the last one */ }
+    const c = document.createElement('canvas'); c.width = c.height = 16;
+    const g = c.getContext('2d'); g.drawImage(img, 0, 0, 16, 16);
+    const d = g.getImageData(0, 0, 16, 16).data;
+    let r = 0, gg = 0, b = 0, best = null, bestScore = -1;
+    for (let i = 0; i < d.length; i += 4) {
+      const [R, G, B] = [d[i], d[i + 1], d[i + 2]];
+      r += R; gg += G; b += B;
+      const mx = Math.max(R, G, B), mn = Math.min(R, G, B), sat = mx ? (mx - mn) / mx : 0, val = mx / 255;
+      const score = sat * (1 - Math.abs(val - 0.75));  // vivid, and neither dark nor washed out
+      if (score > bestScore) { bestScore = score; best = [R, G, B]; }
+    }
+    const n = d.length / 4, avg = [r / n, gg / n, b / n];
+    mw.style.setProperty('--tint', avg.map(v => Math.round(v * 0.55)).join(', '));
+    let acc = bestScore > 0.18 ? best : [255, 194, 14];  // a grey cover: keep Batsy's yellow
+    const mx = Math.max(...acc);
+    if (mx < 200) acc = acc.map(v => Math.round(v * 200 / mx));  // bright enough to read on black
+    const root = document.documentElement.style;
+    root.setProperty('--signal', `rgb(${acc.join(',')})`);
+    const lum = (0.2126 * acc[0] + 0.7152 * acc[1] + 0.0722 * acc[2]) / 255;
+    root.setProperty('--ink', lum > 0.55 ? '#14110a' : '#ffffff');
+    const base = acc.map((v, i) => v * 0.6 + avg[i] * 0.4);
+    root.setProperty('--w', `rgb(${base.map(v => Math.round(12 + v * 0.07)).join(',')})`);
+    root.setProperty('--w2', `rgb(${base.map(v => Math.round(20 + v * 0.11)).join(',')})`);
+  } catch { /* can't read the art: keep the colours we have */ }
 }
 function showArt(url) {
   const next = mwImgs[1 - artSlot];
@@ -231,7 +249,7 @@ function showArt(url) {
     next.src = url;
     next.classList.add('on'); mwImgs[artSlot].classList.remove('on');
     artSlot = 1 - artSlot;
-    tintFrom(img);
+    theme(img);
   };
   img.src = url;
 }
@@ -241,17 +259,22 @@ function drawWidget() {
     shownId = id;
     $('#mw-title').textContent = song ? song.title : 'Nothing playing';
     $('#mw-artist').textContent = song ? song.artist : 'Spotify';
-    $('#mw-dev').textContent = song && song.device ? song.device : '';
     mw.classList.toggle('idle', !song);
     if (song && song.art) showArt(song.art);
     else { mwImgs.forEach(i => i.classList.remove('on')); mw.style.setProperty('--tint', '40, 42, 50'); }
     mwBar.style.transition = 'none'; tickSong(); void mwBar.offsetWidth; mwBar.style.transition = '';
   }
+  $('#mw-dev').textContent = song ? (song.held ? 'Last played' : song.device || '') : '';
   if (Date.now() > holdUntil) mwPP.classList.toggle('playing', !!(song && song.playing));
 }
 
 function drawMusic(s) {
-  const fresh = s && !s.error ? s : null;
+  let fresh = s && !s.error ? s : null;
+  if (fresh) store.set('lastSong', {...fresh, playing: false, savedAt: Date.now()});  // kept for when it stops
+  else {  // stopped / Spotify idle: the last song stays, paused where it was
+    const last = store.get('lastSong', null);
+    if (last) fresh = {...last, playing: false, held: true};
+  }
   if (Date.now() < holdUntil && song && fresh && (fresh.id || fresh.title) === (song.id || song.title)) {
     fresh.playing = song.playing;  // you just tapped play/pause: trust that over a slightly stale answer
   }
@@ -281,6 +304,15 @@ function tickSong() {
 setInterval(tickSong, 1000);
 $$('[data-sp]').forEach(b => b.addEventListener('click', async () => {
   const act = b.dataset.sp;
+  if (song && song.held && act === 'toggle') {  // Spotify had stopped: start the kept song where it stopped
+    song.playing = true; song.held = false; songAt = Date.now(); holdUntil = Date.now() + 4000; drawMusic(song);
+    try {
+      const r = await api('/api/spotify', {action: 'play_uri', uri: song.uri || ('spotify:track:' + song.id), position_ms: song.progress_ms});
+      if (!r.ok && r.say) toast(r.say);
+      setTimeout(refresh, 1500);
+    } catch (e) { toast(e.message); holdUntil = 0; }
+    return;
+  }
   if (song && act === 'toggle') {  // flip at once, and hold it while Spotify catches up
     song.progress_ms = Math.min(song.duration_ms, song.progress_ms + (song.playing ? Date.now() - songAt : 0));
     songAt = Date.now(); song.playing = !song.playing; holdUntil = Date.now() + 3000;

@@ -11,6 +11,7 @@ import base64
 import hashlib
 import http.server
 import json
+import logging
 import os
 import re
 import secrets
@@ -20,7 +21,10 @@ import urllib.parse
 import urllib.request
 import webbrowser
 
+from batsy import moods
 from batsy.config import CONFIG_DIR, DATA_DIR
+
+log = logging.getLogger("batsy.spotify")
 
 API = "https://api.spotify.com/v1"
 AUTH_URL = "https://accounts.spotify.com/authorize"
@@ -497,6 +501,14 @@ class Spotify:
         return ranked
 
     def play(self, query: str, kind: str = "auto", device: str | None = None) -> str:
+        want = moods.wanted(query) if kind == "auto" else None
+        if want:  # "something sad", "chill tamil songs", "some kuthu": a song in that mood, and a radio of the mood
+            picks = moods.similar(want, self._pool(), set(), 30)
+            if picks:
+                names = {t[2]: f"{t[0]} by {t[1]}" for t in self._pool()}
+                return self._start((1.0, {"uris": picks[:1]}, names.get(picks[0], "a song")), device,
+                                   mood=want, more=picks[1:])
+            moods.tag_missing(self._pool(), self.cfg)  # not tagged yet (first run): a playlist this time
         if kind == "auto" and MOODS.search(query):  # "something chill": any good playlist will do, no questions
             body, what = self.resolve(query, "playlist")
             return self._start((1.0, body, what), device)
@@ -517,14 +529,19 @@ class Spotify:
             return f"I'm not sure which one you mean. Is it {first}, or {self.pending[1][2]}?"
         return f"I'm not sure that's right. Is it {first}?"
 
-    def _start(self, cand: tuple, device: str | None = None) -> str:
+    def _start(self, cand: tuple, device: str | None = None, mood: dict | None = None, more: list | None = None) -> str:
         """Play one candidate on the chosen device, and check it really started there."""
         target = self.find_device(device) if device else self.device()
         body = cand[1]
-        if len(body.get("uris", [])) == 1:  # one song: keep going afterwards, forever (radio)
-            more = self._more_like(cand[2], body["uris"][0])
+        if len(body.get("uris", [])) == 1:  # one song: keep going afterwards, forever (radio), in its mood
+            seed = body["uris"][0]
+            mood = mood or moods.of(seed)
+            if more is None:
+                more = moods.similar(mood, self._pool(), {seed}, 40, cand[2].rpartition(" by ")[2]) if mood else []
+                if not more:  # not tagged yet: a few by the same artist now; the mood takes over in seconds
+                    more = self._more_like(cand[2], seed, n=3)
             body = {"uris": body["uris"] + more}
-            self._radio_start(cand[2], body["uris"])
+            self._radio_start(cand[2], body["uris"], mood)
         else:
             self.radio = None  # an album / playlist / artist: Spotify plays the whole thing itself
         self._req("PUT", "/me/player/play", {"device_id": target["id"]}, body)
@@ -538,10 +555,16 @@ class Spotify:
                 f"make sure it's awake, and ask again.")
 
     # --- radio: the music never runs out ---------------------------------------------------------------------------
-    def _radio_start(self, desc: str, queued: list[str]) -> None:
+    def _radio_start(self, desc: str, queued: list[str], mood: dict | None = None) -> None:
         artist = desc.rpartition(" by ")[2].strip()
         self.radio = {"artist": artist, "tamil": any(_same(artist, a) or a.lower() in artist.lower() for a in TAMIL),
-                      "known": set(queued), "paused_since": None}
+                      "known": set(queued), "paused_since": None, "mood": mood, "list": list(queued)}
+        if mood is None and queued:  # a song nobody has tagged: tag it now, then queue songs in its mood
+            import threading
+
+            threading.Thread(target=self._mood_for_seed, args=(self.radio, desc, queued[0]), daemon=True,
+                             name="seed-mood").start()
+        moods.tag_missing(self._pool(), self.cfg)  # whatever isn't tagged yet, in the background (only the first time)
         if not getattr(self, "_radio_thread", None):
             import threading
 
@@ -563,25 +586,108 @@ class Spotify:
                     self.radio = None
                     continue
                 st = self._req("GET", "/me/player") or {}
+                if (st.get("context") or {}).get("type") in ("playlist", "album", "artist", "show"):
+                    self.radio = None  # you started a playlist / album yourself: it plays as it is, Batsy keeps out
+                    continue
                 if not st.get("is_playing"):
                     r["paused_since"] = r["paused_since"] or time.time()
                     if time.time() - r["paused_since"] > 1800:
                         self.radio = None
                     continue
                 r["paused_since"] = None
-                left = [x.get("uri") for x in q.get("queue", []) if x and x.get("uri") in r["known"]]
-                if len(left) < 5:
-                    for uri in self._radio_next(r, 10):
-                        self._req("POST", "/me/player/queue", {"uri": uri})
-                        r["known"].add(uri)
+                lst = r.get("list") or []
+                pos = lst.index(now) if now in lst else -1
+                item = st.get("item") or {}
+                ending = (item.get("duration_ms") or 0) - (st.get("progress_ms") or 0) < 25000
+                if lst and pos >= len(lst) - 2 and ending:  # the list is nearly done: the next batch, at the song's end
+                    picks = self._radio_next(r, 40)
+                    if picks:
+                        time.sleep(max(0, ((item.get("duration_ms") or 0) - (st.get("progress_ms") or 0)) / 1000 - 1))
+                        self._req("PUT", "/me/player/play", None, {"uris": picks})
+                        r["known"].update(picks)
+                        r["list"] = picks
             except SpotifyError:
                 pass
             except Exception:
                 pass
 
+    def _pool(self) -> list:
+        """Every song Batsy knows: your library, then the catalogue. [(title, artist, uri), ...]"""
+        try:
+            cat = json.loads(CATALOG_FILE.read_text()).get("tracks", [])
+        except (OSError, ValueError):
+            cat = []
+        return [tuple(t[:3]) for t in self.library().get("tracks", []) + cat]
+
+    def taste_history(self) -> dict:
+        """What this person listens to, for their taste profile (moods.build_profile): Spotify's history and top
+        songs (needs the user-top-read / user-read-recently-played login), saved songs, and Batsy play requests."""
+        name = lambda t: f"{t['name']} by {', '.join(a['name'] for a in t.get('artists', [])[:2])}"  # noqa: E731
+        out: dict[str, list[str]] = {}
+        for label, path, params in [("Recently played", "/me/player/recently-played", {"limit": 50}),
+                                    ("Top songs, last 4 weeks", "/me/top/tracks", {"limit": 50, "time_range": "short_term"}),
+                                    ("Top songs, last 6 months", "/me/top/tracks", {"limit": 50, "time_range": "medium_term"}),
+                                    ("Top songs, all time", "/me/top/tracks", {"limit": 50, "time_range": "long_term"})]:
+            try:
+                items = (self._req("GET", path, params) or {}).get("items", [])
+                out[label] = list(dict.fromkeys(name(it.get("track") or it) for it in items if (it.get("track") or it).get("name")))
+            except SpotifyError as e:
+                log.info("taste: %s unavailable (%s)", label, e)
+        try:
+            items = (self._req("GET", "/me/top/artists", {"limit": 30, "time_range": "long_term"}) or {}).get("items", [])
+            out["Top artists, all time"] = [a["name"] for a in items]
+        except SpotifyError:
+            pass
+        out["Saved songs"] = [f"{t[0]} by {t[1]}" for t in self.library().get("tracks", [])]
+        try:
+            import sqlite3
+
+            db = sqlite3.connect(DATA_DIR / "requests.db")
+            asked = [r[0] for r in db.execute("SELECT text FROM requests WHERE norm LIKE 'play %' AND norm NOT IN "
+                                              "('play spotify', 'play music', 'play') ORDER BY rowid DESC LIMIT 60")]
+            out["Asked Batsy to play"] = list(dict.fromkeys(asked))
+        except Exception:
+            pass
+        return out
+
+    def find_song(self, said: str) -> tuple | None:
+        """'raja raja chozhan' -> (title, artist, uri) from the songs Batsy knows, if it clearly is one."""
+        from rapidfuzz import fuzz, process
+
+        pool = self._pool()
+        if not pool:
+            return None
+        titles = [_clean(t[0]) or t[0].lower() for t in pool]
+        best = process.extractOne(_clean(said) or said, titles, scorer=fuzz.ratio)
+        return pool[best[2]] if best and best[1] >= 82 else None
+
+    def _mood_for_seed(self, r: dict, desc: str, seed: str) -> None:
+        title, _, artist = desc.rpartition(" by ")
+        mood = moods.of(seed) or moods.tag_now(title or desc, artist, seed, self.cfg)
+        if not mood or self.radio is not r:
+            return
+        r["mood"] = mood
+        try:  # swap the list for songs in its mood (same song, same spot); never Spotify's queue, which can't be cleared
+            picks = moods.similar(mood, self._pool(), r["known"], 40, r["artist"])
+            st = self._req("GET", "/me/player") or {}
+            item = st.get("item") or {}
+            if picks and item.get("uri") == seed:
+                self._req("PUT", "/me/player/play", None, {"uris": [seed] + picks, "position_ms": st.get("progress_ms", 0)})
+                r["known"].update(picks)
+                r["list"] = [seed] + picks
+                log.info("radio: the mood of %s: %s", desc, mood)
+        except SpotifyError:
+            pass
+
     def _radio_next(self, r: dict, n: int) -> list[str]:
-        """Songs not played yet: the same artist first, then similar music (Tamil after Tamil), then anything."""
+        """Songs not played yet that feel like what you asked for (its mood); without moods: the same artist,
+        then similar music (Tamil after Tamil), then anything."""
         import random
+
+        if r.get("mood"):
+            picks = moods.similar(r["mood"], self._pool(), r["known"], n, r["artist"])
+            if picks:
+                return picks
 
         try:
             cat = json.loads(CATALOG_FILE.read_text()).get("tracks", [])
@@ -599,7 +705,7 @@ class Spotify:
         r["known"] = set()  # heard everything: start over
         return []
 
-    def _more_like(self, desc: str, first: str, n: int = 25) -> list[str]:
+    def _more_like(self, desc: str, first: str, n: int = 25) -> list[str]:  # by artist: before moods are known
         """Songs to play after the one you asked for: more by the same artist (your saved ones, the catalogue,
         then Spotify search), shuffled, so the music carries on."""
         import random
@@ -708,6 +814,48 @@ def parse_play(q: str) -> tuple[str, str]:
     return "auto", q
 
 
+LEARN_TASTE = re.compile(r"^(?:please )?(?:learn|study|understand|figure out|update|relearn)(?: my)? (?:music )?(?:taste|"
+                         r"taste in music|music|listening(?: history)?)(?: again)?$")
+CORRECT_THIS = re.compile(r"^(?:no )?(?:this|this song|that song|that|it|the song|this one)(?: is|'s| was) (?:a |an |more of a |"
+                          r"more like a |more like an |actually a |actually an )?(?P<what>.+?)(?: song| one| track| number)?$")
+CORRECT_NAMED = re.compile(r"^(?P<song>.+?) is (?:a |an |actually a |actually an )(?P<what>.+?)(?: song| one| track| number)$")
+
+
+def taste_command(sp: Spotify, n: str) -> str | None:
+    """Teaching Batsy how YOU hear your music. None if n isn't about that."""
+    if LEARN_TASTE.match(n):
+        def learn():
+            summary = moods.build_profile(sp.taste_history(), sp.cfg)
+            if summary:
+                moods.tag_missing(sp._pool(), sp.cfg, everything=True)  # every song again, the way you hear them
+        import threading
+
+        threading.Thread(target=learn, daemon=True, name="learn-taste").start()
+        return ("Learning your taste from your Spotify history. Then I'll re-tag your songs to match, "
+                "which takes about fifteen minutes in the background.")
+    m = CORRECT_THIS.match(n)
+    if m and moods.wanted(m["what"]):
+        now = sp._req("GET", "/me/player") or {}
+        item = now.get("item") or {}
+        if not item.get("uri"):
+            return "Nothing's playing, so I don't know which song you mean."
+        song = (item["name"], ", ".join(a["name"] for a in item.get("artists", [])[:2]), item["uri"])
+    else:
+        m = CORRECT_NAMED.match(n)
+        if not (m and moods.wanted(m["what"])):
+            return None
+        song = sp.find_song(m["song"])
+        if not song:
+            return None  # not a song Batsy knows: not this command
+    new = moods.correct(song[2], song[0], song[1], m["what"])
+    if not new:
+        return None
+    if sp.radio and sp.radio.get("known") and song[2] in sp.radio["known"]:
+        sp.radio["mood"] = new  # the radio playing it follows the correction from now on
+    era = f"{new['y']}s " if new.get("y") else ""
+    return f"Got it. {song[0]} is {era}{' and '.join(new['m']) or 'that'}, and I'll treat songs like it the same way."
+
+
 def handle_local(sp: Spotify, n: str) -> str | None:
     """Zero-token handling of a normalised utterance. Returns the reply ('' = silent), or None if not music."""
     said = sp.choose(n)  # "yes" / "the second one" / "not that one"
@@ -720,6 +868,9 @@ def handle_local(sp: Spotify, n: str) -> str | None:
         return sp.transfer(m.group(1))
     if re.fullmatch(r"(pause|stop)( the)?( music| song| spotify| playback)?", n) and n != "stop":
         return sp.pause()
+    said = taste_command(sp, n)  # "this song is an old feel-good song", "learn my music taste"
+    if said is not None:
+        return said
     if re.fullmatch(r"(resume|unpause|continue|play)( the)?( music| song| spotify)?( please)?|(resume|continue) playing", n):
         return sp.resume()
     if re.fullmatch(r"(next|skip)( song| track| this| this song| it)?( please)?|play the next song", n):
