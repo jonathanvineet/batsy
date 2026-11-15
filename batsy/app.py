@@ -16,7 +16,7 @@ from batsy import safety, spotify
 from batsy import images
 from batsy.overlay import Overlay
 from batsy.routines import Routines
-from batsy import apps, calc, home, instant, keyboard, lifecycle, model3d, pc, system
+from batsy import apps, calc, home, instant, keyboard, lifecycle, model3d, pc, slicer, system
 from batsy.learner import Automator, Learner
 from batsy.learning import ACTION, NEGATIVE, SkillBook, claude_cli
 from batsy.vocab import get_vocab
@@ -677,6 +677,12 @@ class Batsy:
         if said is not None:
             self._route = "command"
             self._reply(said)
+            return True
+        said = slicer.handle(self, n)  # "slice it with fast", "how long will it take to print"
+        if said is not None:
+            self._route = "command"
+            if said:
+                self._reply(said)
             return True
         said = pc.handle(self, n)  # the desktop PC over SSH: "open YouTube on the PC", "shut down the PC"
         if said is not None:

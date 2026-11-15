@@ -296,6 +296,9 @@ class Inbox:
         for p in files:  # remembered for good: "who sent the last file?", "open the audit report"
             received.record(p, self.sender_of(p) or self.mine,
                             "taildrop" if str(p) in self._taildropped else "upload page")
+        from batsy import slicer
+
+        slicer.on_arrival(self.app, files)  # printer presets -> your printer; 3D models -> sliced in the background
         fw = getattr(self.app, "pc_forward", None)
         if fw is not None:  # a copy to the sender's Inbox on the PC (Karan -> nightwing, ...)
             fw.send(files, self.sender_of)
