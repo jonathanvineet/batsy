@@ -610,10 +610,13 @@ def _snooze(app, m, text):
     return f"Okay, again {_span(secs)}."
 
 
-@handles(r"(?:can you |please )?remind me (.+)", r"(?:set|create|add|make)(?: me)? (?:a |an )?reminder (.+)",
+# "Pati, remind me..." (a misheard "Batsy" in front): one stray word before the command is fine
+@handles(r"(?:[a-z]+ )?(?:can you |please )?remind me (.+)", r"(?:set|create|add|make)(?: me)? (?:a |an )?reminder (.+)",
          r"(?:a )?reminder (?:for|at|on|to) (.+)")
 def _remind(app, m, text):
     rest = re.sub(r"\b(?:please|thanks|thank you)$", "", m.group(1)).strip()
+    rest = re.sub(r"\b(?:uh+|um+|hmm+|mm+|mmhmm|mm hmm|mhm|er+|ah+)\b", " ", rest)  # "at uh 11 30"
+    rest = re.sub(r"\s+", " ", rest).strip()
     if re.search(r"\b(every|daily|weekly|monthly|each|weekdays|weekends|nightly)\b", rest):
         return None  # a recurring one: the chores/habits tracker handles that
     from batsy.tools import monitor
@@ -630,6 +633,9 @@ def _remind(app, m, text):
     if found is None:
         return None
     when, spans = found
+    said_clock = re.search(rf"\b(?:at|by|around|for) {_CLOCK}", rest) or re.search(r"\b(?:morning|afternoon|evening|night|tonight)\b", rest)
+    if re.search(r"\btoday\b", rest) and not said_clock and when.date() != dt.date.today():
+        return "What time today? Say it like: remind me at 5 pm to " + _yours(re.sub(r"\s*\btoday\b", "", rest).strip()) + "."
     what = rest
     for a, b in sorted(spans, reverse=True):
         what = what[:a] + " " + what[b:]
@@ -744,3 +750,30 @@ def _spell(app, m, text):
     if len(word) > 30:
         return None
     return f"{word}: " + ", ".join(c.upper() for c in word if c.isalpha()) + "."
+
+
+# --- "remember that ..." -> long-term memory, every time (it used to go to the AI, which could lose it) ------------
+@handles(r"(?:[a-z]+ )?(?:please )?(?:remember|note down|make a note|don'?t forget|keep in mind|take a note)"
+         r"(?: that| to| this| of)?:? (.+)")
+def _remember(app, m, text):
+    what = m.group(1).strip()
+    if len(what.split()) < 2 or re.match(r"(?:my voice|what|when|where|who|me)\b", what):
+        return None  # "remember my voice", "remember what I said": not a note
+    raw = re.search(r"(?i)\b(?:remember|note down|make a note|don'?t forget|keep in mind|take a note)(?: that| to| this| of)?:?\s+(.+)", text)
+    what = (raw.group(1).strip().rstrip(".") if raw else what)
+    from batsy.memory_store import get_store
+
+    get_store().add_fact(f"Jonathan asked me to remember ({dt.date.today():%d %b %Y}): {what}")
+    return f"Got it. I'll remember: {_yours(what) if what[:1].islower() else what}."
+
+
+@handles(r"what (?:did|have) i (?:ask|asked|tell|told) you to remember", r"what do you remember(?: for me)?",
+         r"(?:what are|list|read) my notes", r"what(?:'s| is) on my (?:notes|memory)")
+def _recall_notes(app, m, text):
+    from batsy.memory_store import get_store
+
+    notes = [r["fact"].split(": ", 1)[1] for r in get_store().all_facts()
+             if r["fact"].startswith("Jonathan asked me to remember")]
+    if not notes:
+        return "You haven't asked me to remember anything yet."
+    return f"You asked me to remember {len(notes)} thing{'s' if len(notes) != 1 else ''}: " + "; ".join(notes[-6:]) + "."
