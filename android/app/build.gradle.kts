@@ -10,8 +10,8 @@ android {
         applicationId = "dev.batsy.widgets"
         minSdk = 26          // Android 8; the Galaxy A50 runs Android 11
         targetSdk = 36
-        versionCode = 2
-        versionName = "2.0"       // the app: pages served by the laptop in a full-screen WebView
+        versionCode = 3
+        versionName = "3.0"       // StandBy: landscape, full screen; pages served by the laptop in a WebView
     }
     buildTypes {
         release {

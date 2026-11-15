@@ -3,106 +3,101 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
-<meta name="theme-color" content="#0b0d12">
+<meta name="theme-color" content="#000000">
 <title>Batsy</title>
 <link rel="stylesheet" href="/app/app.css">
 </head>
 <body>
-<header id="top">
-  <svg class="bat" viewBox="0 0 24 24" aria-hidden="true"><path d="M12,15.6c-0.4,-1.3 -1.2,-2.1 -2.4,-2.2c-0.6,-1.5 -2.1,-2.3 -3.9,-1.9c0.5,-1.2 0.2,-2.6 -0.8,-3.6C3.3,8.6 1.9,9.9 1,11.6c1.5,-0.4 2.8,0 3.6,1.1c1.3,-0.5 2.8,0 3.4,1.3c1.4,0 2.6,0.8 3,2.2l0.5,0.6l0.5,-0.6c0.4,-1.4 1.6,-2.2 3,-2.2c0.6,-1.3 2.1,-1.8 3.4,-1.3c0.8,-1.1 2.1,-1.5 3.6,-1.1c-0.9,-1.7 -2.3,-3 -4.1,-3.7c-1,1 -1.3,2.4 -0.8,3.6c-1.8,-0.4 -3.3,0.4 -3.9,1.9c-0.4,0 -0.8,0.1 -1.1,0.3l-0.2,-1.3l-0.5,0.6l-0.5,-0.6l-0.2,1.3C12.8,13.5 12.4,13.4 12,13.4z"/></svg>
-  <h1 id="title">Batsy</h1>
-  <span id="link" class="link"><i></i><b>Connecting</b></span>
-  <button id="gear" class="gear" aria-label="Settings" hidden><svg class="i" viewBox="0 0 24 24"><path d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg></button>
-</header>
+<!-- StandBy: swipe sideways between views; in the widgets view each half scrolls up and down through its own stack -->
+<main id="views">
 
-<main id="pages">
-  <!-- 1. Home -->
-  <section class="page" data-page="home" aria-label="Home">
-    <div class="card hero">
-      <div class="state"><span class="orb"></span><div><b id="b-state">Idle</b><small id="b-status">Waiting for “Batsy”</small></div></div>
-      <div id="b-chat" class="chat"></div>
-      <form id="ask" class="ask" autocomplete="off">
-        <input id="ask-text" type="text" placeholder="Ask Batsy anything…" enterkeyhint="send">
-        <button class="go" aria-label="Send"><svg viewBox="0 0 24 24"><path d="M3 20l18-8L3 4v6l12 2-12 2z"/></svg></button>
-      </form>
+  <!-- 1. widgets: two stacks side by side -->
+  <section class="view widgets" aria-label="Widgets">
+    <div class="stack" id="left">
+      <article class="w clock-w">
+        <div class="time" id="w-time">--:--</div>
+        <div class="date" id="w-date"></div>
+        <div class="sub" id="w-next"></div>
+      </article>
+      <article class="w batsy-w" id="batsy-w">
+        <header><span class="orb" id="orb"></span><b id="b-state">Idle</b><span class="link" id="link"><i></i><em>…</em></span></header>
+        <p class="said" id="b-said">Say “Batsy”, or tap to type.</p>
+        <div class="askbar"><span>Ask Batsy…</span><svg class="i" viewBox="0 0 24 24"><path d="M3 20l18-8L3 4v6l12 2-12 2z"/></svg></div>
+      </article>
+      <article class="w home-w">
+        <div class="tiles">
+          <button class="t" data-act="light" id="t-light"><svg class="i" viewBox="0 0 24 24"><path d="M9 18h6M10 21h4M12 3a6 6 0 0 0-3.5 10.9c.6.5 1 1.2 1 2V16h5v-.1c0-.8.4-1.5 1-2A6 6 0 0 0 12 3z"/></svg><b>Light</b><small id="t-light-s">…</small></button>
+          <button class="t" data-act="night"><svg class="i" viewBox="0 0 24 24"><path d="M20 14.5A8 8 0 1 1 9.5 4a6.5 6.5 0 0 0 10.5 10.5z"/></svg><b>Night</b><small>light on</small></button>
+          <button class="t" data-act="pc" id="t-pc"><svg class="i" viewBox="0 0 24 24"><path d="M3 5h18v11H3zM8 20h8M12 16v4"/></svg><b>PC</b><small id="t-pc-s">…</small></button>
+          <button class="t" data-act="stop"><svg class="i f" viewBox="0 0 24 24"><path d="M6 6h12v12H6z"/></svg><b>Stop</b><small>Batsy</small></button>
+        </div>
+      </article>
     </div>
-    <div class="grid2">
-      <button class="tile" data-act="stop"><span class="ico"><svg class="i f" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6h12v12H6z"/></svg></span><b>Stop</b><small>Quiet, cancel</small></button>
-      <button class="tile" id="light-tile" data-act="light"><span class="ico"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 18h6M10 21h4M12 3a6 6 0 0 0-3.5 10.9c.6.5 1 1.2 1 2V16h5v-.1c0-.8.4-1.5 1-2A6 6 0 0 0 12 3z"/></svg></span><b>Light</b><small id="light-state">…</small></button>
-      <button class="tile" data-act="night"><span class="ico"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 14.5A8 8 0 1 1 9.5 4a6.5 6.5 0 0 0 10.5 10.5z"/></svg></span><b>Night mode</b><small>Night light on</small></button>
-      <button class="tile" data-act="pc"><span class="ico"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 5h18v11H3zM8 20h8M12 16v4"/></svg></span><b>PC</b><small id="pc-mini">…</small></button>
+
+    <div class="stack" id="right">
+      <article class="w music-w">
+        <div class="bg" id="mw-bg"></div>
+        <div class="row"><img id="mw-art" alt=""><div class="meta"><b id="mw-title">Nothing playing</b><small id="mw-artist"></small><small class="dev" id="mw-dev"></small></div></div>
+        <div class="progress"><div id="mw-bar"></div></div>
+        <div class="controls">
+          <button data-sp="previous" aria-label="Previous"><svg class="i f" viewBox="0 0 24 24"><path d="M6 5h2v14H6zM19 5v14L9 12z"/></svg></button>
+          <button data-sp="toggle" class="big" aria-label="Play or pause"><span class="pp"></span></button>
+          <button data-sp="next" aria-label="Next"><svg class="i f" viewBox="0 0 24 24"><path d="M16 5h2v14h-2zM5 5v14l10-7z"/></svg></button>
+        </div>
+      </article>
+      <article class="w machines-w" id="machines-w"></article>
+      <article class="w claude-w">
+        <div class="rings">
+          <div class="ringbox"><svg class="ring" viewBox="0 0 100 100"><circle class="track" cx="50" cy="50" r="42"/><circle id="r-session" class="fill" cx="50" cy="50" r="42"/></svg>
+            <div class="ringlabel"><b id="c-session">–</b><small>5-hour</small></div></div>
+          <div class="ringbox"><svg class="ring" viewBox="0 0 100 100"><circle class="track" cx="50" cy="50" r="42"/><circle id="r-week" class="fill" cx="50" cy="50" r="42"/></svg>
+            <div class="ringlabel"><b id="c-week">–</b><small>week</small></div></div>
+        </div>
+        <div class="claude-side"><h3>Claude</h3><small id="c-reset"></small><ul id="c-sessions"></ul></div>
+      </article>
+      <article class="w files-w"><h3>Received <span id="f-count"></span></h3><ul id="files"></ul></article>
     </div>
-    <div class="card" id="home-music-card">
-      <div class="mini-music"><img id="mm-art" alt=""><div><b id="mm-title">Nothing playing</b><small id="mm-artist"></small></div>
-      <button class="round" data-sp="toggle" aria-label="Play or pause"><span id="mm-icon"><svg class="i f" viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5l11 7-11 7z"/></svg></span></button></div>
-    </div>
-    <div class="card" id="asks-card" hidden><h2>Batsy is asking</h2><ul id="asks" class="plain"></ul></div>
   </section>
 
-  <!-- 2. Claude -->
-  <section class="page" data-page="claude" aria-label="Claude">
-    <div class="card">
-      <h2>Usage</h2>
-      <div class="rings">
-        <div class="ringbox"><svg class="ring" viewBox="0 0 100 100"><circle class="track" cx="50" cy="50" r="42"/><circle id="r-session" class="fill" cx="50" cy="50" r="42"/></svg>
-          <div class="ringlabel"><b id="c-session">–</b><small>5-hour session</small><small id="c-session-reset" class="dim"></small></div></div>
-        <div class="ringbox"><svg class="ring" viewBox="0 0 100 100"><circle class="track" cx="50" cy="50" r="42"/><circle id="r-week" class="fill" cx="50" cy="50" r="42"/></svg>
-          <div class="ringlabel"><b id="c-week">–</b><small>This week</small><small id="c-week-reset" class="dim"></small></div></div>
-      </div>
-      <div class="kv"><span>Requests this week</span><b id="c-req">–</b></div>
-    </div>
-    <div class="card">
-      <h2>Claude Code sessions <span class="count" id="c-count"></span></h2>
-      <ul id="c-sessions" class="list"></ul>
-    </div>
-    <div class="card">
-      <h2>Batsy's background work</h2>
-      <ul id="c-agents" class="list"></ul>
-    </div>
+  <!-- 2. big clock -->
+  <section class="view clock-full" aria-label="Clock">
+    <div class="time" id="big-time">--:--</div>
+    <div class="date" id="big-date"></div>
   </section>
 
-  <!-- 3. Computers -->
-  <section class="page" data-page="machines" aria-label="Computers">
-    <div id="machines"></div>
-  </section>
-
-  <!-- 4. Music -->
-  <section class="page" data-page="music" aria-label="Music">
-    <div class="card player">
-      <div class="art"><img id="m-art" alt=""><div id="m-noart" class="noart"><svg class="i" viewBox="0 0 24 24"><path d="M9 18V5l11-2v13M9 18a3 3 0 1 1-3-3 3 3 0 0 1 3 3zm11-2a3 3 0 1 1-3-3 3 3 0 0 1 3 3z"/></svg></div></div>
-      <b id="m-title" class="m-title">Nothing playing</b>
-      <span id="m-artist" class="m-artist"></span>
-      <div class="progress"><div id="m-bar"></div></div>
-      <div class="times"><span id="m-pos">0:00</span><span id="m-dev"></span><span id="m-dur">0:00</span></div>
+  <!-- 3. now playing, full screen -->
+  <section class="view music-full" aria-label="Now playing">
+    <div class="bg" id="mf-bg"></div>
+    <img id="mf-art" alt="">
+    <div class="mf-side">
+      <b id="mf-title">Nothing playing</b><span id="mf-artist"></span>
+      <div class="progress"><div id="mf-bar"></div></div>
+      <div class="times"><span id="mf-pos">0:00</span><span id="mf-dev"></span><span id="mf-dur">0:00</span></div>
       <div class="controls">
-        <button class="round" data-sp="previous" aria-label="Previous"><svg class="i f" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 5h2v14H6zM19 5v14L9 12z"/></svg></button>
-        <button class="round big" data-sp="toggle" aria-label="Play or pause"><span id="m-icon"><svg class="i f" viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5l11 7-11 7z"/></svg></span></button>
-        <button class="round" data-sp="next" aria-label="Next"><svg class="i f" viewBox="0 0 24 24" aria-hidden="true"><path d="M16 5h2v14h-2zM5 5v14l10-7z"/></svg></button>
+        <button data-sp="previous" aria-label="Previous"><svg class="i f" viewBox="0 0 24 24"><path d="M6 5h2v14H6zM19 5v14L9 12z"/></svg></button>
+        <button data-sp="toggle" class="big" aria-label="Play or pause"><span class="pp"></span></button>
+        <button data-sp="next" aria-label="Next"><svg class="i f" viewBox="0 0 24 24"><path d="M16 5h2v14h-2zM5 5v14l10-7z"/></svg></button>
       </div>
-    </div>
-    <form class="card ask" id="m-ask" autocomplete="off">
-      <input id="m-ask-text" type="text" placeholder="Play… (an artist, song or mood)" enterkeyhint="go">
-      <button class="go" aria-label="Play"><svg viewBox="0 0 24 24"><path d="M7 4l13 8-13 8z"/></svg></button>
-    </form>
-  </section>
-
-  <!-- 5. Files -->
-  <section class="page" data-page="files" aria-label="Files">
-    <div class="card">
-      <h2>Received <span class="count" id="f-count"></span></h2>
-      <div class="chips" id="f-filter"></div>
-      <ul id="files" class="list files"></ul>
     </div>
   </section>
 </main>
 
-<nav id="tabs">
-  <button data-go="0" class="on"><svg viewBox="0 0 24 24"><path d="M4 11l8-7 8 7v9h-5v-6H9v6H4z"/></svg><span>Home</span></button>
-  <button data-go="1"><svg viewBox="0 0 24 24"><path d="M12 2l2.4 6.8L21 10l-5.3 4.3L17.6 21 12 17.3 6.4 21l1.9-6.7L3 10l6.6-1.2z"/></svg><span>Claude</span></button>
-  <button data-go="2"><svg viewBox="0 0 24 24"><path d="M3 5h18v11H3zM8 20h8M12 16v4"/></svg><span>Computers</span></button>
-  <button data-go="3"><svg viewBox="0 0 24 24"><path d="M9 18V5l11-2v13M9 18a3 3 0 1 1-3-3 3 3 0 0 1 3 3zm11-2a3 3 0 1 1-3-3 3 3 0 0 1 3 3z"/></svg><span>Music</span></button>
-  <button data-go="4"><svg viewBox="0 0 24 24"><path d="M6 2h8l5 5v15H6zM14 2v5h5"/></svg><span>Files</span></button>
-</nav>
+<nav id="dots" aria-hidden="true"><i class="on"></i><i></i><i></i></nav>
+<button id="gear" aria-label="Settings" hidden><svg class="i" viewBox="0 0 24 24"><path d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg></button>
+
+<!-- ask sheet: tap the Batsy widget -->
+<div id="sheet" hidden>
+  <div class="panel">
+    <div id="chat" class="chat"></div>
+    <form id="ask" autocomplete="off">
+      <input id="ask-text" type="text" placeholder="Ask Batsy anything…" enterkeyhint="send">
+      <button class="go" aria-label="Send"><svg class="i f" viewBox="0 0 24 24"><path d="M3 20l18-8L3 4v6l12 2-12 2z"/></svg></button>
+    </form>
+  </div>
+</div>
+
+<!-- PC controls sheet -->
+<div id="pcsheet" hidden><div class="panel" id="pcpanel"></div></div>
 
 <div id="toast" role="status"></div>
 <dialog id="confirm"><p id="confirm-text"></p><div class="row"><button value="no" class="ghost">Cancel</button><button value="yes" class="danger">Yes</button></div></dialog>

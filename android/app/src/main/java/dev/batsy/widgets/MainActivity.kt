@@ -75,7 +75,32 @@ class MainActivity : Activity() {
             addView(Button(this@MainActivity).apply { text = "Settings"; setOnClickListener { openSettings() } })
         }
         setContentView(FrameLayout(this).apply { addView(web); addView(offline) })
+        fullScreen()
         connect()
+    }
+
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        if (hasFocus) fullScreen()  // the bars come back after a swipe from the edge: hide them again
+    }
+
+    /** No status bar, no navigation bar: StandBy is the whole screen. A swipe from the edge shows them briefly. */
+    @Suppress("DEPRECATION")
+    private fun fullScreen() {
+        if (android.os.Build.VERSION.SDK_INT >= 30) {
+            window.setDecorFitsSystemWindows(false)
+            window.insetsController?.let {
+                it.hide(android.view.WindowInsets.Type.systemBars())
+                it.systemBarsBehavior = android.view.WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+            }
+        } else {
+            window.decorView.systemUiVisibility = (View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY or View.SYSTEM_UI_FLAG_FULLSCREEN
+                or View.SYSTEM_UI_FLAG_HIDE_NAVIGATION or View.SYSTEM_UI_FLAG_LAYOUT_STABLE
+                or View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN or View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION)
+        }
+        if (android.os.Build.VERSION.SDK_INT >= 28) window.attributes = window.attributes.apply {
+            layoutInDisplayCutoutMode = android.view.WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
+        }
     }
 
     override fun onResume() {
@@ -128,5 +153,5 @@ class MainActivity : Activity() {
 
     private fun dp(v: Int) = (v * resources.displayMetrics.density).toInt()
 
-    companion object { val BG = Color.parseColor("#0B0D12") }
+    companion object { val BG = Color.BLACK }
 }

@@ -13,9 +13,12 @@
         <!-- Cleartext is only ever to Batsy: 127.0.0.1 over the USB cable, or the laptop over Tailscale (already
              encrypted end to end by WireGuard). -->
 
+        <!-- StandBy: landscape (either way up), full screen; turning it doesn't reload the page -->
         <activity
             android:name=".MainActivity"
             android:exported="true"
+            android:screenOrientation="sensorLandscape"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden"
             android:windowSoftInputMode="adjustResize">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
