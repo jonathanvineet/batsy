@@ -111,7 +111,16 @@ DEFAULTS = {
         "dock": True,                 # a small Batman bat in the top-right corner while the overlay is closed
         "renderer": "auto",           # auto | web (GPU, line + particles, 3D inside) | classic (plain Qt painting)
     },
-    "pc": {"host": "", "mac": "", "broadcast": ""},  # the desktop PC, controlled over SSH (batsy/pc.py)
+    "pc": {"host": "", "mac": "", "broadcast": ""},
+    # The Android widgets (android/, batsy/phone.py): a small API the phone app reads.
+    "phone": {
+        "enabled": True,
+        "port": 8765,
+        "bind": "0.0.0.0",            # every request needs the pairing token; reach it over Tailscale or USB
+        "usb": True,                  # phone plugged into the PC: tunnel + `adb reverse` so it works over the cable
+        "laptop_name": "Laptop",
+        "pc_name": "PC",
+    },  # the desktop PC, controlled over SSH (batsy/pc.py)
     "home": {
         "lights": {},                 # name -> ESP32 address, e.g. {"light": "http://192.168.1.70"} (GET /on, /off)
     },

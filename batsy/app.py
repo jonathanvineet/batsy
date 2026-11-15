@@ -118,11 +118,15 @@ class Batsy:
         self.last_file = None  # the file last made, opened or received: what "send this to my Mac" means
         from batsy.inbox import Inbox
 
+        self.pc = pc.Remote(cfg)  # the desktop PC over SSH: one shared connection for everything that uses it
         self.pc_forward = pc.Forwarder(self)  # a copy of what people send you goes to their Inbox on the PC
         self.inbox = Inbox(self)  # files sent over Tailscale land in ~/Batsy/inbox; "send it to my Mac"
         from batsy.shopping import ShopTalk
 
         self.shop = ShopTalk(self)  # "how much is X", "compare prices for X", "find me a TV under 50k"
+        from batsy.phone import Hub
+
+        self.hub = Hub(self)  # the phone widgets' API (batsy/phone.py, android/); started with the voice loop
         self.vocab = get_vocab()
         self.skills = SkillBook(claude_cli, show=lambda q: self.show_visual("show", q))
         self.learner = Learner()  # logs every request, remembers answers, turns repeats into code
@@ -667,6 +671,13 @@ class Batsy:
             self._route = "instant"
             self._reply(said)
             return True
+        from batsy import phone
+
+        said = phone.handle(self, n)  # "install the widget app on my phone", "pair my phone"
+        if said is not None:
+            self._route = "command"
+            self._reply(said)
+            return True
         said = pc.handle(self, n)  # the desktop PC over SSH: "open YouTube on the PC", "shut down the PC"
         if said is not None:
             self._route = "instant"
@@ -851,6 +862,8 @@ class Batsy:
             except Exception:
                 log.exception("kill word unavailable")
         ControlServer(self).start()
+        if self.cfg.get("phone.enabled"):
+            self.hub.start()  # the phone widgets: over USB through the PC, or over Tailscale
         self.ears.start()
         self.speaker.say(lifecycle.started())  # "Batsy online." or "I'm back. Updated: 23 files changed."
         log.info("listening for wake word")

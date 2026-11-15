@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="dashboard_desc">Batsy, Claude limits, your laptop and PC, and Spotify</string>
+    <string name="music_desc">What Spotify is playing, with controls</string>
+</resources>

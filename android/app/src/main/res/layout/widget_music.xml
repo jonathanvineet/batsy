@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Spotify now playing: cover, song, device, progress and controls. -->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/root"
+    android:layout_width="match_parent" android:layout_height="match_parent"
+    android:background="@drawable/card" android:gravity="center_vertical" android:orientation="horizontal"
+    android:padding="12dp">
+
+    <ImageView android:id="@+id/art" android:layout_width="84dp" android:layout_height="84dp"
+        android:background="@drawable/panel" android:scaleType="centerCrop" android:src="@drawable/ic_music"
+        android:contentDescription="Album art" />
+
+    <LinearLayout android:layout_width="0dp" android:layout_height="wrap_content"
+        android:layout_marginStart="14dp" android:layout_weight="1" android:orientation="vertical">
+        <TextView android:id="@+id/song" android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:ellipsize="end" android:maxLines="1" android:text="Nothing playing"
+            android:textColor="@color/bone" android:textSize="16sp" android:textStyle="bold" />
+        <TextView android:id="@+id/artist" android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:ellipsize="end" android:maxLines="1" android:text="" android:textColor="@color/steel"
+            android:textSize="13sp" />
+        <ProgressBar android:id="@+id/progress" style="@android:style/Widget.ProgressBar.Horizontal"
+            android:layout_width="match_parent" android:layout_height="4dp" android:layout_marginTop="8dp"
+            android:max="1000" android:progressDrawable="@drawable/bar" />
+        <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:layout_marginTop="6dp" android:gravity="center_vertical" android:orientation="horizontal">
+            <TextView android:id="@+id/device" android:layout_width="0dp" android:layout_height="wrap_content"
+                android:layout_weight="1" android:ellipsize="end" android:maxLines="1" android:text=""
+                android:textColor="@color/steel_dim" android:textSize="11sp" />
+            <ImageView android:id="@+id/btn_prev" android:layout_width="34dp" android:layout_height="34dp"
+                android:padding="6dp" android:src="@drawable/ic_prev" android:contentDescription="Previous" />
+            <ImageView android:id="@+id/btn_play" android:layout_width="40dp" android:layout_height="40dp"
+                android:layout_marginStart="4dp" android:layout_marginEnd="4dp" android:background="@drawable/pill_accent"
+                android:padding="9dp" android:src="@drawable/ic_play_dark" android:contentDescription="Play or pause" />
+            <ImageView android:id="@+id/btn_next" android:layout_width="34dp" android:layout_height="34dp"
+                android:padding="6dp" android:src="@drawable/ic_next" android:contentDescription="Next" />
+        </LinearLayout>
+    </LinearLayout>
+</LinearLayout>

@@ -47,6 +47,8 @@ class Overlay:
         # You closed it (Esc, click, "~", "stop"): drop everything the cancelled request still sends, so nothing
         # pops back up. Cleared by the wake word (a fresh listen) or by something Batsy must tell you (force=True).
         self.muted = False
+        # what Batsy is doing right now, for the phone widgets (kept even when the overlay itself is off)
+        self.live = {"state": "idle", "status": "", "since": time.time(), "you": "", "said": "", "t": None}
         self.dock: subprocess.Popen | None = None
         self.dock_lock = threading.Lock()
         self.dock_deaths: list[float] = []
@@ -202,6 +204,23 @@ class Overlay:
         else:
             self._dock_send("standby")
 
+    def _live(self, cmd: str, kw: dict) -> None:
+        live, now = self.live, time.time()
+        state = {"listen": "listening", "think": "thinking", "say": "speaking", "done": "idle", "hide": "idle"}.get(cmd)
+        if cmd == "quiet" and live["state"] == "speaking":
+            state = "idle"
+        if state and state != live["state"]:
+            live.update(state=state, since=now)
+        if cmd == "status":
+            live["status"] = kw.get("text", "")
+        elif cmd in ("done", "hide", "say"):
+            live["status"] = ""
+        if cmd == "heard":
+            live.update(you=kw.get("text", ""), said="")
+        elif cmd == "say":
+            live["said"] = (live["said"] + " " + kw.get("text", "")).strip()[-600:]
+            live["t"] = int(now)
+
     def _track(self, cmd: str, kw: dict) -> None:
         c = self.convo
         if cmd == "showcase":
@@ -224,12 +243,13 @@ class Overlay:
             c["title"], c["fresh"] = kw.get("title", ""), True
 
     def send(self, cmd: str, **kw) -> None:
-        if not self.enabled:
-            return
         if kw.pop("force", False) or (cmd == "listen" and kw.get("fresh")):
             self.muted = False
         elif self.muted and cmd in MUTED_CMDS:
             return  # what the request you cancelled is still sending: it must not reopen the screen
+        self._live(cmd, kw)
+        if not self.enabled:
+            return
         self._track(cmd, kw)
         if cmd != "saver":
             self.last_active = time.time()

@@ -195,6 +195,34 @@ Ask about anything you might buy, in any words:
 
 Prices are as listed, before delivery charges; stores change their pages, so a store sometimes drops out.
 
+## Phone widgets (Android)
+
+The Batsy app for Android (`android/`, built as `android/dist/batsy-widgets.apk`) adds home-screen widgets:
+- **Batsy dashboard** (4×4, resizable):
+  - what Batsy is doing (idle, listening, thinking, speaking), its last answer, your last question and your next reminder;
+  - your Claude session and week budgets;
+  - the laptop and the PC side by side: CPU, RAM, temperature, battery, GPU, free disk, network;
+  - what Spotify is playing, with controls;
+  - buttons for **Stop**, **Wake PC**, **Ask** (type to Batsy) and refresh.
+- **Now playing** (4×2): the cover, song, device, progress and controls.
+
+The widgets refresh every 30 seconds while the screen is on and every 5 minutes when it's off, without waking the phone.
+
+**Connecting:** the app tries the **USB cable first**, then **Tailscale**:
+- With the phone plugged into the PC, Batsy keeps an SSH tunnel from the PC to the laptop and runs `adb reverse` on the PC, so the app reaches it at `127.0.0.1:8765`, with no Wi-Fi or Tailscale needed.
+- Away from the PC, it uses the laptop's Tailscale address.
+
+Every request needs the pairing token.
+
+**Setup, once:**
+1. On the phone: Settings › About phone › Software information › tap Build number 7 times, then turn on Developer options › **USB debugging**. Plug it into the PC and tap **Allow**.
+2. On the PC: `sudo apt install adb`.
+3. Say **"Batsy, install the widget app on my phone"**. Batsy copies the app to the PC, installs it with adb and pairs it, with no code to type.
+   - Or download it from `http://<laptop>:8765/app.apk` in the phone's browser, then say "Batsy, pair my phone" and type the code it shows.
+4. Long-press the home screen › Widgets › Batsy. On Samsung, set Batsy's battery use to **Unrestricted** (Settings › Apps › Batsy › Battery) so the widgets keep refreshing.
+
+Rebuilding the app (on a machine with the Android SDK and a JDK): `android/build.sh`.
+
 ## Reminders (no tokens)
 
 - "Remind me in 20 minutes to take the print off the bed" · "remind me at 5 pm to call mom" · "remind me tomorrow at 9 to submit the DBMS assignment" · "remind me on Friday at 4:30 to push the code" · "remind me tonight to charge the batteries" · "remind me at half past five to eat" · "set a reminder for 7 to go to the gym"

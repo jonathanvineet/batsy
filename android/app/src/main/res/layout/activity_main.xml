@@ -1,0 +1,80 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent" android:layout_height="match_parent"
+    android:background="@color/night" android:fillViewport="true">
+
+    <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
+        android:orientation="vertical" android:padding="20dp">
+
+        <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:layout_marginTop="12dp" android:gravity="center_vertical" android:orientation="horizontal">
+            <ImageView android:layout_width="40dp" android:layout_height="40dp" android:src="@drawable/ic_bat"
+                android:contentDescription="" />
+            <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
+                android:layout_marginStart="10dp" android:text="Batsy" android:textColor="@color/bone"
+                android:textSize="28sp" android:textStyle="bold" />
+        </LinearLayout>
+        <TextView android:id="@+id/conn" android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:layout_marginTop="6dp" android:text="Checking…" android:textColor="@color/steel"
+            android:textSize="14sp" />
+
+        <!-- talk to Batsy -->
+        <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
+            android:layout_marginTop="28dp" android:text="ASK BATSY" android:textColor="@color/steel"
+            android:letterSpacing="0.1" android:textSize="12sp" android:textStyle="bold" />
+        <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:layout_marginTop="8dp" android:gravity="center_vertical" android:orientation="horizontal">
+            <EditText android:id="@+id/ask" android:layout_width="0dp" android:layout_height="52dp"
+                android:layout_weight="1" android:background="@drawable/panel" android:hint="Play some lofi, how's my robot project…"
+                android:imeOptions="actionSend" android:inputType="text" android:paddingStart="14dp"
+                android:paddingEnd="14dp" android:textColor="@color/bone" android:textColorHint="@color/steel_dim"
+                android:textSize="15sp" />
+            <Button android:id="@+id/send" android:layout_width="wrap_content" android:layout_height="52dp"
+                android:layout_marginStart="8dp" android:background="@drawable/pill_accent" android:minWidth="76dp"
+                android:text="Send" android:textAllCaps="false" android:textColor="@color/night" android:textSize="15sp"
+                android:textStyle="bold" />
+        </LinearLayout>
+        <TextView android:id="@+id/reply" android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:layout_marginTop="12dp" android:background="@drawable/panel" android:padding="14dp"
+            android:text="" android:textColor="@color/bone" android:textIsSelectable="true" android:textSize="15sp"
+            android:visibility="gone" />
+
+        <!-- quick controls -->
+        <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:layout_marginTop="16dp" android:orientation="horizontal">
+            <Button android:id="@+id/stop" style="@style/Pill" android:layout_width="0dp" android:layout_weight="1"
+                android:text="Stop Batsy" />
+            <Button android:id="@+id/wake" style="@style/Pill" android:layout_width="0dp"
+                android:layout_marginStart="8dp" android:layout_weight="1" android:text="Wake PC" />
+            <Button android:id="@+id/refresh" style="@style/Pill" android:layout_width="0dp"
+                android:layout_marginStart="8dp" android:layout_weight="1" android:text="Refresh" />
+        </LinearLayout>
+
+        <!-- pairing -->
+        <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
+            android:layout_marginTop="32dp" android:text="PAIR" android:textColor="@color/steel"
+            android:letterSpacing="0.1" android:textSize="12sp" android:textStyle="bold" />
+        <TextView android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:layout_marginTop="6dp" android:textColor="@color/steel" android:textSize="13sp"
+            android:text="Plugged into the PC, Batsy pairs this phone by itself: say “Batsy, pair my phone”. Away from the PC, say it and type the code it shows here, with the laptop’s Tailscale address." />
+        <EditText android:id="@+id/address" android:layout_width="match_parent" android:layout_height="52dp"
+            android:layout_marginTop="10dp" android:background="@drawable/panel"
+            android:hint="Laptop address (blank = USB)" android:inputType="textUri" android:paddingStart="14dp"
+            android:paddingEnd="14dp" android:textColor="@color/bone" android:textColorHint="@color/steel_dim"
+            android:textSize="15sp" />
+        <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:layout_marginTop="8dp" android:orientation="horizontal">
+            <EditText android:id="@+id/code" android:layout_width="0dp" android:layout_height="52dp"
+                android:layout_weight="1" android:background="@drawable/panel" android:hint="6-digit code"
+                android:inputType="number" android:maxLength="6" android:paddingStart="14dp" android:paddingEnd="14dp"
+                android:textColor="@color/bone" android:textColorHint="@color/steel_dim" android:textSize="15sp" />
+            <Button android:id="@+id/pair" style="@style/Pill" android:layout_width="wrap_content"
+                android:layout_height="52dp" android:layout_marginStart="8dp" android:minWidth="88dp"
+                android:text="Pair" />
+        </LinearLayout>
+
+        <TextView android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:layout_marginTop="32dp" android:textColor="@color/steel_dim" android:textSize="13sp"
+            android:text="Add the widgets: long-press the home screen › Widgets › Batsy. On Samsung, set Batsy’s battery use to Unrestricted (Settings › Apps › Batsy › Battery) so the widgets keep updating." />
+    </LinearLayout>
+</ScrollView>
