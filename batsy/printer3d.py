@@ -21,6 +21,7 @@ import time
 from pathlib import Path
 
 log = logging.getLogger("batsy.printer3d")
+STOPPED_FILE = None  # set below: remembers a print stopped on the printer's screen, across Batsy restarts
 BAUD = 115200
 TEMPS = re.compile(r"T:\s*([\d.]+)\s*/\s*([\d.]+).*?B:\s*([\d.]+)\s*/\s*([\d.]+)")
 SD = re.compile(r"(?:SD|TF) printing byte (\d+)/(\d+)")  # Creality's firmware says "TF printing"
@@ -38,6 +39,16 @@ def find_port() -> str | None:
 class Printer:
     def __init__(self, app=None):
         self.app = app
+        from batsy.config import DATA_DIR
+
+        global STOPPED_FILE
+        STOPPED_FILE = DATA_DIR / "printer_stopped.json"
+        try:
+            import json
+
+            self.stopped_byte = json.loads(STOPPED_FILE.read_text()).get("byte")  # still frozen there: still stopped
+        except (OSError, ValueError):
+            self.stopped_byte = None
         self.ser = None
         self.lock = threading.Lock()          # one command at a time
         self.ok = threading.Event()
@@ -77,6 +88,7 @@ class Printer:
                 self._read_until(boot_until)
                 self.state["connected"] = True
                 self.send("M155 S3")       # report temperatures every 3 s by itself
+                self.send("M105", 3)       # temperatures first: a "printing" report with the heaters off is a stopped one
                 fw = self.send("M115", 3)
                 m = re.search(r"MACHINE_TYPE:([^\s]+(?: [^\s:]+)*?) EXTRUDER", " ".join(fw))
                 self.state["firmware"] = m.group(1) if m else ""
@@ -113,6 +125,10 @@ class Printer:
         m = SD.search(line)
         if m and int(m.group(1)) == getattr(self, "stopped_byte", None):
             m = None  # the frozen number of a print stopped on the screen: not printing (still passed on below)
+        if m and not self.state["printing"] and getattr(self, "temps_at", 0) and self.state["hotend_target"] == 0 \
+                and self.state["bed_target"] == 0 and getattr(self, "last_byte", None) is None:
+            self._mark_stopped(int(m.group(1)))  # first sight since connecting, heaters off: a stopped print, not a new one
+            m = None
         if m:
             done, total = int(m.group(1)), int(m.group(2))
             pct = round(100 * done / total, 1) if total else None
@@ -189,6 +205,17 @@ class Printer:
                 pass
 
     # --- actions -----------------------------------------------------------------------------------------------
+    def _mark_stopped(self, byte: int | None) -> None:
+        import json
+
+        self.stopped_byte = byte
+        self.state.update(printing=False, job=None, started=None)
+        self.ours = False
+        try:
+            STOPPED_FILE.write_text(json.dumps({"byte": byte, "t": time.time()}))
+        except OSError:
+            pass
+
     def stopped(self) -> bool:
         """Creality's firmware keeps answering "TF printing byte N" after you stop a print on its screen. Frozen there
         for 2 minutes with the heaters off (and not paused by Batsy) means it's not printing any more."""
@@ -199,8 +226,7 @@ class Printer:
     def status(self) -> str:
         s = self.state
         if self.stopped():
-            s.update(printing=False, job=None, started=None)
-            self.ours, self.stopped_byte = False, getattr(self, "last_byte", None)
+            self._mark_stopped(getattr(self, "last_byte", None))
         if not s["connected"]:
             return "The printer isn't connected. Is it switched on, with the USB cable in?"
         temps = f"the nozzle is at {round(s['hotend'] or 0)} degrees" + \
@@ -256,8 +282,7 @@ class Printer:
     def snapshot(self) -> dict:
         """For the phone app."""
         if self.stopped():
-            self.state.update(printing=False, job=None, started=None)
-            self.ours, self.stopped_byte = False, getattr(self, "last_byte", None)
+            self._mark_stopped(getattr(self, "last_byte", None))
         return {**self.state, "remaining_s": round(self.remaining() or 0) or None}
 
     def preheat(self, nozzle: int = 200, bed: int = 60) -> str:
@@ -325,6 +350,8 @@ class Printer:
         self.send("M24", 5)
         self.state.update(job=job or name, printing=True, paused=False, progress=0, started=time.time(), file=name)
         self.samples, self.ours, self.unstuck_once, self.byte_at = [], True, False, time.time()
+        self._mark_stopped(None)
+        self.state.update(job=job or name, printing=True, started=time.time())
         return f"Printing {job or name} from the card."
 
     def cancel(self) -> str:
