@@ -75,7 +75,7 @@ DEFAULTS = {
         # inbox folder -> the user on the PC whose Inbox gets a copy (batsy/pc.py Forwarder)
         "pc_users": {},
         "receive": True,              # accept files from senders at http://<this laptop>:<receive_port>
-        "receive_port": 8765,
+        "receive_port": 8766,           # the upload page (the phone app has 8765)
         "receive_max_mb": 4096,
     },
     "spotify": {

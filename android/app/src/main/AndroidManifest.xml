@@ -23,6 +23,12 @@
             </intent-filter>
         </activity>
 
+        <activity
+            android:name=".SettingsActivity"
+            android:exported="false"
+            android:label="Batsy settings"
+            android:windowSoftInputMode="adjustResize" />
+
         <receiver
             android:name=".DashboardWidget"
             android:exported="true"

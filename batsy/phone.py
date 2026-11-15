@@ -5,6 +5,12 @@ GET  /api/status   everything the widgets show: the laptop and PC (CPU, memory, 
 POST /api/spotify  {"action": "toggle" | "next" | "previous"}
 POST /api/batsy    {"action": "stop"} (like "~") or {"action": "ask", "text": "..."} (type to Batsy; returns the reply)
 POST /api/pc       {"action": "wake"}
+GET  /app/...      the app's pages (batsy/phone_ui/): the app is a full-screen shell that shows these, so pages
+                   change on the laptop without reinstalling anything
+GET  /api/files    files received over Tailscale (batsy/received.py), newest first
+POST /api/files    {"action": "open", "path": ...}: open a received file on the laptop
+POST /api/home     {"action": "on" | "off" | "night"}: the light
+POST /api/pc       {"action": "wake" | "lock" | "sleep" | "restart" | "shutdown"}
 GET  /app.apk      the app itself, to install from the phone's browser
 POST /api/pair     {"code": "123456"} -> {"token": ...}: the code `batsy phone` shows
 
@@ -35,6 +41,9 @@ from batsy.config import DATA_DIR, SOURCE_DIR
 log = logging.getLogger("batsy.phone")
 TOKEN_FILE = DATA_DIR / "phone_token"
 APK = SOURCE_DIR.parent / "android" / "dist" / "batsy-widgets.apk"
+UI = SOURCE_DIR / "phone_ui"
+TYPES = {".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8",
+         ".svg": "image/svg+xml", ".png": "image/png", ".woff2": "font/woff2", ".json": "application/json"}
 PACKAGE = "dev.batsy.widgets"
 
 # What the PC reports about itself, as JSON, from one SSH call (Ubuntu: /proc and /sys only, no extra packages).
@@ -168,10 +177,17 @@ class Hub:
             if p.returncode != 0:
                 return f"Copying the app to the PC failed: {(p.stderr or p.stdout).strip()[:120]}"
         code, out = self._sh(where, f"adb install -r {_q(apk)}", 180)
+        if "UPDATE_INCOMPATIBLE" in out:  # the copy on the phone was built on another computer: replace it
+            self._sh(where, f"adb uninstall {PACKAGE}", 30)
+            code, out = self._sh(where, f"adb install {_q(apk)}", 180)
         if code != 0 or "Success" not in out:
             return f"Installing failed: {out.strip().splitlines()[-1][:140] if out.strip() else 'no reason given'}"
+        # Android holds back broadcasts from a newly installed app until it has been opened once: open it, then pair
+        self._sh(where, f"adb shell am start -n {PACKAGE}/.SettingsActivity", 15)
+        time.sleep(2)
         self.pair_over_usb()
-        return "Installed and paired. Long-press your home screen, tap Widgets, and add the Batsy ones."
+        self._sh(where, f"adb shell am start -n {PACKAGE}/.MainActivity", 15)
+        return "Installed and paired. The Batsy app is open on your phone."
 
     def pair_over_usb(self) -> bool:
         """Give the app its token and addresses directly (adb), so there's no code to type."""
@@ -191,7 +207,7 @@ class Hub:
             me = json.loads(out).get("Self", {})
             name = (me.get("DNSName") or "").rstrip(".")
             ip = (me.get("TailscaleIPs") or [""])[0]
-            host = name or ip
+            host = ip or name  # the address: a name needs Tailscale's DNS on the phone ("unknown host" without it)
             return f"http://{host}:{self.port}" if host else ""
         except (OSError, ValueError, subprocess.TimeoutExpired):
             return ""
@@ -256,7 +272,8 @@ class Hub:
         b = claude_code.budget(self.cfg)
         return {k: {"used": b[k]["used"], "limit": b[k]["limit"], "pct": b[k]["pct"], "resets_at": b[k]["resets_at"]}
                 for k in ("session", "week")} | {"requests_week": b.get("requests_week", 0),
-                                                 "running": [a["label"] for a in _agents() if a["kind"] == "claude"]}
+                                                 "running": [a["label"] for a in _agents() if a["kind"] == "claude"],
+                                                 "sessions": _claude_sessions()}
 
     def _spotify(self) -> dict | None:
         from batsy.tools import music
@@ -350,11 +367,85 @@ class Hub:
             self.app._reply = old
 
     def pc_action(self, action: str) -> dict:
-        pc = getattr(self.app, "pc", None)
-        if action == "wake" and pc and pc.configured:
+        """The app asks "are you sure?" itself before restart / shutdown."""
+        from batsy import pc as pcmod
+
+        pc = getattr(self.app, "pc", None) or pcmod.Remote(self.cfg)
+        if not pc.configured:
+            return {"ok": False, "say": "The PC isn't set up."}
+        if action == "wake":
             ok = pc.wake()
             return {"ok": ok, "say": "Waking the PC." if ok else "I couldn't send the wake signal."}
-        return {"ok": False, "say": "The PC isn't set up."}
+        if action == "lock":
+            code, out = pc.run("loginctl lock-sessions")
+            return {"ok": code == 0, "say": "Locked the PC." if code == 0 else pc._why(code, out)}
+        power = {"sleep": "suspend", "restart": "reboot", "shutdown": "poweroff"}.get(action)
+        if power:
+            said = pc.power(power)
+            self.pc_checked = 0
+            return {"ok": not said, "say": said or {"suspend": "The PC is going to sleep.", "reboot": "Restarting the PC.",
+                                                    "poweroff": "Shutting down the PC."}[power]}
+        return {"ok": False, "say": f"Unknown action {action}"}
+
+    def home_action(self, action: str) -> dict:
+        from batsy import home
+
+        ls = home.lights(self.cfg)
+        if not ls:
+            return {"ok": False, "say": "No lights are set up."}
+        if action == "state":
+            st = ls[0].state()
+            return {"ok": st is not None, "on": st, "say": "" if st is not None else "The light isn't answering."}
+        if action not in ("on", "off", "night"):
+            return {"ok": False, "say": f"Unknown action {action}"}
+        want = action != "off"
+        if want:
+            self.app._lights_off_pending = None
+        got = ls[0].set(want)
+        if got is None:
+            return {"ok": False, "say": "The light isn't answering."}
+        return {"ok": got == want, "on": got, "say": ("Night mode. Light on." if action == "night" else
+                                                      f"Light {'on' if got else 'off'}.")}
+
+    def files(self) -> dict:
+        from batsy import received
+
+        rows = received.all_rows(limit=60)
+        return {"files": [{"name": r["name"], "from": r["sender"], "t": int(r["received"]), "kind": r["kind"],
+                           "size": r["size"], "via": r["via"], "path": r["path"], "on_pc": bool(r.get("pc_path")),
+                           "missing": bool(r.get("missing"))} for r in rows]}
+
+    def file_action(self, body: dict) -> dict:
+        from batsy import received
+
+        path = str(body.get("path", ""))
+        if body.get("action") != "open" or path not in {r["path"] for r in received.all_rows(limit=2000)}:
+            return {"ok": False, "say": "I don't know that file."}  # only files Batsy received, nothing else
+        if not Path(path).exists():
+            return {"ok": False, "say": "It's been moved or deleted."}
+        self.app.open_result(path)
+        return {"ok": True, "say": f"Opened {Path(path).name} on the laptop."}
+
+
+def _claude_sessions() -> list[dict]:
+    """Claude Code running on this laptop: which project each session is in, and for how long."""
+    out = []
+    for p in psutil.process_iter(["name", "cmdline", "create_time", "cwd", "terminal"]):
+        try:
+            cmd = p.info["cmdline"] or []
+            if not cmd or not (p.info["name"] == "claude" or os.path.basename(cmd[0]) == "claude"):
+                continue
+            cwd = p.info["cwd"] or ""
+            if cwd.startswith("/tmp/cc-daemon") or "spare" in cwd.split("/")[-1:]:
+                continue  # Claude Code's own warm spare workers, not a session
+            parent = p.parent()
+            if parent and parent.name() == "claude":
+                continue  # a child of a session already listed
+            out.append({"project": os.path.basename(cwd) or "~", "path": cwd, "since": int(p.info["create_time"]),
+                        "interactive": bool(p.info["terminal"]), "pid": p.pid})
+        except (psutil.Error, OSError):
+            continue
+    return sorted(out, key=lambda s: s["since"])
 
 
 def _agents() -> list[dict]:
@@ -404,6 +495,12 @@ def _handler(hub: Hub):
                 return self._send(200, body=APK.read_bytes(), ctype="application/vnd.android.package-archive")
             if self.path == "/ping":
                 return self._send(200, {"batsy": True})
+            if self.path == "/app" or self.path.startswith("/app/"):  # the pages: no data in them, no token needed
+                rel = self.path.split("?", 1)[0].removeprefix("/app").strip("/") or "index.html"
+                f = (UI / rel).resolve()
+                if not str(f).startswith(str(UI.resolve()) + os.sep) or not f.is_file():
+                    return self._send(404, {"error": "no such page"})
+                return self._send(200, body=f.read_bytes(), ctype=TYPES.get(f.suffix, "application/octet-stream"))
             if not self._authed():
                 return
             if self.path.startswith("/api/status"):
@@ -412,6 +509,10 @@ def _handler(hub: Hub):
                 except Exception as e:
                     log.exception("phone status")
                     return self._send(500, {"error": str(e)})
+            if self.path.startswith("/api/files"):
+                return self._send(200, hub.files())
+            if self.path.startswith("/api/home"):
+                return self._send(200, hub.home_action("state"))
             self._send(404, {"error": "no such thing"})
 
         def do_POST(self):
@@ -432,6 +533,10 @@ def _handler(hub: Hub):
                     return self._send(200, hub.batsy_action(body))
                 if self.path == "/api/pc":
                     return self._send(200, hub.pc_action(str(body.get("action", ""))))
+                if self.path == "/api/home":
+                    return self._send(200, hub.home_action(str(body.get("action", ""))))
+                if self.path == "/api/files":
+                    return self._send(200, hub.file_action(body))
             except Exception as e:
                 log.exception("phone %s", self.path)
                 return self._send(500, {"ok": False, "say": str(e)})
