@@ -222,6 +222,9 @@ class Hub:
         self.last_seen = time.time()
         out = {"t": int(time.time()), "machines": [self._laptop()], "claude": self._claude(),
                "spotify": self._spotify(), "batsy": self._batsy()}
+        pr = getattr(self.app, "printer3d", None)
+        if pr is not None:
+            out["printer"] = pr.snapshot()
         pc = self._pc()
         if pc is not None:
             out["machines"].append(pc)
@@ -395,6 +398,42 @@ class Hub:
                                                     "poweroff": "Shutting down the PC."}[power]}
         return {"ok": False, "say": f"Unknown action {action}"}
 
+    def printer_action(self, body: dict) -> dict:
+        """The 3D printer from the app: the app's own buttons are the confirmation."""
+        pr = getattr(self.app, "printer3d", None)
+        if pr is None:
+            return {"ok": False, "say": "No 3D printer."}
+        a = str(body.get("action", ""))
+        try:
+            if a == "status":
+                return {"ok": True, "say": pr.status(), "printer": pr.snapshot()}
+            if a == "preheat":
+                from batsy.printer3d import TEMPS_FOR
+
+                noz, bed = TEMPS_FOR.get(str(body.get("material", "pla")).lower(), (200, 60))
+                return {"ok": True, "say": pr.preheat(noz, bed)}
+            if a == "cool":
+                return {"ok": True, "say": pr.cool()}
+            if a == "home":
+                return {"ok": True, "say": pr.home()}
+            if a == "move":
+                return {"ok": True, "say": pr.move(str(body.get("axis", "Z")).upper()[:1], float(body.get("mm", 0)))}
+            if a == "query":  # read-only questions to the firmware (nothing that moves or heats)
+                cmd = str(body.get("gcode", "")).strip().upper()
+                if not re.fullmatch(r"M(20|20 L|27|27 C|33 \S+|23 \S+|105|114|115|119|503)", cmd):
+                    return {"ok": False, "say": "Only read-only queries."}
+                return {"ok": True, "lines": pr.send(cmd, 10)}
+            if a == "files":
+                files = pr.sd_files()
+                return {"ok": True, "files": files, "names": pr.long_names(files) if body.get("long") else {}}
+            if a == "print_sd":
+                return {"ok": True, "say": pr.print_sd(str(body.get("name", "")), str(body.get("job", "")))}
+            if a in ("pause", "resume", "cancel", "motors_off"):
+                return {"ok": True, "say": getattr(pr, a)()}
+        except OSError as e:
+            return {"ok": False, "say": str(e)}
+        return {"ok": False, "say": f"Unknown action {a}"}
+
     def home_action(self, action: str) -> dict:
         from batsy import home
 
@@ -543,6 +582,8 @@ def _handler(hub: Hub):
                     return self._send(200, hub.pc_action(str(body.get("action", ""))))
                 if self.path == "/api/home":
                     return self._send(200, hub.home_action(str(body.get("action", ""))))
+                if self.path == "/api/printer":
+                    return self._send(200, hub.printer_action(body))
                 if self.path == "/api/files":
                     return self._send(200, hub.file_action(body))
             except Exception as e:

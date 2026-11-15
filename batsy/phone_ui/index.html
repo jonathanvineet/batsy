@@ -52,6 +52,15 @@
           <button data-sp="next" aria-label="Next"><svg class="i f" viewBox="0 0 24 24"><rect x="16.4" y="5" width="2.6" height="14" rx="1"/><path d="M5 6.2v11.6a1 1 0 0 0 1.6.8l7.8-5.8a1 1 0 0 0 0-1.6L6.6 5.4A1 1 0 0 0 5 6.2z"/></svg></button>
         </div>
       </article>
+      <!-- 3D printer: the progress as liquid filling the card -->
+      <article class="w pw" id="pw">
+        <div class="pw-liquid" id="pw-liquid"><svg class="pw-wave back" viewBox="0 0 1200 60" preserveAspectRatio="none"><path d="M0 30 Q 75 0 150 30 T 300 30 T 450 30 T 600 30 T 750 30 T 900 30 T 1050 30 T 1200 30 V 60 H 0 Z"/></svg><svg class="pw-wave front" viewBox="0 0 1200 60" preserveAspectRatio="none"><path d="M0 30 Q 75 0 150 30 T 300 30 T 450 30 T 600 30 T 750 30 T 900 30 T 1050 30 T 1200 30 V 60 H 0 Z"/></svg><div class="pw-body"></div></div>
+        <div class="pw-top"><h3>Printer</h3><span class="pw-state" id="pw-state">…</span></div>
+        <div class="pw-mid"><b id="pw-pct">–</b><span id="pw-left"></span></div>
+        <div class="pw-file" id="pw-file"></div>
+        <div class="pw-temps"><span id="pw-noz">Nozzle –</span><span id="pw-bed">Bed –</span></div>
+        <div class="pw-btns" id="pw-btns"></div>
+      </article>
       <article class="w machines-w" id="machines-w"></article>
       <article class="w claude-w">
         <div class="rings">

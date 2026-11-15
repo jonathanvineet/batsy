@@ -46,10 +46,29 @@ function toast(text) {
   $('#toast').textContent = text; $('#toast').classList.add('on');
   clearTimeout(toastTimer); toastTimer = setTimeout(() => $('#toast').classList.remove('on'), 3000);
 }
-function confirmBox(text) {
-  const d = $('#confirm');
-  $('#confirm-text').textContent = text;
-  return new Promise(res => { d.querySelectorAll('button').forEach(b => b.onclick = () => { d.close(); res(b.value === 'yes'); }); d.showModal(); });
+// "Are you sure?" as frosted glass over just the widget you tapped (not the whole screen), easing in and out
+function confirmBox(text, from, {danger = false, yes = 'Yes'} = {}) {
+  const host = (from && from.closest('.w, .panel')) || document.body;
+  host.querySelectorAll(':scope > .glass-ask').forEach(x => x.remove());
+  const box = document.createElement('div');
+  box.className = 'glass-ask' + (host === document.body ? ' floating' : '');
+  box.innerHTML = `<div class="glass-card"><p></p><div class="glass-row"><button class="g-no">Cancel</button>
+    <button class="g-yes${danger ? ' danger' : ''}"></button></div></div>`;
+  box.querySelector('p').textContent = text;
+  box.querySelector('.g-yes').textContent = yes;
+  host.appendChild(box);
+  requestAnimationFrame(() => requestAnimationFrame(() => box.classList.add('on')));
+  return new Promise(res => {
+    const done = ok => {
+      box.classList.remove('on');
+      box.addEventListener('transitionend', () => box.remove(), {once: true});
+      setTimeout(() => box.remove(), 600);
+      res(ok);
+    };
+    box.querySelector('.g-yes').onclick = e => { e.stopPropagation(); done(true); };
+    box.querySelector('.g-no').onclick = e => { e.stopPropagation(); done(false); };
+    box.onclick = e => { e.stopPropagation(); if (e.target === box) done(false); };  // tap beside the card: no
+  });
 }
 if (window.BatsyApp) { $('#gear').hidden = false; $('#gear').addEventListener('click', () => BatsyApp.settings()); }
 
@@ -184,7 +203,8 @@ document.addEventListener('click', async e => {
   if (!b) return;
   const a = b.dataset.pc;
   if (a === 'menu') return openPc();
-  if ((a === 'restart' || a === 'shutdown') && !await confirmBox(a === 'restart' ? 'Restart the PC now?' : 'Shut down the PC now?')) return;
+  if ((a === 'restart' || a === 'shutdown') && !await confirmBox(a === 'restart' ? 'Restart the PC now?' : 'Shut down the PC now?',
+      b, {danger: true, yes: a === 'restart' ? 'Restart' : 'Shut down'})) return;
   $('#pcsheet').hidden = true;
   try { toast((await api('/api/pc', {action: a}, 15000)).say); setTimeout(refresh, 2000); } catch (err) { toast(err.message); }
 });
@@ -325,6 +345,82 @@ $$('[data-sp]').forEach(b => b.addEventListener('click', async () => {
   } catch (e) { toast(e.message); holdUntil = 0; }
 }));
 
+// --- 3d printer ------------------------------------------------------------------------------------------
+// Progress straight from the printer (M27, read-only), so it's right whatever started the print; time left from
+// how fast it has really been going. Temperatures come with the regular status.
+let pr = {pct: null, bytes: null, total: null, state: 'offline', samples: store.get('pr-samples', []), stillSince: Date.now()};
+async function loadPrinter(status) {
+  // Batsy's server decides whether it's printing (it knows a print stopped on the screen, which the firmware keeps
+  // calling "printing"); the printer itself gives the live percentage while it is
+  const p = status && status.printer;
+  if (!p || !p.connected) { pr.state = 'offline'; return drawPrinter(p); }
+  if (!p.printing && !p.paused && p.uploading == null) {
+    pr.state = p.progress >= 100 ? 'done' : 'idle';
+    if (pr.state === 'idle') { pr.pct = null; pr.samples = []; store.set('pr-samples', []); }
+    return drawPrinter(p);
+  }
+  try {
+    const r = await api('/api/printer', {action: 'query', gcode: 'M27'}, 12000);
+    const m = (r.lines || []).join(' ').match(/printing byte (\d+)\/(\d+)/);
+    if (m) {
+      const [b, t] = [+m[1], +m[2]];
+      if (b !== pr.bytes) pr.stillSince = Date.now();
+      if (pr.total && pr.total !== t) pr.samples = [];  // a different file
+      pr.bytes = b; pr.total = t; pr.pct = t ? 100 * b / t : 0;
+      pr.samples = pr.samples.filter(x => Date.now() - x[0] < 20 * 60000).concat([[Date.now(), b]]);
+      store.set('pr-samples', pr.samples);
+    } else if (p.progress != null) pr.pct = p.progress;
+  } catch { if (p.progress != null) pr.pct = p.progress; }
+  const still = Date.now() - pr.stillSince > 45000 && !p.hotend_target;
+  pr.state = p.paused || still ? 'paused' : (p.hotend_target && p.hotend < p.hotend_target - 8) ? 'heating' : 'printing';
+  drawPrinter(p);
+}
+function leftText() {
+  const s = pr.samples;
+  if (s.length < 3 || !pr.total) return '';
+  const [t0, b0] = s[0], [t1, b1] = s[s.length - 1];
+  if (b1 <= b0 || t1 - t0 < 60000) return '';
+  const secs = (pr.total - b1) / ((b1 - b0) / ((t1 - t0) / 1000));
+  return dur(secs) + ' left';
+}
+function drawPrinter(p) {
+  const card = $('#pw');
+  card.className = 'w pw ' + pr.state;
+  const shown = pr.pct == null ? null : Math.min(100, pr.pct);
+  $('#pw-liquid').style.height = (shown == null ? 0 : Math.max(4, shown)) + '%';
+  $('#pw-pct').textContent = shown == null ? (pr.state === 'offline' ? 'Off' : 'Idle') : (shown < 10 ? shown.toFixed(1) : Math.floor(shown)) + '%';
+  $('#pw-state').textContent = {printing: 'Printing', heating: 'Heating up', paused: 'Paused', done: 'Done', idle: 'Ready', offline: 'Not connected'}[pr.state];
+  const left = pr.state === 'printing' ? leftText() : pr.state === 'paused' ? 'paused' : pr.state === 'heating' ? 'heating up' : '';
+  $('#pw-left').textContent = left || (pr.state === 'printing' ? 'working out the time…' : '');
+  $('#pw-file').textContent = p && p.job && pr.state !== 'idle' ? p.job
+    : pr.state === 'idle' && pr.stoppedAt ? `Last print stopped at ${pr.stoppedAt.toFixed(1)}%`
+    : (pr.total && pr.state !== 'idle' ? `${(pr.total / 1e6).toFixed(1)} MB file` : '');
+  const t = (v, g) => v == null ? '–' : `${Math.round(v)}°` + (g ? ` → ${Math.round(g)}°` : '');
+  $('#pw-noz').textContent = 'Nozzle ' + t(p && p.hotend, p && p.hotend_target);
+  $('#pw-bed').textContent = 'Bed ' + t(p && p.bed, p && p.bed_target);
+  const btns = pr.state === 'printing' || pr.state === 'heating' ? [['pause', 'Pause'], ['cancel', 'Stop', 'danger']]
+    : pr.state === 'paused' ? [['resume', 'Resume'], ['cancel', 'Stop', 'danger']]
+    : pr.state === 'offline' ? [] : null;
+  const html = btns ? btns.map(([a, l, c]) => `<button data-pr="${a}" class="${c || ''}">${l}</button>`).join('')
+    : `<div class="pw-grid">${[['home', 'Home'], ['preheat', 'PLA'], ['preheat-petg', 'PETG'], ['cool', 'Cool'],
+        ['bed-down', 'Bed ↓ 10'], ['bed-up', 'Bed ↑ 10'], ['motors_off', 'Motors off']]
+        .map(([a, l]) => `<button data-pr="${a}">${l}</button>`).join('')}</div>`;
+  if ($('#pw-btns').innerHTML !== html) $('#pw-btns').innerHTML = html;
+}
+$('#pw-btns').addEventListener('click', async e => {
+  const b = e.target.closest('[data-pr]');
+  if (!b) return;
+  const a = b.dataset.pr;
+  if (a === 'cancel' && !await confirmBox('Stop the print? It can\'t be resumed after this.', b, {danger: true, yes: 'Stop'})) return;
+  const heat = {preheat: ['pla', 'PLA (200° / 60°)'], 'preheat-petg': ['petg', 'PETG (235° / 75°)']}[a];
+  if (heat && !await confirmBox(`Heat the printer for ${heat[1]}?`, b, {yes: 'Heat'})) return;
+  // an Ender-5 moves its bed: the bed going down is Z going up
+  const body = heat ? {action: 'preheat', material: heat[0]} : a === 'bed-down' ? {action: 'move', axis: 'Z', mm: 10}
+    : a === 'bed-up' ? {action: 'move', axis: 'Z', mm: -10} : {action: a};
+  try { toast((await api('/api/printer', body, a === 'home' ? 90000 : 20000)).say); setTimeout(refresh, 1500); }
+  catch (err) { toast(err.message); }
+});
+
 // --- files -----------------------------------------------------------------------------------------------
 const HEROES = {Jonathan: 'Batman', Karan: 'Nightwing', Rehaan: 'Superman'};
 let files = [];
@@ -338,7 +434,7 @@ $('#files').addEventListener('click', async e => {
   const li = e.target.closest('[data-i]');
   if (!li) return;
   const f = files[+li.dataset.i];
-  if (!await confirmBox(`Open “${f.name}” on the laptop?`)) return;
+  if (!await confirmBox(`Open “${f.name}” on the laptop?`, li, {yes: 'Open'})) return;
   try { toast((await api('/api/files', {action: 'open', path: f.path})).say); } catch (err) { toast(err.message); }
 });
 
@@ -350,6 +446,7 @@ async function refresh() {
   try {
     const s = await api('/api/status');
     drawBatsy(s.batsy || {}); drawClaude(s.claude); drawMachines(s.machines || []); drawMusic(s.spotify);
+    if (Date.now() - (window.prAt || 0) > 9000) { window.prAt = Date.now(); loadPrinter(s); } else drawPrinter(s.printer);
   } catch (e) {
     if (String(e.message).startsWith('Not paired')) toast(e.message);
   } finally { busy = false; }

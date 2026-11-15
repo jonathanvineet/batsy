@@ -142,6 +142,38 @@ input { font: inherit; color: inherit; }
 .progress { height: 5px; border-radius: 3px; background: rgba(255, 255, 255, .14); overflow: hidden; flex: none; }
 .progress div { height: 100%; width: 0; background: var(--text); }
 
+/* 3d printer: liquid fills the card as the print progresses */
+.pw { justify-content: space-between; isolation: isolate; }
+.pw > :not(.pw-liquid) { position: relative; z-index: 1; }
+.pw-liquid { position: absolute; left: 0; right: 0; bottom: 0; height: 0%; z-index: 0; transition: height 1.6s cubic-bezier(.3, .7, .3, 1); }
+.pw-body { position: absolute; inset: 14px 0 0; background: linear-gradient(180deg, var(--liquid) 0%, var(--liquid-deep) 100%); }
+.pw-wave { position: absolute; left: 0; width: 200%; height: 28px; top: 0; fill: var(--liquid); }
+.pw-wave.front { animation: pw-wave 6s linear infinite; }
+.pw-wave.back { top: -6px; opacity: .45; animation: pw-wave 9s linear infinite reverse; }
+@keyframes pw-wave { from { transform: translateX(0); } to { transform: translateX(-50%); } }
+.pw { --liquid: color-mix(in srgb, var(--signal) 70%, transparent); --liquid-deep: color-mix(in srgb, var(--signal) 35%, #000); }
+.pw.heating { --liquid: rgba(255, 122, 40, .7); --liquid-deep: rgba(120, 40, 0, .8); }
+.pw.paused { --liquid: rgba(255, 176, 46, .55); --liquid-deep: rgba(90, 60, 0, .8); }
+.pw.paused .pw-wave { animation-play-state: paused; }
+.pw.done { --liquid: rgba(79, 209, 139, .65); --liquid-deep: rgba(10, 80, 40, .85); }
+.pw.idle .pw-liquid, .pw.offline .pw-liquid { height: 0% !important; }
+.pw-top { display: flex; align-items: center; justify-content: space-between; }
+.pw-state { font: 600 clamp(12px, 3.4vmin, 15px)/1 var(--display); letter-spacing: .08em; text-transform: uppercase; color: var(--text);
+  background: rgba(0, 0, 0, .35); padding: 5px 9px; border-radius: 10px; }
+.pw-mid { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+.pw-mid b { font: 700 clamp(48px, 20vmin, 120px)/.9 var(--display); text-shadow: 0 2px 18px rgba(0, 0, 0, .4); font-variant-numeric: tabular-nums; }
+.pw-mid span { font: 600 clamp(15px, 4.8vmin, 24px)/1.1 var(--display); color: var(--text); text-shadow: 0 1px 10px rgba(0, 0, 0, .5); }
+.pw-file { color: rgba(242, 237, 226, .8); font-size: clamp(12px, 3.4vmin, 15px); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pw-temps { display: flex; gap: 14px; font-size: clamp(12px, 3.4vmin, 15px); color: var(--text); }
+.pw-temps span { background: rgba(0, 0, 0, .3); padding: 4px 9px; border-radius: 9px; font-variant-numeric: tabular-nums; }
+.pw-btns { display: flex; gap: 8px; }
+.pw-btns button { flex: 1; height: clamp(34px, 10vmin, 44px); border-radius: 14px; background: rgba(0, 0, 0, .38); color: var(--text);
+  font: 700 clamp(13px, 3.8vmin, 16px)/1 var(--display); letter-spacing: .05em; }
+.pw-btns button.danger { color: #ff8a7a; }
+.pw-grid { flex: 1; display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; }
+.pw-grid button { height: clamp(32px, 9vmin, 42px); font-size: clamp(12px, 3.5vmin, 15px); }
+.pw-btns button:active { transform: scale(.95); }
+
 /* computers */
 .machines-w { display: grid; grid-template-columns: 1fr 1fr; gap: clamp(10px, 3vmin, 18px); padding: clamp(14px, 4vmin, 22px); }
 .m { display: flex; flex-direction: column; gap: clamp(6px, 2.2vmin, 12px); min-width: 0; }
@@ -237,3 +269,27 @@ dialog .ghost { background: var(--w2); } dialog .danger { background: var(--bad)
   .music-full { flex-direction: column; justify-content: center; }
   .mf-side { width: 100%; }
 }
+
+/* --- confirmations: frosted glass over the widget you tapped ------------------------------------------- */
+.panel { position: relative; }
+.glass-ask, .w > .glass-ask, .panel > .glass-ask { position: absolute !important; inset: 0; z-index: 20 !important; display: grid; place-items: center; padding: 6%;
+  border-radius: inherit; background: rgba(0, 0, 0, 0); -webkit-backdrop-filter: blur(0) saturate(1); backdrop-filter: blur(0) saturate(1);
+  opacity: 0; transition: opacity 280ms ease, backdrop-filter 380ms ease, -webkit-backdrop-filter 380ms ease, background 380ms ease; }
+.glass-ask.floating { position: fixed !important; }
+.glass-ask.on { opacity: 1; background: rgba(0, 0, 0, .22); -webkit-backdrop-filter: blur(14px) saturate(1.3);
+  backdrop-filter: blur(14px) saturate(1.3); }
+.glass-card { width: min(100%, 420px); padding: clamp(14px, 4vmin, 22px); border-radius: calc(var(--r) * .8);
+  background: linear-gradient(145deg, rgba(255, 255, 255, .16), rgba(255, 255, 255, .05));
+  border: 1px solid rgba(255, 255, 255, .22); box-shadow: 0 18px 50px rgba(0, 0, 0, .45), inset 0 1px 0 rgba(255, 255, 255, .25);
+  -webkit-backdrop-filter: blur(22px) saturate(1.5); backdrop-filter: blur(22px) saturate(1.5);
+  transform: translateY(14px) scale(.94); opacity: 0;
+  transition: transform 420ms cubic-bezier(.2, .9, .25, 1.15), opacity 260ms ease; }
+.glass-ask.on .glass-card { transform: none; opacity: 1; }
+.glass-card p { font: 600 clamp(16px, 4.8vmin, 22px)/1.25 var(--display); letter-spacing: .01em; color: var(--text); margin-bottom: 14px; }
+.glass-row { display: flex; gap: 10px; }
+.glass-row button { flex: 1; height: clamp(38px, 11vmin, 48px); border-radius: 999px; font: 700 clamp(14px, 4vmin, 17px)/1 var(--display);
+  letter-spacing: .05em; transition: transform 120ms; }
+.glass-row button:active { transform: scale(.95); }
+.g-no { background: rgba(255, 255, 255, .12); color: var(--text); }
+.g-yes { background: var(--signal); color: var(--ink); }
+.g-yes.danger { background: rgba(255, 92, 77, .92); color: #fff; }
