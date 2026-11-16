@@ -366,3 +366,15 @@ body.dash #gear, body.dash #bell { bottom: auto; top: max(14px, env(safe-area-in
 body.dash #gear { right: 12px; } body.dash #bell { right: 50px; }
 body.dash #pw.idle, body.dash #pw.offline, body.dash #pw.done { min-height: 0; }
 body.dash #pw.idle .pw-main b, body.dash #pw.offline .pw-main b { font-size: 48px; }
+
+/* iPhone dashboard: a little lighter, the Claude card laid out for an upright phone, confirmations that fit */
+body.dash { --w: #16191f; --w2: #22262e; }
+body.dash .claude-w { height: auto !important; flex-direction: column; align-items: stretch; gap: 12px; }
+body.dash .claude-w .rings { flex-direction: row; height: auto; justify-content: center; gap: 22px; }
+body.dash .claude-w .ringbox { height: 120px; width: 120px; }
+body.dash .claude-w .ringlabel b { font-size: 26px; }
+body.dash .claude-w .claude-side { gap: 4px; }
+body.dash .claude-w .claude-side ul { overflow: visible; }
+.glass-card p { overflow-wrap: anywhere; word-break: break-word; }
+body.dash .glass-ask.floating { padding: max(16px, env(safe-area-inset-top)) 16px; }
+body.dash .glass-card { width: min(100%, 400px); max-height: 80vh; overflow: auto; }

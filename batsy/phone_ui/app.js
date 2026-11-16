@@ -52,7 +52,8 @@ function toast(text) {
 }
 // "Are you sure?" as frosted glass over just the widget you tapped (not the whole screen), easing in and out
 function confirmBox(text, from, {danger = false, yes = 'Yes'} = {}) {
-  const host = (from && from.closest('.w, .panel')) || document.body;
+  // on the iPhone dashboard: a floating card in the middle of the screen (widgets there can be long or scrolled)
+  const host = (!document.body.classList.contains('dash') && from && from.closest('.w, .panel')) || document.body;
   host.querySelectorAll(':scope > .glass-ask').forEach(x => x.remove());
   const box = document.createElement('div');
   box.className = 'glass-ask' + (host === document.body ? ' floating' : '');
@@ -164,7 +165,8 @@ function tickClock() {
   $('#w-time').textContent = $('#big-time').textContent = time;
   $('#w-date').textContent = $('#big-date').textContent = date;
   const h = d.getHours();
-  document.body.classList.toggle('night', h >= 23 || h < 6);
+  // StandBy dims at night (the Android phone on its stand); the iPhone has its own brightness
+  document.body.classList.toggle('night', (h >= 23 || h < 6) && !document.body.classList.contains('dash'));
 }
 tickClock(); setInterval(tickClock, 5000);
 
