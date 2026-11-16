@@ -7,6 +7,10 @@ const $$ = s => [...document.querySelectorAll(s)];
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'})[c]);
 
 // --- token, link ------------------------------------------------------------------------------------------
+// the iPhone (no Android app around it) gets the dashboard layout: cards to scroll, no clock
+if (/iPhone|iPad|iPod/.test(navigator.userAgent) && !window.BatsyApp || /[?&]layout=dash/.test(location.search)) {
+  document.body.classList.add('dash');
+}
 const store = {
   get(k, d) { try { return JSON.parse(localStorage.getItem(k)) ?? d; } catch { return d; } },
   set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} },

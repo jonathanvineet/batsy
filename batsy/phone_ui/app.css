@@ -336,3 +336,33 @@ dialog .ghost { background: var(--w2); } dialog .danger { background: var(--bad)
 #bell { position: fixed; right: 44px; bottom: 0; width: 32px; height: 32px; display: grid; place-items: center;
   color: var(--signal); font-size: 17px; z-index: 4; animation: bell 2.4s ease-in-out infinite; }
 @keyframes bell { 0%, 80%, 100% { transform: rotate(0); } 85% { transform: rotate(14deg); } 90% { transform: rotate(-12deg); } }
+
+/* --- iPhone: a dashboard (one scrolling page of cards), not StandBy -------------------------------------- */
+body.dash { overflow: auto; }
+body.dash #views { position: static; display: block; overflow: visible; scroll-snap-type: none;
+  padding: max(12px, env(safe-area-inset-top)) 12px max(24px, env(safe-area-inset-bottom)); }
+body.dash .view:not(.widgets), body.dash #dots, body.dash .clock-w { display: none !important; }
+body.dash .view.widgets { display: flex; flex-direction: column; gap: 12px; height: auto; padding: 0; overflow: visible; }
+body.dash .stack { display: contents; }
+body.dash .w { height: auto; margin: 0 !important; scroll-snap-align: none; --r: 24px; }
+body.dash .w + .w { margin-top: 0; }
+body.dash h1.dash-title { display: flex; }
+.dash-title { display: none; align-items: center; gap: 10px; font: 700 30px/1 var(--display); margin: 6px 4px 4px; }
+.dash-title svg { width: 34px; height: 34px; color: var(--signal); }
+/* order: printer, slice, home, files, computers, music, claude, batsy */
+body.dash #pw { order: 1; min-height: 330px; }
+body.dash #sw { order: 2; height: 230px; }
+body.dash .home-w { order: 3; height: 230px; }
+body.dash .files-w { order: 4; }
+body.dash #machines-w { order: 5; }
+body.dash #mw { order: 6; height: 230px; }
+body.dash .claude-w { order: 7; height: 190px; }
+body.dash .batsy-w { order: 8; height: 190px; }
+body.dash .dash-title { order: 0; }
+/* sizes for a phone held upright (vmin is the width here) */
+body.dash .pw-main b { font-size: 76px; }
+body.dash .files-w ul { overflow: visible; }
+body.dash #gear, body.dash #bell { bottom: auto; top: max(14px, env(safe-area-inset-top)); }
+body.dash #gear { right: 12px; } body.dash #bell { right: 50px; }
+body.dash #pw.idle, body.dash #pw.offline, body.dash #pw.done { min-height: 0; }
+body.dash #pw.idle .pw-main b, body.dash #pw.offline .pw-main b { font-size: 48px; }

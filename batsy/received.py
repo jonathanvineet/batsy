@@ -80,8 +80,9 @@ def backfill(inbox: Path, mine: str, skip: set[str]) -> int:
         known = {r[0] for r in c.execute("SELECT path FROM files")}
     n = 0
     for p in inbox.rglob("*"):
-        if not p.is_file() or str(p) in known or any(part.startswith(".") for part in p.relative_to(inbox).parts):
-            continue
+        rel_parts = p.relative_to(inbox).parts
+        if not p.is_file() or str(p) in known or any(part.startswith(".") or part == "sliced" for part in rel_parts):
+            continue  # hidden, or Batsy's own slicer output: not something anyone sent
         rel = p.relative_to(inbox)
         sender = rel.parts[0] if len(rel.parts) > 1 else mine  # loose in the inbox: Taildrop, so yours
         if sender in skip:
