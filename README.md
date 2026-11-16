@@ -286,7 +286,7 @@ The same app runs on both. Its pages are served by the laptop (`batsy/phone_ui/`
 3. Open it from the home screen, say **"Batsy, pair my iPhone"** and type the code.
 4. Tap the **bell** › Allow: **push notifications** (Apple's web push, signed with Batsy's own key, `~/.local/share/batsy/vapid.pem`) for the 3D printer and reminders, even when the app is closed.
 
-On the iPhone the app is a **dashboard** (one scrolling page of cards, no clock). Updates arrive by themselves; only a new icon needs the app re-added.
+On the iPhone the app is a **dashboard** (one scrolling page of cards, no clock). **Files open where you are:** tap one at home (the phone on the same Wi-Fi as the laptop, which Tailscale's direct connection shows, or on the USB cable) and it opens on the laptop; away, it opens inside the app on the phone (pictures, video, text and PDFs, with Share for Save to Files). Both choices are always on the card. Updates arrive by themselves; only a new icon needs the app re-added.
 
 ## Reminders (no tokens)
 

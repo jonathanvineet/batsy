@@ -51,16 +51,17 @@ function toast(text) {
   clearTimeout(toastTimer); toastTimer = setTimeout(() => $('#toast').classList.remove('on'), 3000);
 }
 // "Are you sure?" as frosted glass over just the widget you tapped (not the whole screen), easing in and out
-function confirmBox(text, from, {danger = false, yes = 'Yes'} = {}) {
+function confirmBox(text, from, {danger = false, yes = 'Yes', alt = ''} = {}) {
   // on the iPhone dashboard: a floating card in the middle of the screen (widgets there can be long or scrolled)
   const host = (!document.body.classList.contains('dash') && from && from.closest('.w, .panel')) || document.body;
   host.querySelectorAll(':scope > .glass-ask').forEach(x => x.remove());
   const box = document.createElement('div');
   box.className = 'glass-ask' + (host === document.body ? ' floating' : '');
   box.innerHTML = `<div class="glass-card"><p></p><div class="glass-row"><button class="g-no">Cancel</button>
-    <button class="g-yes${danger ? ' danger' : ''}"></button></div></div>`;
+    ${alt ? '<button class="g-alt"></button>' : ''}<button class="g-yes${danger ? ' danger' : ''}"></button></div></div>`;
   box.querySelector('p').textContent = text;
   box.querySelector('.g-yes').textContent = yes;
+  if (alt) box.querySelector('.g-alt').textContent = alt;
   host.appendChild(box);
   requestAnimationFrame(() => requestAnimationFrame(() => box.classList.add('on')));
   return new Promise(res => {
@@ -72,6 +73,7 @@ function confirmBox(text, from, {danger = false, yes = 'Yes'} = {}) {
     };
     box.querySelector('.g-yes').onclick = e => { e.stopPropagation(); done(true); };
     box.querySelector('.g-no').onclick = e => { e.stopPropagation(); done(false); };
+    if (alt) box.querySelector('.g-alt').onclick = e => { e.stopPropagation(); done('alt'); };
     box.onclick = e => { e.stopPropagation(); if (e.target === box) done(false); };  // tap beside the card: no
   });
 }
@@ -541,8 +543,78 @@ $('#files').addEventListener('click', async e => {
   const li = e.target.closest('[data-i]');
   if (!li) return;
   const f = files[+li.dataset.i];
-  if (!await confirmBox(`Open “${f.name}” on the laptop?`, li, {yes: 'Open'})) return;
-  try { toast((await api('/api/files', {action: 'open', path: f.path})).say); } catch (err) { toast(err.message); }
+  // near the laptop (same Wi-Fi, or the USB cable): open it there; away: open it here, on the phone
+  const near = await whereAmI();
+  const pick = await confirmBox(`Open “${f.name}”`, li, near
+    ? {yes: 'On the laptop', alt: 'On this phone'} : {yes: 'On this phone', alt: 'On the laptop'});
+  if (!pick) return;
+  const onLaptop = (pick === true) === near;
+  try {
+    if (onLaptop) toast((await api('/api/files', {action: 'open', path: f.path})).say);
+    else viewHere(await api('/api/files', {action: 'here', path: f.path}));
+  } catch (err) { toast(err.message); }
+});
+
+let whereAt = 0, wasNear = true;
+async function whereAmI() {
+  if (Date.now() - whereAt < 60000) return wasNear;  // the laptop caches it too: a check costs ~1 s
+  try { wasNear = (await api('/api/where', null, 15000)).near; whereAt = Date.now(); } catch {}
+  return wasNear;
+}
+
+// the file, inside the app: pictures, text, video and PDFs in a viewer; Share hands it to iOS (Save to Files, …)
+async function viewHere(r) {
+  if (!r.ok) return toast(r.say);
+  const ext = (r.name.split('.').pop() || '').toLowerCase();
+  const v = $('#viewer'), body = $('#viewer-body');
+  $('#viewer-name').textContent = r.name;
+  body.innerHTML = '';
+  v.hidden = false; requestAnimationFrame(() => v.classList.add('on'));
+  // the same filling bat as the 3D view, rising with the download
+  const load = $('#viewer-load'), lvl = $('#vlevel'), mb = n => (n / 1e6).toFixed(1);
+  const fill = f => { lvl.style.transform = `translateY(${(1 - Math.min(1, f)) * 12 - 3}px)`; };
+  fill(0.04); load.hidden = false; $('#viewer-n').textContent = 'connecting…';
+  let blob;
+  try {
+    const res = await fetch(r.url);
+    if (!res.ok) throw 0;
+    const total = +res.headers.get('Content-Length') || 0, t0 = performance.now(), parts = [];
+    let got = 0;
+    for (const reader = res.body.getReader();;) {
+      const {done, value} = await reader.read();
+      if (done) break;
+      parts.push(value); got += value.length;
+      if (total) {
+        fill(got / total);
+        const left = (total - got) / (got / Math.max((performance.now() - t0) / 1000, 0.05));
+        $('#viewer-n').textContent = `${Math.round(100 * got / total)}% · ${mb(got)} of ${mb(total)} MB` + (left > 1.5 ? ` · ${Math.ceil(left)} s left` : '');
+      } else { fill(Math.min(0.9, got / 5e6)); $('#viewer-n').textContent = `${mb(got)} MB`; }
+    }
+    fill(1);
+    blob = new Blob(parts, {type: res.headers.get('Content-Type') || ''});
+  } catch { load.hidden = true; body.innerHTML = '<div class="viewer-wait">Couldn’t download it.</div>'; return; }
+  setTimeout(() => { load.hidden = true; }, 250);  // let it show full for a moment
+  const url = URL.createObjectURL(blob);
+  v.dataset.url = url; v.file = new File([blob], r.name, {type: blob.type});
+  if (/^(png|jpe?g|gif|webp|heic|bmp|svg)$/.test(ext)) body.innerHTML = `<img src="${url}" alt="">`;
+  else if (/^(mp4|mov|m4v|webm)$/.test(ext)) body.innerHTML = `<video src="${url}" controls playsinline></video>`;
+  else if (/^(mp3|m4a|wav|aac|ogg)$/.test(ext)) body.innerHTML = `<audio src="${url}" controls></audio>`;
+  else if (/^(txt|md|py|js|ts|json|csv|c|cpp|h|ino|ino|html|css|toml|yaml|yml|log|gcode|sh)$/.test(ext) && blob.size < 2e6) {
+    const pre = document.createElement('pre'); pre.textContent = await blob.text(); body.replaceChildren(pre);
+  } else body.innerHTML = `<iframe src="${url}" title="${esc(r.name)}"></iframe>`;  // PDFs, documents: the phone's own viewer (already downloaded)
+}
+function closeViewer() {
+  const v = $('#viewer');
+  v.classList.remove('on');
+  setTimeout(() => { v.hidden = true; $('#viewer-load').hidden = true; $('#viewer-body').innerHTML = ''; if (v.dataset.url) URL.revokeObjectURL(v.dataset.url); }, 280);
+}
+$('#viewer-close').addEventListener('click', closeViewer);
+$('#viewer-share').addEventListener('click', async () => {
+  const f = $('#viewer').file;
+  try {
+    if (f && navigator.canShare && navigator.canShare({files: [f]})) await navigator.share({files: [f], title: f.name});
+    else { const a = document.createElement('a'); a.href = $('#viewer').dataset.url; a.download = f.name; a.click(); }
+  } catch {}
 });
 
 // --- refresh: every 3 s while the app is open --------------------------------------------------------------

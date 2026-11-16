@@ -304,7 +304,11 @@ def plan(text: str, base: dict) -> tuple[dict, list[str]]:
 SAFE_KEYS = {"layer_height", "wall_loops", "sparse_infill_density", "sparse_infill_pattern", "top_shell_layers",
              "bottom_shell_layers", "outer_wall_speed", "inner_wall_speed", "sparse_infill_speed",
              "internal_solid_infill_speed", "enable_support", "support_type", "brim_type", "brim_width", "ironing_type",
-             "seam_position", "infill_wall_overlap", "wall_generator", "top_surface_pattern", "only_one_wall_top"}
+             "seam_position", "infill_wall_overlap", "wall_generator", "top_surface_pattern", "only_one_wall_top",
+             "support_top_z_distance", "support_threshold_angle", "support_object_xy_distance", "elefant_foot_compensation",
+             "xy_hole_compensation", "xy_contour_compensation", "fuzzy_skin", "top_surface_speed", "initial_layer_speed",
+             "travel_speed", "line_width", "outer_wall_acceleration"}
+KNOWLEDGE = Path(__file__).with_name("printer_knowledge.md")  # the printer, your presets, problem -> setting
 
 
 def plan_with_claude(text: str, base: dict, cfg=None) -> tuple[dict, list[str]]:
@@ -313,7 +317,9 @@ def plan_with_claude(text: str, base: dict, cfg=None) -> tuple[dict, list[str]]:
     from batsy import claude_code
 
     current = {k: base.get(k) for k in sorted(SAFE_KEYS) if k in base}
-    prompt = (f"A 3D print on a Creality Ender-5 S1 (0.4 mm nozzle, PLA), sliced in OrcaSlicer. The user says: \"{text}\".\n"
+    notes = KNOWLEDGE.read_text() if KNOWLEDGE.exists() else ""
+    prompt = (f"{notes}\n\nA 3D print on the Ender-5 Pro above (0.4 mm nozzle, PLA), sliced in OrcaSlicer. "
+              f"The user says: \"{text}\".\n"
               f"Current process settings: {json.dumps(current)}\n"
               f"Answer ONLY with a JSON object of the OrcaSlicer settings to change (keys only from: {sorted(SAFE_KEYS)}), "
               "string values like OrcaSlicer uses (\"40%\", \"5\", \"0.16\", \"gyroid\"), then a key \"why\" with one short "

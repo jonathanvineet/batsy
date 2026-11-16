@@ -28,6 +28,7 @@ import os
 import re
 import secrets
 import shutil
+import socket
 import subprocess
 import threading
 import time
@@ -459,6 +460,48 @@ class Hub:
             return {"ok": False, "say": str(e)}
         return {"ok": False, "say": f"Unknown action {a}"}
 
+    def where(self, client_ip: str, headers) -> dict:
+        """Is the phone asking this near the laptop? Tailscale knows: on the same Wi-Fi it talks to the laptop
+        directly over the home network ("via 192.168.1.x"); away, over the internet or a relay. The Android phone on
+        the USB cable (127.0.0.1, no proxy) is near by definition."""
+        import ipaddress
+
+        fwd = (headers.get("X-Forwarded-For") or "").split(",")[0].strip()
+        if not fwd and client_ip in ("127.0.0.1", "::1"):
+            return {"near": True, "how": "USB cable"}
+        ip = fwd or client_ip
+        cache = getattr(self, "_where", {})
+        hit = cache.get(ip)
+        if hit and time.time() - hit[0] < 60:
+            return hit[1]
+        try:
+            out = subprocess.run(["tailscale", "ping", "-c", "3", "--timeout", "3s", ip], capture_output=True, text=True,
+                                 timeout=12).stdout
+        except (OSError, subprocess.TimeoutExpired):
+            out = ""
+        via = ""
+        for line in out.splitlines():
+            m = re.search(r"via (\S+)", line)
+            if m:
+                via = m.group(1)
+        near = False
+        if via and not via.startswith("DERP"):
+            try:  # a direct path to an address on one of the laptop's own networks: the same Wi-Fi
+                addr = ipaddress.ip_address(via.rsplit(":", 1)[0].strip("[]"))
+                near = any(addr in net for net in _home_nets())
+            except ValueError:
+                near = False
+        res = {"near": near, "how": f"same Wi-Fi ({via.rsplit(':', 1)[0]})" if near else ("away (relay)" if via.startswith("DERP")
+                                                                                         else f"away ({via or 'no path'})")}
+        cache[ip] = (time.time(), res)
+        self._where = cache
+        log.info("phone at %s: %s", ip, res)
+        return res
+
+    def ticket_path(self, t: str) -> str | None:
+        hit = getattr(self, "_tickets", {}).get(t)
+        return hit[0] if hit and hit[1] > time.time() else None
+
     def last_slice(self) -> dict | None:
         """The newest slice (yours, or a calibration print): its preview, 3D paths, G-code and estimates."""
         from batsy import calib, slicer
@@ -509,12 +552,37 @@ class Hub:
         from batsy import received
 
         path = str(body.get("path", ""))
-        if body.get("action") != "open" or path not in {r["path"] for r in received.all_rows(limit=2000)}:
+        if body.get("action") not in ("open", "here") or path not in {r["path"] for r in received.all_rows(limit=2000)}:
             return {"ok": False, "say": "I don't know that file."}  # only files Batsy received, nothing else
         if not Path(path).exists():
             return {"ok": False, "say": "It's been moved or deleted."}
+        if body["action"] == "here":  # to open on the phone: a link that works for 5 minutes, for this file only
+            t = secrets.token_urlsafe(18)
+            self._tickets = {k: v for k, v in getattr(self, "_tickets", {}).items() if v[1] > time.time()}
+            self._tickets[t] = (path, time.time() + 300)
+            return {"ok": True, "url": f"/api/files/raw?t={t}", "name": Path(path).name}
         self.app.open_result(path)
         return {"ok": True, "say": f"Opened {Path(path).name} on the laptop."}
+
+
+def _home_nets() -> list:
+    """The networks the laptop itself is on (Wi-Fi, Ethernet), IPv4 and IPv6 (home IPv6 is public, but the phone on
+    the same Wi-Fi shares its /64). Not Tailscale's or Docker's."""
+    import ipaddress
+
+    nets = []
+    for name, addrs in psutil.net_if_addrs().items():
+        if name.startswith(("tailscale", "docker", "br-", "veth", "lo")):
+            continue
+        for a in addrs:
+            try:
+                if a.family == socket.AF_INET and a.netmask:
+                    nets.append(ipaddress.ip_network(f"{a.address}/{a.netmask}", strict=False))
+                elif a.family == socket.AF_INET6 and not a.address.startswith("fe80"):
+                    nets.append(ipaddress.ip_network(f"{a.address.split('%')[0]}/64", strict=False))
+            except ValueError:
+                pass
+    return nets
 
 
 def _claude_sessions() -> list[dict]:
@@ -591,6 +659,16 @@ def _handler(hub: Hub):
                 if not str(f).startswith(str(UI.resolve()) + os.sep) or not f.is_file():
                     return self._send(404, {"error": "no such page"})
                 return self._send(200, body=f.read_bytes(), ctype=TYPES.get(f.suffix, "application/octet-stream"))
+            if self.path.startswith("/api/files/raw"):  # a received file, opened on the phone: by a 5-minute ticket
+                from urllib.parse import parse_qs, urlparse
+                import mimetypes
+
+                t = (parse_qs(urlparse(self.path).query).get("t") or [""])[0]
+                want = hub.ticket_path(t)
+                if not want or not Path(want).is_file():
+                    return self._send(404, {"error": "that link has expired"})
+                kind = mimetypes.guess_type(want)[0] or "application/octet-stream"
+                return self._send(200, body=Path(want).read_bytes(), ctype=kind)
             if not self._authed():
                 return
             if self.path.startswith("/api/status"):
@@ -599,6 +677,8 @@ def _handler(hub: Hub):
                 except Exception as e:
                     log.exception("phone status")
                     return self._send(500, {"error": str(e)})
+            if self.path.startswith("/api/where"):
+                return self._send(200, hub.where(self.client_address[0], self.headers))
             if self.path.startswith("/api/files"):
                 return self._send(200, hub.files())
             if self.path.startswith("/api/push/key"):

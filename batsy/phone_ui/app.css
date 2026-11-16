@@ -378,3 +378,36 @@ body.dash .claude-w .claude-side ul { overflow: visible; }
 .glass-card p { overflow-wrap: anywhere; word-break: break-word; }
 body.dash .glass-ask.floating { padding: max(16px, env(safe-area-inset-top)) 16px; }
 body.dash .glass-card { width: min(100%, 400px); max-height: 80vh; overflow: auto; }
+
+/* a received file, opened inside the app (away from the laptop) */
+.viewer { position: fixed; inset: 0; z-index: 60; display: flex; flex-direction: column; background: rgba(8, 9, 12, .96);
+  backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px); opacity: 0; transform: translateY(16px);
+  transition: opacity .28s ease, transform .28s ease; }
+.viewer.on { opacity: 1; transform: none; }
+.viewer header { display: flex; align-items: center; gap: 10px; padding: max(12px, env(safe-area-inset-top)) 14px 10px; }
+.viewer header b { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 16px; }
+.viewer header button { background: var(--w2, #22262e); color: var(--text); border: 0; border-radius: 999px; padding: 8px 14px;
+  font: 600 15px/1 inherit; }
+.viewer header #viewer-share { background: var(--signal); color: #000; }
+.viewer-body { flex: 1; min-height: 0; overflow: auto; display: grid; place-items: center;
+  padding: 0 0 env(safe-area-inset-bottom); -webkit-overflow-scrolling: touch; }
+.viewer-body img, .viewer-body video { max-width: 100%; max-height: 100%; object-fit: contain; }
+.viewer-body iframe { width: 100%; height: 100%; border: 0; background: #fff; }
+.viewer-body pre { align-self: start; justify-self: stretch; margin: 0; padding: 12px 16px; white-space: pre-wrap;
+  overflow-wrap: anywhere; font: 13px/1.5 ui-monospace, Menlo, monospace; color: var(--text); }
+.viewer-wait { color: var(--muted); }
+.glass-row .g-alt { background: rgba(255, 255, 255, .14); color: var(--text); }
+.glass-row:has(.g-alt) { flex-wrap: wrap; }
+.glass-row:has(.g-alt) .g-no { order: 3; flex-basis: 100%; }
+.viewer { position: fixed; }
+.viewer-load { position: absolute; inset: 0; top: 60px; display: grid; place-content: center; justify-items: center; gap: 12px;
+  color: var(--muted); text-align: center; pointer-events: none; }
+.viewer-load[hidden] { display: none; }
+.viewer-load b { color: var(--text); font-size: 17px; }
+.viewer-load small { font-variant-numeric: tabular-nums; }
+.viewer-load .fillbat { width: min(200px, 52vw); height: auto; overflow: visible; filter: drop-shadow(0 0 18px rgba(255, 194, 14, .25)); }
+.viewer-load #vlevel { transition: transform .35s ease-out; }
+.viewer-load .wave { fill: var(--signal); }
+.viewer-load .wave.back { opacity: .45; animation: vwave 2.6s linear infinite reverse; }
+.viewer-load .wave.front { animation: vwave 1.8s linear infinite; }
+@keyframes vwave { from { transform: translateX(0); } to { transform: translateX(12px); } }
