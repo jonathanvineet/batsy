@@ -286,7 +286,18 @@ The same app runs on both. Its pages are served by the laptop (`batsy/phone_ui/`
 3. Open it from the home screen, say **"Batsy, pair my iPhone"** and type the code.
 4. Tap the **bell** › Allow: **push notifications** (Apple's web push, signed with Batsy's own key, `~/.local/share/batsy/vapid.pem`) for the 3D printer and reminders, even when the app is closed.
 
-On the iPhone the app is a **dashboard** (one scrolling page of cards, no clock). **Files open where you are:** tap one at home (the phone on the same Wi-Fi as the laptop, which Tailscale's direct connection shows, or on the USB cable) and it opens on the laptop; away, it opens inside the app on the phone (pictures, video, text and PDFs, with Share for Save to Files). Both choices are always on the card. Updates arrive by themselves; only a new icon needs the app re-added.
+On the iPhone the app is a **dashboard** (one scrolling page of cards, no clock). Updates arrive by themselves; only a new icon needs the app re-added.
+
+**Your layout, your way:** long-press any widget.
+- **iPhone:** the widgets wiggle; drag one by **≡** to move it, **−** hides it, **＋ Add widgets** brings hidden ones back, **Reset** restores the original order.
+- **Android:** an **Edit widgets** sheet opens with the left stack, right stack and hidden widgets side by side: drag by **≡** (between stacks too), − to hide, ＋ to add back.
+- The layout is saved on each phone.
+
+**Files open where you are:** tap one at home (the phone on the same Wi-Fi as the laptop, which Tailscale's direct connection shows, or on the USB cable) and you can open it on the laptop, with a filling-bat loader while it opens. Away, it opens inside the app on the phone: pictures, video, text and PDFs, with Share for Save to Files, and the same filling bat while it downloads. Both choices are always on the card.
+
+**Batman drive: your PC's 458 GB drive as cloud storage.** The **Batman drive** widget shows the space used and your 6 newest files with previews (photo thumbnails, first page of PDFs). **All files ›** opens the whole drive: folders, search by name, **＋** to upload from the phone (several at once, with progress) and a button for new folders.
+- **Cached on the phone:** folder listings show at once, even with the PC asleep; thumbnails are made once per file version; files you open are kept (about 400 MB, oldest dropped first) so they reopen instantly, offline too.
+- **One-time setup:** say **"Batsy, set up the batman drive"** and type the PC's password in the terminal that opens. It lets the laptop's SSH key sign in as `batman`. Files opened on the laptop are copied to `~/Batsy/batman/`.
 
 ## Reminders (no tokens)
 
@@ -388,6 +399,8 @@ Batsy controls the Spotify app on your iPad through Spotify Connect, using the S
 | `~/.local/share/batsy/received.db` | every file received: who, when, where its copies are |
 | `~/.local/share/batsy/music_moods.json` · `music_profile.json` | song moods and your taste profile |
 | `~/.local/share/batsy/push_subs.json` · `vapid.pem` | phones with notifications on, and the key that signs them |
+| `~/.local/share/batsy/cloud_thumbs/` | previews of Batman drive files |
+| `~/Batsy/batman/` | Batman drive files you opened on the laptop |
 
 ## The brain: local and free (with Claude on request)
 

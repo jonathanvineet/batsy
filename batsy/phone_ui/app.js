@@ -101,7 +101,7 @@ $('#pairform').addEventListener('submit', async e => {
     store.set('token', (await r.json()).token);
     store.set('via', 'Tailscale');
     $('#pairsheet').hidden = true;
-    refresh(); loadLight(); loadFiles(); loadSlice(); showBell();
+    refresh(); loadLight(); loadFiles(); loadSlice(); showBell(); loadCloudWidget();
   } catch { $('#pairmsg').textContent = 'Can’t reach the laptop. Is Tailscale on?'; }
 });
 // notifications: iPhone only allows them in the installed app, after a tap
@@ -548,12 +548,40 @@ $('#files').addEventListener('click', async e => {
   const pick = await confirmBox(`Open “${f.name}”`, li, near
     ? {yes: 'On the laptop', alt: 'On this phone'} : {yes: 'On this phone', alt: 'On the laptop'});
   if (!pick) return;
-  const onLaptop = (pick === true) === near;
+  const there = (pick === true) === near;
   try {
-    if (onLaptop) toast((await api('/api/files', {action: 'open', path: f.path})).say);
+    if (there) await onLaptop(api('/api/files', {action: 'open', path: f.path}), f.name);
     else viewHere(await api('/api/files', {action: 'here', path: f.path}));
   } catch (err) { toast(err.message); }
 });
+
+// "Opening on the laptop": the filling bat on a glass card, rising while the laptop fetches and opens it
+async function onLaptop(job, name) {
+  const box = document.createElement('div');
+  box.className = 'glass-ask floating busy';
+  box.innerHTML = `<div class="glass-card"></div>`;
+  const bat = $('#viewer-load .fillbat').cloneNode(true);
+  bat.querySelector('clipPath').id = 'bbclip';
+  bat.querySelector('[clip-path]').setAttribute('clip-path', 'url(#bbclip)');
+  const lvl = bat.querySelector('#vlevel'); lvl.removeAttribute('id');
+  const card = box.querySelector('.glass-card');
+  card.append(bat);
+  card.insertAdjacentHTML('beforeend', '<b>Opening on the laptop</b><small></small>');
+  card.querySelector('small').textContent = name;
+  document.body.appendChild(box);
+  requestAnimationFrame(() => requestAnimationFrame(() => box.classList.add('on')));
+  const fill = f => { lvl.style.transform = `translateY(${(1 - f) * 12 - 3}px)`; };
+  fill(0.05);
+  const t0 = Date.now();  // no progress from the laptop: rise quickly at first, then ever slower towards 90%
+  const tick = setInterval(() => fill(0.9 * (1 - Math.exp(-(Date.now() - t0) / 2500))), 200);
+  let msg;
+  try { msg = (await job).say; fill(1); card.querySelector('b').textContent = 'Opened on the laptop'; }
+  catch (err) { msg = err.message; card.querySelector('b').textContent = 'Couldn’t open it'; }
+  clearInterval(tick);
+  await new Promise(r => setTimeout(r, 700));
+  box.classList.remove('on'); setTimeout(() => box.remove(), 400);
+  toast(msg);
+}
 
 let whereAt = 0, wasNear = true;
 async function whereAmI() {
@@ -574,8 +602,8 @@ async function viewHere(r) {
   const load = $('#viewer-load'), lvl = $('#vlevel'), mb = n => (n / 1e6).toFixed(1);
   const fill = f => { lvl.style.transform = `translateY(${(1 - Math.min(1, f)) * 12 - 3}px)`; };
   fill(0.04); load.hidden = false; $('#viewer-n').textContent = 'connecting…';
-  let blob;
-  try {
+  let blob = r.blob;
+  if (!blob) try {
     const res = await fetch(r.url);
     if (!res.ok) throw 0;
     const total = +res.headers.get('Content-Length') || 0, t0 = performance.now(), parts = [];
@@ -592,6 +620,7 @@ async function viewHere(r) {
     }
     fill(1);
     blob = new Blob(parts, {type: res.headers.get('Content-Type') || ''});
+    if (r.cache) keepFile(r.cache, blob);
   } catch { load.hidden = true; body.innerHTML = '<div class="viewer-wait">Couldn’t download it.</div>'; return; }
   setTimeout(() => { load.hidden = true; }, 250);  // let it show full for a moment
   const url = URL.createObjectURL(blob);
@@ -617,6 +646,378 @@ $('#viewer-share').addEventListener('click', async () => {
   } catch {}
 });
 
+// --- the Batman drive (the PC's /batman, as cloud storage) -----------------------------------------------------
+// Listings are kept on the phone (they show at once, even with the PC off); thumbnails and opened files are kept
+// in the phone's cache, so what you've seen once opens instantly, offline too.
+const cloud = {path: '/batman', k: store.get('cloudK', ''), stack: []};
+const ICONS = {pdf: 'PDF', doc: 'DOC', docx: 'DOC', xls: 'XLS', xlsx: 'XLS', ppt: 'PPT', pptx: 'PPT', zip: 'ZIP', rar: 'ZIP',
+  '7z': 'ZIP', mp4: '▶', mov: '▶', mkv: '▶', mp3: '♪', m4a: '♪', wav: '♪', stl: '3D', '3mf': '3D', step: '3D', gcode: 'G',
+  txt: 'TXT', md: 'TXT', py: '</>', js: '</>', ino: '</>', c: '</>', cpp: '</>', json: '{ }', csv: 'CSV'};
+const extOf = n => (n.includes('.') ? n.split('.').pop() : '').toLowerCase();
+const canThumb = n => /^(jpe?g|png|gif|webp|bmp|heic|tiff?|pdf)$/.test(extOf(n));
+const human = b => b >= 1e9 ? (b / 1e9).toFixed(1) + ' GB' : b >= 1e6 ? (b / 1e6).toFixed(1) + ' MB' : Math.max(1, Math.round(b / 1e3)) + ' KB';
+function tile(f, i) {
+  const ext = extOf(f.name);
+  const pic = f.dir ? '<span class="ct-ic folder"></span>'
+    : canThumb(f.name) && cloud.k
+      ? `<img loading="lazy" alt="" src="/api/cloud/thumb?p=${encodeURIComponent(f.path)}&v=${f.t}&s=${f.size}&k=${cloud.k}" onerror="this.replaceWith(Object.assign(document.createElement('span'),{className:'ct-ic',textContent:'${esc(ICONS[ext] || ext.toUpperCase().slice(0, 4) || '•')}'}))">`
+      : `<span class="ct-ic">${esc(ICONS[ext] || ext.toUpperCase().slice(0, 4) || '•')}</span>`;
+  return `<button class="ct" data-i="${i}"><div class="ct-pic">${pic}</div><b>${esc(f.name)}</b>
+    <small>${f.dir ? 'Folder' : human(f.size) + ' · ' + ago(f.t)}</small></button>`;
+}
+async function cloudGet(qs, cacheAs) {
+  try {
+    const r = await api('/api/cloud?' + qs, null, 35000);
+    if (r.k) { cloud.k = r.k; store.set('cloudK', r.k); }
+    if (!r.error) store.set(cacheAs, r);
+    return r;
+  } catch (e) { return {error: e.message, offline: true}; }
+}
+function drawSpace(r) {
+  if (!r.total) return;
+  $('#cw-used').style.width = Math.max(1, 100 * (1 - r.free / r.total)) + '%';
+  $('#cw-space').textContent = `${human(r.total - r.free)} used · ${human(r.free)} free`;
+}
+let cwItems = [];
+function drawWidget(r, note = '') {
+  cwItems = (r.items || []).slice(0, 6);
+  drawSpace(r);
+  $('#cw-grid').innerHTML = cwItems.map(tile).join('') ||
+    `<div class="cw-empty">${esc(note || r.error || 'Nothing here yet. Open All files and tap ＋ to upload.')}</div>`;
+  if (note && cwItems.length) $('#cw-space').textContent += ' · ' + note;
+}
+async function loadCloudWidget() {
+  if ($('#cloud-w').classList.contains('w-hidden') || getComputedStyle($('#cloud-w')).display === 'none') return;
+  const old = store.get('cloudRecent', null);
+  if (old) drawWidget(old);
+  const r = await cloudGet('mode=recent', 'cloudRecent');
+  if (r.error) drawWidget(old || r, r.setup ? r.error : r.offline ? 'PC asleep: showing what was there' : r.error);
+  else drawWidget(r);
+}
+$('#cw-grid').addEventListener('click', e => {
+  const t = e.target.closest('.ct'); if (!t) return;
+  openCloud(cwItems[+t.dataset.i], t);
+});
+$('#cw-all').addEventListener('click', () => cloudOpenPanel());
+
+// the full drive: its own screen
+let clItems = [];
+function cloudOpenPanel() {
+  const c = $('#cloud');
+  c.hidden = false; requestAnimationFrame(() => c.classList.add('on'));
+  history.pushState({cloud: 1}, '');
+  cloudGo('/batman');
+}
+function cloudClose() {
+  const c = $('#cloud');
+  c.classList.remove('on'); setTimeout(() => { c.hidden = true; }, 280);
+}
+window.addEventListener('popstate', () => {
+  if (!$('#viewer').hidden) return closeViewer();
+  if ($('#cloud').hidden) return;
+  if (cloud.stack.length) { cloudGo(cloud.stack.pop(), true); history.pushState({cloud: 1}, ''); }
+  else cloudClose();
+});
+function drawFolder(r, note = '') {
+  const items = (r.items || []).slice().sort((a, b) => (b.dir - a.dir) || (r.search ? b.t - a.t : a.name.localeCompare(b.name, undefined, {numeric: true})));
+  clItems = items;
+  $('#cl-grid').innerHTML = items.map(tile).join('') ||
+    `<div class="cw-empty">${r.error ? esc(r.error) : r.search ? 'Nothing matches.' : 'This folder is empty. Tap ＋ to upload.'}</div>`;
+  $('#cl-status').textContent = note || (r.total ? `${items.length} item${items.length === 1 ? '' : 's'} · ${human(r.free)} free` : '');
+}
+async function cloudGo(path, back = false) {
+  if (!back && path !== cloud.path && cloud.path) cloud.stack.push(cloud.path);
+  if (path === '/batman') cloud.stack = [];
+  cloud.path = path;
+  $('#cl-search').value = '';
+  $('#cl-name').textContent = path === '/batman' ? 'Batman drive' : path.split('/').pop();
+  $('#cl-path').textContent = path === '/batman' ? '' : path.replace('/batman', 'Batman drive');
+  $('#cl-back').textContent = path === '/batman' ? '✕' : '‹';
+  const key = 'cloud:' + path, old = store.get(key, null);
+  if (old) drawFolder(old); else { $('#cl-grid').innerHTML = ''; $('#cl-status').textContent = 'Loading…'; }
+  const r = await cloudGet('mode=list&path=' + encodeURIComponent(path), key);
+  if (cloud.path !== path) return;
+  if (r.error) drawFolder(old || r, old ? (r.offline ? 'PC asleep: showing the saved copy' : r.error) : '');
+  else drawFolder(r);
+}
+$('#cl-back').addEventListener('click', () => history.back());
+$('#cl-grid').addEventListener('click', e => {
+  const t = e.target.closest('.ct'); if (!t) return;
+  const f = clItems[+t.dataset.i];
+  if (f.dir) { cloudGo(f.path); history.pushState({cloud: 1}, ''); } else openCloud(f, t);
+});
+let searchT;
+$('#cl-search').addEventListener('input', e => {
+  clearTimeout(searchT);
+  const q = e.target.value.trim();
+  if (!q) return cloudGo(cloud.path, true);
+  searchT = setTimeout(async () => {
+    $('#cl-status').textContent = 'Searching…';
+    const r = await cloudGet('mode=search&q=' + encodeURIComponent(q), 'cloudSearch');
+    if ($('#cl-search').value.trim() === q) drawFolder({...r, search: true});
+  }, 350);
+});
+$('#cl-file').addEventListener('change', async e => {
+  const list = [...e.target.files]; e.target.value = '';
+  for (const [n, f] of list.entries()) {
+    $('#cl-status').textContent = `Uploading ${f.name} (${n + 1} of ${list.length}) · 0%`;
+    try {
+      await new Promise((res, rej) => {  // XHR: it reports upload progress, fetch doesn't
+        const x = new XMLHttpRequest();
+        x.open('POST', `/api/cloud/upload?dir=${encodeURIComponent(cloud.path)}&name=${encodeURIComponent(f.name)}`);
+        x.setRequestHeader('Authorization', 'Bearer ' + store.get('token', ''));
+        x.upload.onprogress = p => { if (p.lengthComputable) $('#cl-status').textContent = `Uploading ${f.name} (${n + 1} of ${list.length}) · ${Math.round(100 * p.loaded / p.total)}%`; };
+        x.onload = () => x.status === 200 ? res() : rej(new Error(JSON.parse(x.responseText || '{}').say || 'Upload failed'));
+        x.onerror = () => rej(new Error('Upload failed: is the PC on?'));
+        x.send(f);
+      });
+    } catch (err) { toast(err.message); break; }
+  }
+  cloudGo(cloud.path, true); loadCloudWidget();
+});
+$('#cl-new').addEventListener('click', async () => {
+  const name = prompt('New folder name');
+  if (!name || !name.trim()) return;
+  try { toast((await api('/api/cloud', {action: 'mkdir', dir: cloud.path, name: name.trim()})).say); } catch (err) { toast(err.message); }
+  cloudGo(cloud.path, true);
+});
+
+// a file from the drive: near the laptop you can open it there; otherwise (and always on offer) here, cached
+async function openCloud(f, from) {
+  const cacheKey = `/cloud-cache${f.path}?v=${f.t}`;
+  let cached = null;
+  try { cached = await (await caches.open('batsy-files')).match(cacheKey); } catch {}
+  if (!cached) {
+    const near = await whereAmI();
+    if (near) {
+      const pick = await confirmBox(`Open “${f.name}”`, from, {yes: 'On the laptop', alt: 'On this phone'});
+      if (!pick) return;
+      if (pick === true) return onLaptop(api('/api/cloud', {action: 'laptop', path: f.path}, 120000), f.name);
+    }
+  }
+  if (cached) return viewHere({ok: true, name: f.name, blob: await cached.blob()});
+  try { viewHere({...(await api('/api/cloud', {action: 'open', path: f.path}, 20000)), cache: cacheKey}); }
+  catch (err) { toast(err.message.startsWith('HTTP') ? 'The PC is asleep, and this file isn’t saved on the phone yet.' : err.message); }
+}
+async function keepFile(key, blob) {
+  // phone storage is limited: keep about 400 MB of opened files, dropping the longest-unopened first
+  try {
+    const c = await caches.open('batsy-files');
+    await c.put(key, new Response(blob, {headers: {'Content-Type': blob.type}}));
+    const idx = store.get('fileCache', []).filter(x => x.k !== key);
+    idx.push({k: key, n: blob.size, t: Date.now()});
+    let total = idx.reduce((a, x) => a + x.n, 0);
+    while (total > 400e6 && idx.length > 1) { const old = idx.shift(); total -= old.n; await c.delete(old.k); }
+    store.set('fileCache', idx);
+  } catch {}
+}
+
+// --- iPhone dashboard: long-press a widget to move, hide and add widgets (saved on this phone) -------------------
+const WIDGETS = [  // key, element, name; this order is the default
+  ['printer', '#pw', '3D printer'], ['slice', '#sw', 'Sliced'], ['home', '.home-w', 'Home'],
+  ['drive', '#cloud-w', 'Batman drive'], ['files', '.files-w', 'Received files'], ['computers', '#machines-w', 'Laptop & PC'],
+  ['music', '#mw', 'Music'], ['claude', '.claude-w', 'Claude usage'], ['batsy', '#batsy-w', 'Batsy']];
+const wEl = k => $(WIDGETS.find(w => w[0] === k)[1]);
+let layout = store.get('dashLayout', null);
+function cleanLayout(l) {
+  const keys = WIDGETS.map(w => w[0]);
+  const order = (l && l.order || []).filter(k => keys.includes(k));
+  keys.forEach(k => { if (!order.includes(k)) order.push(k); });  // widgets added in later versions
+  return {order, hidden: (l && l.hidden || []).filter(k => keys.includes(k))};
+}
+function applyLayout() {
+  if (!document.body.classList.contains('dash')) return;
+  layout = cleanLayout(layout);
+  layout.order.forEach((k, i) => {
+    const el = wEl(k); if (!el) return;
+    el.style.order = i + 1;
+    el.classList.toggle('w-hidden', layout.hidden.includes(k));
+  });
+}
+applyLayout();
+
+let editing = false;
+function startEdit() {
+  if (editing || !document.body.classList.contains('dash')) return;
+  editing = true;
+  navigator.vibrate && navigator.vibrate(15);
+  document.body.classList.add('editing');
+  WIDGETS.forEach(([k]) => {
+    const el = wEl(k); if (!el || el.querySelector(':scope > .w-ctl')) return;
+    el.insertAdjacentHTML('beforeend', `<button class="w-ctl w-del" data-k="${k}" aria-label="Hide">−</button>
+      <span class="w-ctl w-grab" data-k="${k}" aria-label="Move">≡</span>`);
+  });
+  $('#editbar').hidden = false;
+}
+function endEdit() {
+  editing = false;
+  document.body.classList.remove('editing');
+  document.querySelectorAll('.w-ctl').forEach(x => x.remove());
+  $('#editbar').hidden = true; $('#addsheet').hidden = true;
+  store.set('dashLayout', layout);
+}
+$('#ed-done').addEventListener('click', endEdit);
+$('#ed-reset').addEventListener('click', () => { layout = cleanLayout(null); applyLayout(); toast('Back to the original layout'); });
+$('#ed-add').addEventListener('click', () => {
+  const list = layout.hidden.map(k => WIDGETS.find(w => w[0] === k));
+  $('#as-list').innerHTML = list.map(([k, , name]) => `<button class="as-item" data-k="${k}"><span>＋</span>${esc(name)}</button>`).join('')
+    || '<p class="empty">Every widget is already on the dashboard.</p>';
+  $('#addsheet').hidden = false;
+});
+$('#as-close').addEventListener('click', () => { $('#addsheet').hidden = true; });
+$('#as-list').addEventListener('click', e => {
+  const b = e.target.closest('.as-item'); if (!b) return;
+  layout.hidden = layout.hidden.filter(k => k !== b.dataset.k);
+  applyLayout(); b.remove();
+  wEl(b.dataset.k).scrollIntoView({behavior: 'smooth', block: 'center'});
+  if (!layout.hidden.length) $('#addsheet').hidden = true;
+});
+document.addEventListener('click', e => {
+  if (!editing) return;
+  const del = e.target.closest('.w-del');
+  if (del) { e.stopPropagation(); e.preventDefault(); layout.hidden.push(del.dataset.k); applyLayout(); return; }
+  if (e.target.closest('.w') && !e.target.closest('.w-ctl')) { e.stopPropagation(); e.preventDefault(); }  // no buttons while editing
+}, true);
+
+// long-press: 550 ms without moving (dashboard: edit in place; StandBy: the editor sheet)
+let pressT = null, pressAt = null;
+document.addEventListener('pointerdown', e => {
+  if (editing || !$('#sbedit').hidden || !e.target.closest('#views .w')) return;
+  pressAt = [e.clientX, e.clientY];
+  pressT = setTimeout(() => {
+    pressT = null;
+    if (document.body.classList.contains('dash')) startEdit(); else sbOpen();
+  }, 550);
+});
+document.addEventListener('pointermove', e => {
+  if (pressT && Math.hypot(e.clientX - pressAt[0], e.clientY - pressAt[1]) > 10) { clearTimeout(pressT); pressT = null; }
+});
+['pointerup', 'pointercancel'].forEach(ev => document.addEventListener(ev, () => { clearTimeout(pressT); pressT = null; }));
+document.addEventListener('contextmenu', e => { if (e.target.closest('.w')) e.preventDefault(); });
+
+// dragging by the ≡ handle: the widget follows your finger; passing a neighbour's middle swaps them
+let drag = null;
+document.addEventListener('pointerdown', e => {
+  const g = e.target.closest('.w-grab'); if (!g || !editing) return;
+  e.preventDefault();
+  const el = wEl(g.dataset.k);
+  drag = {k: g.dataset.k, el, y0: e.clientY, base: 0, id: e.pointerId};
+  el.classList.add('dragging');
+  g.setPointerCapture && g.setPointerCapture(e.pointerId);
+});
+document.addEventListener('pointermove', e => {
+  if (!drag || e.pointerId !== drag.id) return;
+  e.preventDefault();
+  const dy = e.clientY - drag.y0 - drag.base;
+  drag.el.style.transform = `translateY(${dy}px) scale(1.03)`;
+  const vis = layout.order.filter(k => !layout.hidden.includes(k));
+  const i = vis.indexOf(drag.k);
+  const r = drag.el.getBoundingClientRect(), mid = r.top + r.height / 2;
+  const swap = (j) => {
+    const other = wEl(vis[j]), before = drag.el.getBoundingClientRect().top;
+    const a = layout.order.indexOf(drag.k), b = layout.order.indexOf(vis[j]);
+    [layout.order[a], layout.order[b]] = [layout.order[b], layout.order[a]];
+    applyLayout();
+    drag.el.style.transform = '';
+    drag.base += drag.el.getBoundingClientRect().top - before;  // the widget moved in the layout: keep it under the finger
+    drag.el.style.transform = `translateY(${e.clientY - drag.y0 - drag.base}px) scale(1.03)`;
+    other.animate([{transform: `translateY(${j > i ? 1 : -1}0px)`}, {transform: 'none'}], {duration: 180, easing: 'ease-out'});
+  };
+  if (i < vis.length - 1) { const n = wEl(vis[i + 1]).getBoundingClientRect(); if (mid > n.top + n.height / 2) swap(i + 1); }
+  if (i > 0) { const p = wEl(vis[i - 1]).getBoundingClientRect(); if (mid < p.top + p.height / 2) swap(i - 1); }
+  // near the top or bottom of the screen: scroll
+  if (e.clientY < 90) scrollBy(0, -12); else if (e.clientY > innerHeight - 90) scrollBy(0, 12);
+}, {passive: false});
+['pointerup', 'pointercancel'].forEach(ev => document.addEventListener(ev, e => {
+  if (!drag || e.pointerId !== drag.id) return;
+  drag.el.classList.remove('dragging');
+  drag.el.animate([{transform: drag.el.style.transform}, {transform: 'none'}], {duration: 160, easing: 'ease-out'});
+  drag.el.style.transform = '';
+  drag = null;
+  store.set('dashLayout', layout);
+}));
+
+// --- Android StandBy: two stacks; long-press opens an editor to move widgets (between stacks too), hide, add ------
+const SB_NAMES = {clock: 'Clock', ...Object.fromEntries(WIDGETS.map(w => [w[0], w[2]]))};
+const sbEl = k => k === 'clock' ? $('.clock-w') : wEl(k);
+const SB_DEFAULT = (() => {  // the stacks as the page is written; the drive starts hidden
+  const keyOf = el => Object.keys(SB_NAMES).find(k => sbEl(k) === el);
+  const col = id => [...$('#' + id).children].map(keyOf).filter(k => k && k !== 'drive');
+  return {left: col('left'), right: col('right'), hidden: ['drive']};
+})();
+function sbClean(l) {
+  const all = Object.keys(SB_NAMES), seen = new Set();
+  const out = {};
+  for (const c of ['left', 'right', 'hidden']) out[c] = ((l && l[c]) || []).filter(k => all.includes(k) && !seen.has(k) && seen.add(k));
+  all.forEach(k => { if (!seen.has(k)) (SB_DEFAULT.hidden.includes(k) ? out.hidden : SB_DEFAULT.left.includes(k) ? out.left : out.right).push(k); });
+  return out;
+}
+let sbLayout = sbClean(store.get('standbyLayout', null) || SB_DEFAULT);
+function sbApply() {
+  if (document.body.classList.contains('dash')) return;
+  for (const c of ['left', 'right']) sbLayout[c].forEach(k => { const el = sbEl(k); el.classList.remove('w-hidden'); $('#' + c).appendChild(el); });
+  sbLayout.hidden.forEach(k => sbEl(k).classList.add('w-hidden'));
+  ['left', 'right'].forEach(c => { $('#' + c).scrollTop = 0; });
+}
+sbApply();
+function sbDraw() {
+  for (const c of ['left', 'right', 'hidden']) {
+    $(`.sb-col[data-col="${c}"] .sb-list`).innerHTML = sbLayout[c].map(k => `<div class="sb-item" data-k="${k}">
+      <button class="sb-x" aria-label="${c === 'hidden' ? 'Add' : 'Hide'}">${c === 'hidden' ? '＋' : '−'}</button>
+      <b>${esc(SB_NAMES[k])}</b><span class="sb-grab">≡</span></div>`).join('') || '<div class="sb-empty">Empty</div>';
+  }
+}
+function sbOpen() {
+  navigator.vibrate && navigator.vibrate(15);
+  sbDraw();
+  const s = $('#sbedit'); s.hidden = false; requestAnimationFrame(() => s.classList.add('on'));
+}
+function sbClose() {
+  const s = $('#sbedit'); s.classList.remove('on'); setTimeout(() => { s.hidden = true; }, 250);
+  store.set('standbyLayout', sbLayout); sbApply(); loadCloudWidget();
+}
+$('#sb-done').addEventListener('click', sbClose);
+$('#sb-reset').addEventListener('click', () => { sbLayout = sbClean(SB_DEFAULT); sbDraw(); });
+$('#sbedit').addEventListener('click', e => {
+  const x = e.target.closest('.sb-x'); if (!x) return;
+  const k = x.closest('.sb-item').dataset.k;
+  const from = ['left', 'right', 'hidden'].find(c => sbLayout[c].includes(k));
+  sbLayout[from] = sbLayout[from].filter(y => y !== k);
+  if (from === 'hidden') (sbLayout.left.length <= sbLayout.right.length ? sbLayout.left : sbLayout.right).push(k);
+  else sbLayout.hidden.push(k);
+  sbDraw();
+});
+// drag a row by ≡: it follows the finger; a gap shows where it will land, in either stack
+let sbDrag = null;
+$('#sbedit').addEventListener('pointerdown', e => {
+  const g = e.target.closest('.sb-grab'); if (!g) return;
+  e.preventDefault();
+  const row = g.closest('.sb-item'), r = row.getBoundingClientRect();
+  const ghost = row.cloneNode(true); ghost.classList.add('sb-ghost');
+  Object.assign(ghost.style, {left: r.left + 'px', top: r.top + 'px', width: r.width + 'px'});
+  document.body.appendChild(ghost);
+  row.classList.add('sb-placeholder');
+  sbDrag = {k: row.dataset.k, row, ghost, dy: e.clientY - r.top, dx: e.clientX - r.left, id: e.pointerId};
+  g.setPointerCapture && g.setPointerCapture(e.pointerId);
+});
+$('#sbedit').addEventListener('pointermove', e => {
+  if (!sbDrag || e.pointerId !== sbDrag.id) return;
+  e.preventDefault();
+  Object.assign(sbDrag.ghost.style, {left: e.clientX - sbDrag.dx + 'px', top: e.clientY - sbDrag.dy + 'px'});
+  const col = [...document.querySelectorAll('.sb-col')].find(c => { const r = c.getBoundingClientRect(); return e.clientX >= r.left && e.clientX <= r.right; });
+  if (!col) return;
+  const list = col.querySelector('.sb-list');
+  list.querySelector('.sb-empty') && list.querySelector('.sb-empty').remove();
+  const after = [...list.querySelectorAll('.sb-item:not(.sb-placeholder)')].find(it => { const r = it.getBoundingClientRect(); return e.clientY < r.top + r.height / 2; });
+  if (after) list.insertBefore(sbDrag.row, after); else list.appendChild(sbDrag.row);
+}, {passive: false});
+['pointerup', 'pointercancel'].forEach(ev => $('#sbedit').addEventListener(ev, e => {
+  if (!sbDrag || e.pointerId !== sbDrag.id) return;
+  sbDrag.ghost.remove(); sbDrag.row.classList.remove('sb-placeholder'); sbDrag = null;
+  for (const c of ['left', 'right', 'hidden']) sbLayout[c] = [...$(`.sb-col[data-col="${c}"] .sb-list`).querySelectorAll('.sb-item')].map(it => it.dataset.k);
+  sbDraw();
+}));
+
 // --- refresh: every 3 s while the app is open --------------------------------------------------------------
 let busy = false;
 async function refresh() {
@@ -630,7 +1031,8 @@ async function refresh() {
     if (String(e.message).startsWith('Not paired')) toast(e.message);
   } finally { busy = false; }
 }
-refresh(); loadLight(); loadFiles(); loadSlice();
+refresh(); loadLight(); loadFiles(); loadSlice(); loadCloudWidget();
+setInterval(() => { if (!document.hidden) loadCloudWidget(); }, 60000);
 setInterval(refresh, 3000);
 setInterval(() => { if (!document.hidden) { loadLight(); loadFiles(); loadSlice(); } }, 20000);
-document.addEventListener('visibilitychange', () => { if (!document.hidden) { refresh(); loadLight(); loadFiles(); loadSlice(); } });
+document.addEventListener('visibilitychange', () => { if (!document.hidden) { refresh(); loadLight(); loadFiles(); loadSlice(); loadCloudWidget(); } });

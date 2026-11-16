@@ -98,6 +98,9 @@ class Hub:
         self.app, self.cfg = app, app.cfg
         self.port = int(self.cfg.get("phone.port"))
         self.pair_code: tuple[str, float] | None = None
+        from batsy.cloud import Drive
+
+        self.drive = Drive(self.cfg)   # the Batman drive on the PC, as cloud storage
         self.last_seen = 0.0          # last request from the phone: stats are only gathered while it's looking
         self.pc_stats: dict | None = None
         self.pc_checked = 0.0
@@ -498,6 +501,19 @@ class Hub:
         log.info("phone at %s: %s", ip, res)
         return res
 
+    def thumb_key(self) -> str:
+        """Thumbnails go in <img> tags (no token header): they carry a key derived from the token instead."""
+        import hmac
+
+        return hmac.new(token().encode(), b"cloud-thumb", "sha256").hexdigest()[:24]
+
+    def cloud_ticket(self, path: str) -> dict:
+        size, t = self.drive.stat(path)
+        tk = secrets.token_urlsafe(18)
+        self._tickets = {k: v for k, v in getattr(self, "_tickets", {}).items() if v[1] > time.time()}
+        self._tickets[tk] = ("cloud:" + self.drive.safe(path), time.time() + 600)
+        return {"ok": True, "url": f"/api/cloud/raw?t={tk}", "name": Path(path).name, "size": size, "t": t}
+
     def ticket_path(self, t: str) -> str | None:
         hit = getattr(self, "_tickets", {}).get(t)
         return hit[0] if hit and hit[1] > time.time() else None
@@ -659,6 +675,46 @@ def _handler(hub: Hub):
                 if not str(f).startswith(str(UI.resolve()) + os.sep) or not f.is_file():
                     return self._send(404, {"error": "no such page"})
                 return self._send(200, body=f.read_bytes(), ctype=TYPES.get(f.suffix, "application/octet-stream"))
+            if self.path.startswith("/api/cloud/"):  # the Batman drive: files by ticket, thumbnails by key
+                from urllib.parse import parse_qs, urlparse
+                import mimetypes
+
+                q = {k: v[0] for k, v in parse_qs(urlparse(self.path).query).items()}
+                if self.path.startswith("/api/cloud/raw"):
+                    want = hub.ticket_path(q.get("t", ""))
+                    if not want or not want.startswith("cloud:"):
+                        return self._send(404, {"error": "that link has expired"})
+                    want = want[6:]
+                    try:
+                        size, _ = hub.drive.stat(want)
+                    except (OSError, ValueError):
+                        return self._send(404, {"error": "it's gone"})
+                    self.send_response(200)
+                    self.send_header("Content-Type", mimetypes.guess_type(want)[0] or "application/octet-stream")
+                    self.send_header("Content-Length", str(size))
+                    self.send_header("Cache-Control", "no-store")
+                    self.end_headers()
+                    try:
+                        hub.drive.stream(want, self.wfile)
+                    except (BrokenPipeError, ConnectionResetError):
+                        pass
+                    return
+                if self.path.startswith("/api/cloud/thumb"):
+                    if not secrets.compare_digest(q.get("k", ""), hub.thumb_key()):
+                        return self._send(403, {"error": "no"})
+                    try:
+                        jpg = hub.drive.thumb(q.get("p", ""), int(q.get("v", 0)), int(q.get("s", 0)))
+                    except ValueError:
+                        jpg = None
+                    if not jpg:
+                        return self._send(404, {"error": "no preview"})
+                    self.send_response(200)
+                    self.send_header("Content-Type", "image/jpeg")
+                    self.send_header("Content-Length", str(len(jpg)))
+                    self.send_header("Cache-Control", "private, max-age=31536000, immutable")  # the URL has the version
+                    self.end_headers()
+                    self.wfile.write(jpg)
+                    return
             if self.path.startswith("/api/files/raw"):  # a received file, opened on the phone: by a 5-minute ticket
                 from urllib.parse import parse_qs, urlparse
                 import mimetypes
@@ -677,6 +733,20 @@ def _handler(hub: Hub):
                 except Exception as e:
                     log.exception("phone status")
                     return self._send(500, {"error": str(e)})
+            if self.path.startswith("/api/cloud"):
+                from urllib.parse import parse_qs, urlparse
+
+                q = {k: v[0] for k, v in parse_qs(urlparse(self.path).query).items()}
+                mode = q.get("mode", "list")
+                arg = {"list": q.get("path", "/batman"), "recent": "12", "search": q.get("q", "")}.get(mode)
+                if arg is None:
+                    return self._send(400, {"error": "no such mode"})
+                try:
+                    out = hub.drive.query(mode, arg)
+                except ValueError as e:
+                    return self._send(400, {"error": str(e)})
+                out["k"] = hub.thumb_key()
+                return self._send(200, out)
             if self.path.startswith("/api/where"):
                 return self._send(200, hub.where(self.client_address[0], self.headers))
             if self.path.startswith("/api/files"):
@@ -708,6 +778,16 @@ def _handler(hub: Hub):
                 return self._send(200, {"token": token(), "remote": hub.remote_url()})
             if not self._authed():
                 return
+            if self.path.startswith("/api/cloud/upload"):  # the raw file is the body; folder and name in the URL
+                from urllib.parse import parse_qs, urlparse
+
+                q = {k: v[0] for k, v in parse_qs(urlparse(self.path).query).items()}
+                try:
+                    where = hub.drive.upload(q.get("dir", "/batman"), q.get("name", ""), self.rfile,
+                                             int(self.headers.get("Content-Length") or 0))
+                    return self._send(200, {"ok": True, "path": where, "say": f"Saved {Path(where).name}."})
+                except (OSError, ValueError) as e:
+                    return self._send(500, {"ok": False, "say": f"Upload failed: {e}"})
             body = self._body()
             try:
                 if self.path == "/api/spotify":
@@ -735,6 +815,21 @@ def _handler(hub: Hub):
                     return self._send(200, hub.printer_action(body))
                 if self.path == "/api/files":
                     return self._send(200, hub.file_action(body))
+                if self.path == "/api/cloud":
+                    act = body.get("action")
+                    if act == "open":
+                        return self._send(200, hub.cloud_ticket(str(body.get("path", ""))))
+                    if act == "mkdir":
+                        p = hub.drive.mkdir(str(body.get("dir", "/batman")), str(body.get("name", "")))
+                        return self._send(200, {"ok": True, "path": p, "say": f"Made {Path(p).name}."})
+                    if act == "laptop":  # open it on the laptop: fetch a copy, then open it
+                        src = hub.drive.safe(str(body.get("path", "")))
+                        dst = Path.home() / "Batsy" / "batman" / src.removeprefix("/batman/")
+                        dst.parent.mkdir(parents=True, exist_ok=True)
+                        with open(dst, "wb") as fh:
+                            hub.drive.stream(src, fh)
+                        hub.app.open_result(str(dst))
+                        return self._send(200, {"ok": True, "say": f"Opened {dst.name} on the laptop."})
             except Exception as e:
                 log.exception("phone %s", self.path)
                 return self._send(500, {"ok": False, "say": str(e)})

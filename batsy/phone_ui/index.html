@@ -89,6 +89,11 @@
         </div>
         <div class="claude-side"><h3>Claude</h3><small id="c-reset"></small><ul id="c-sessions"></ul></div>
       </article>
+      <article class="w cloud-w" id="cloud-w">
+        <div class="cw-head"><h3>Batman drive</h3><button class="cw-all" id="cw-all">All files ›</button></div>
+        <div class="cw-bar"><i id="cw-used"></i></div><small class="cw-space" id="cw-space"></small>
+        <div class="cgrid" id="cw-grid"></div>
+      </article>
       <article class="w files-w"><h3>Received <span id="f-count"></span></h3><ul id="files"></ul></article>
     </div>
   </section>
@@ -146,6 +151,31 @@
 <div id="slice3d" hidden><iframe id="slice3d-frame" title="Slice preview"></iframe></div>
 <div id="toast" role="status"></div>
 <dialog id="confirm"><p id="confirm-text"></p><div class="row"><button value="no" class="ghost">Cancel</button><button value="yes" class="danger">Yes</button></div></dialog>
+<div class="editbar" id="editbar" hidden>
+  <button id="ed-reset">Reset</button><button id="ed-add">＋ Add widgets</button><button id="ed-done">Done</button>
+</div>
+<div class="sbedit" id="sbedit" hidden>
+  <div class="sb-card">
+    <header><h3>Edit widgets</h3><small>Drag ≡ to move, between stacks too · − hides</small></header>
+    <div class="sb-cols"><div class="sb-col" data-col="left"><h4>Left stack</h4><div class="sb-list"></div></div>
+      <div class="sb-col" data-col="right"><h4>Right stack</h4><div class="sb-list"></div></div>
+      <div class="sb-col sb-hidden" data-col="hidden"><h4>Hidden</h4><div class="sb-list"></div></div></div>
+    <div class="sb-row"><button id="sb-reset">Reset</button><button id="sb-done">Done</button></div>
+  </div>
+</div>
+<div class="addsheet" id="addsheet" hidden><div class="as-card"><h3>Add widgets</h3><div id="as-list"></div>
+  <button id="as-close">Close</button></div></div>
+<div class="cloud" id="cloud" hidden>
+  <header>
+    <button id="cl-back" aria-label="Back">‹</button>
+    <div class="cl-title"><b id="cl-name">Batman drive</b><small id="cl-path"></small></div>
+    <button id="cl-new" aria-label="New folder">＋▢</button>
+    <label class="cl-up" aria-label="Upload">＋<input type="file" id="cl-file" multiple hidden></label>
+  </header>
+  <input class="cl-search" id="cl-search" type="search" placeholder="Search the drive" autocomplete="off">
+  <div class="cl-status" id="cl-status"></div>
+  <div class="cgrid big" id="cl-grid"></div>
+</div>
 <div class="viewer" id="viewer" hidden>
   <header><button id="viewer-close" aria-label="Close">✕</button><b id="viewer-name"></b><button id="viewer-share">Share</button></header>
   <div class="viewer-body" id="viewer-body"></div>
