@@ -45,6 +45,77 @@ Log out and back in once so the Arduino serial-port permission (`dialout` group)
 - **Risky actions** (`rm -rf`, `dnf remove`, shutdown, disk tools, force-push, etc.) are confirmed by voice first. Root commands go through `pkexec`, which shows the normal GNOME password dialog.
 - **Typing:** `batsy chat` (or `batsy ask "..."`) talks to the running assistant through a local socket.
 
+## Keys, typing and the wake word
+
+| Key / phrase | What it does |
+|---|---|
+| **Super+B** | push-to-talk: Batsy listens straight away, no wake word (same as clicking the bat in the corner) |
+| **Super+T** | type to Batsy: a small box opens; Enter sends; the reply is the same as if you'd said it |
+| **~** | stop: Batsy stops talking, cancels what it's doing and stops listening (also cuts off a recording in progress) |
+| "type hello world" · "press enter" · "press control shift t" | Batsy types into the app you're in (ydotool; "set up typing" once, with your password) |
+| "Batsy, train my wake word" | records you saying "Batsy" 8 times and builds a wake model of *your* voice (switches on only if it tells you apart from saved noise) |
+| "Batsy, learn my voice" | 5 longer takes, so videos and other people don't wake it |
+
+Typed replies to a yes/no question ("yes" in the Super+T box or the phone app) answer it. Filler noises ("uh", "mm-hmm") are never taken as requests.
+
+## Lights (ESP32 on the network)
+
+"Turn on the light" · "lights off" · "is the light on?" · **"night mode"** (the night light **on**) · "it's too dark". Batsy reads the light's real state back after every switch. Said messily ("Kachi turn off the light", "light offs") it still works, and "don't turn off the light" doesn't.
+
+**Good night:** after "good night" and your answer ("that's it"), the light goes off the moment Batsy says "Sleep well".
+```toml
+[home.lights]
+light = "http://192.168.1.70"     # an ESP32 page with /on, /off and "Light status: ON/OFF"
+```
+
+## Your desktop PC (over SSH)
+
+"PC" or "desktop" always means the PC; "laptop" means this laptop.
+
+| You say | What happens |
+|---|---|
+| "Is the PC on?" / "how's the PC?" | uptime, CPU, memory, disk, temperature |
+| "Open YouTube on the PC" / "open Files on the PC" / "close Firefox on the PC" | apps and websites on the PC's screen |
+| "PC volume to 30" / "mute the PC" / "pause on the PC" | sound and media |
+| "Shut down / restart / sleep the PC" (asks first) · "wake up the PC" · "lock the PC" | power (Wake-on-LAN for waking) |
+| "Run df -h on the PC" · "open a terminal on the PC" · "update the PC" | commands, an SSH terminal here, apt updates in a terminal |
+| "On the PC, find my biggest files" | the AI does it with the `run_on_pc` tool |
+
+One SSH connection stays open, so each command takes about 0.1 s. **"Set up the PC"** opens a terminal where you type the PC's password once: it allows shutdown, restart and updates without a password and turns on Wake-on-LAN.
+```toml
+[pc]
+host = "bob@10.10.10.3"
+mac = "94:de:80:fb:d7:a0"     # for Wake-on-LAN
+broadcast = "10.10.10.255"
+```
+
+## 3D printer (Ender-5 Pro on USB)
+
+**Slicing** uses OrcaSlicer (flatpak `com.orcaslicer.OrcaSlicer`) from the command line, with **your presets**:
+- Send Batsy a printer bundle from OrcaSlicer or Creality Print (`.orca_printer` / `.creality_printer`, or a zip of process presets) and it becomes your printer. Your presets only list changes, so Batsy completes them from OrcaSlicer's own profiles (`~/.local/share/batsy/orca-profiles/`, downloaded from OrcaSlicer's GitHub: the flatpak keeps them packed).
+- The machine is OrcaSlicer's **Creality Ender-5 Pro (2019) 0.4 nozzle** (Bowden retraction, 500 mm/s² limits); your process and filament presets go on top. The nozzle temperature is the one your temperature tower picked (`nozzle_temp` in `~/.local/share/batsy/printer/settings.json`, now 190 °C, first layer +5).
+- **Every 3D file you send is sliced automatically**, and Batsy says the time and grams. Each slice gets a **preview** (a picture, and a **3D view** you can turn, zoom and scrub through the layers) on the laptop and in the phone app.
+
+| You say | What happens |
+|---|---|
+| "Slice it" · "slice it with keychain" · "slice the iPhone stand" | your default (nicee) or a named preset |
+| "Make it strong" · "fast but good quality" · "fine and smooth" · "use less filament" · "40% infill" · "5 walls" · "no supports" · "add a brim" | adjusts the preset and says what changed |
+| "It has to hold a heavy bag" (anything else) | Claude picks the settings, only from a safe list and within printable limits |
+| "Save it as strong" | keeps the tweak as a new preset |
+| "Which print profiles do I have?" · "how long will it take to print?" · "show me the slicing" | |
+| **"Print it"** · "print the iPhone stand with fast" | slices if needed, asks "Is the bed clear?", then prints |
+| "Print the temperature tower again" · "reprint it" | from the print library, straight away |
+| "How's the printer?" · "pause / resume / stop the print" · "preheat the printer (for PETG)" · "cool down" · "home the printer" · "lower the bed 10 mm" · "turn off the motors" | |
+| **"Print a temperature tower"** · "temperature tower from 230 to 190" | OrcaSlicer's own tower, cut to your range, 5 °C per 10 mm block |
+
+**Printing goes straight over USB**, no copying to the card: a separate process (`batsy/printstream.py`) owns the port for the whole print, so Batsy restarting doesn't touch it, and the laptop is kept awake. Every print is saved in `~/.local/share/batsy/prints/` to print again. Progress and time left come from the slicer's own per-layer estimates. You get told when a print finishes, fails or pauses by itself (and on your iPhone).
+
+Notes for this printer (Marlin 1.1.6, 2019): the USB port is set to `-hupcl` so reconnecting never restarts the board; it reports "TF printing" for card prints (a print stopped on its screen keeps saying it, which Batsy recognises); it has no bed PID and gives only 8.3 file names.
+
+## Music that follows the mood
+
+The endless radio after "play X" carries on **the mood and era** of the song, not just the same composer: Claude tags every song in your library and the catalogue once (mood, energy, decade, language) using **your taste profile**, built from your Spotify history ("learn my music taste"). "Play something sad" · "old feel-good Tamil songs" · "some 90s kuthu" start from the moods. Correct it any time: "this song is an old feel-good song", "Raja Raja Chozhan is an 80s feel-good song". Corrections always win and teach the tagging. The profile is a template: whoever links their Spotify gets their own (`~/.local/share/batsy/music_profile.json`). The radio never adds to Spotify's queue, and when you start a playlist yourself it stays out of the way.
+
 ## Full-screen mode
 
 When you say "Batsy", the screen fades to a dark Batsy view, drawn by the GPU (three.js inside Qt WebEngine):
@@ -151,14 +222,22 @@ Batsy says "Got it", then works out **which repo or folder it is**. It matches w
 
 **Mac → Batsy:** right-click a file → **Share → Tailscale** → this laptop, or run `tailscale file cp FILE <this laptop's name>:`. Batsy collects it into `~/Batsy/inbox`, puts it on screen and says *"datasheet.pdf just arrived. Want me to open it?"* (answer "yes", "the second one" or "no"). PDFs, documents and images are read in straight away, so "summarise what I just sent" or "circle the pin numbers in the file I sent" work. STL, 3MF and STEP files open in the 3D viewer. If you're away from the laptop it just announces the file and shows a notification. Files dropped into the inbox any other way (LocalSend, `scp`) are noticed too.
 
-**From friends, split by who sent it:** every sender has a folder, `~/Batsy/inbox/<name>/`. Taildrop only works between your own devices, so whatever it delivers goes in your folder. Anyone else on the tailnet opens `http://workstation:8765` (a page with a file picker that works on phones too) or runs `curl -T FILE http://workstation:8765/`. Batsy asks Tailscale who is connecting (`tailscale whois`), so the folder can't be faked. Logins missing from `[files.senders]` are refused:
+**From friends, split by who sent it:** every sender has a folder, `~/Batsy/inbox/<name>/`. Taildrop only works between your own devices, so whatever it delivers goes in your folder. Anyone else on the tailnet opens `http://workstation:8766` (a page with a file picker that works on phones too) or runs `curl -T FILE http://workstation:8766/`. Batsy asks Tailscale who is connecting (`tailscale whois`), so the folder can't be faked. Logins missing from `[files.senders]` are refused:
 ```toml
 [files.senders]               # Tailscale login -> folder name
 "cvineetjonathan@gmail.com" = "Jonathan"
 "rehaanjohn@passkey" = "Rehaan"
 "rkarancindae@gmail.com" = "Karan"
+"rehaanrafael.john@gmail.com" = "Rehaan"   # a second login of the same person
+
+[files.pc_users]              # folder -> the user on the PC whose Inbox gets a copy
+"Jonathan" = "batman"         # /batman/Inbox (the PC's 500 GB drive)
+"Karan" = "nightwing"         # /home/nightwing/Inbox
+"Rehaan" = "superman"         # /home/superman/Inbox
 ```
-Batsy then says *"Karan sent wiring.pdf"*. Also: "what did Rehaan send me?", "show me files from Karan", "open Karan's folder".
+Batsy then says *"Karan sent wiring.pdf"* and copies it to that person's **Inbox on the PC** (queued if the PC is off). "Set up the inboxes on the PC" creates them once: private to each user; bob can only drop files in.
+
+**Batsy remembers every file it received** (`~/.local/share/batsy/received.db`): "who sent the last file?" · "what did Karan send yesterday?" · "open the audit report" · "open Karan's last PDF" · "where is the human values assignment?" · "list everything I've received". The AI can search it too.
 
 **Batsy → Mac:** "send this to my Mac" (the file Batsy just made, opened, found or received) · "send the marked-up PDF to my Mac" · "send my arduino sketch for the servo to my Mac" · "send the portfolio project to my Mac" (a folder is zipped first, without `.git`, `node_modules` or virtualenvs). It arrives in the Mac's Downloads folder. Also: "what's in my inbox?", "open my inbox", "open the file I just sent".
 
@@ -195,38 +274,26 @@ Ask about anything you might buy, in any words:
 
 Prices are as listed, before delivery charges; stores change their pages, so a store sometimes drops out.
 
-## Phone widgets (Android)
+## Phone app (Android and iPhone)
 
-The Batsy app for Android (`android/`, built as `android/dist/batsy-widgets.apk`) adds home-screen widgets:
-- **Batsy dashboard** (4×4, resizable):
-  - what Batsy is doing (idle, listening, thinking, speaking), its last answer, your last question and your next reminder;
-  - your Claude session and week budgets;
-  - the laptop and the PC side by side: CPU, RAM, temperature, battery, GPU, free disk, network;
-  - what Spotify is playing, with controls;
-  - buttons for **Stop**, **Wake PC**, **Ask** (type to Batsy) and refresh.
-- **Now playing** (4×2): the cover, song, device, progress and controls.
+The same app runs on both. Its pages are served by the laptop (`batsy/phone_ui/`, `/app/` on port 8765), so changes reach the phone without reinstalling. It shows Batsy's state and an Ask box, the **3D printer** (a liquid fill rising with the progress, name, grams, time left, finish time, controls), the **latest slice** (preview, 3D view with a filling-bat loader, Print), the **lights and PC**, **files received**, **laptop and PC** specs, **music** (with the album art's colours as the theme) and **Claude usage**. Confirmations appear as frosted glass over the widget you tapped.
 
-The widgets refresh every 30 seconds while the screen is on and every 5 minutes when it's off, without waking the phone.
+**Android (`android/`, `android/dist/batsy-widgets.apk`): StandBy.** Landscape and full screen, like iPhone StandBy: two panels of widgets you scroll up and down, a big clock and Now Playing to swipe to, dimmed at night, the screen kept on. It connects over the **USB cable** (`adb reverse`) first, then Tailscale. "Batsy, install the widget app on my phone" installs and pairs it over USB. Rebuild with `android/build.sh` (needs a JDK and the Android SDK; this laptop has both in `~/.local/share/jdk` and `~/Android/Sdk`).
 
-**Connecting:** the app tries the **USB cable first**, then **Tailscale**:
-- With the phone plugged into the laptop, Batsy runs `adb reverse` so the app reaches it at `127.0.0.1:8765`, with no Wi-Fi or Tailscale needed. Plugged into the PC instead works too: Batsy then keeps an SSH tunnel from the PC to the laptop and runs adb there.
-- Away from the PC, it uses the laptop's Tailscale address.
+**iPhone: a home-screen web app (PWA), free, never expires.**
+1. Tailscale HTTPS certificates on (admin › DNS), and `tailscale serve --bg --https=443 http://127.0.0.1:8765` (tailnet only).
+2. On the iPhone, with Tailscale connected: Safari › `https://workstation.taila566eb.ts.net/app/` › Share › **Add to Home Screen**.
+3. Open it from the home screen, say **"Batsy, pair my iPhone"** and type the code.
+4. Tap the **bell** › Allow: **push notifications** (Apple's web push, signed with Batsy's own key, `~/.local/share/batsy/vapid.pem`) for the 3D printer and reminders, even when the app is closed.
 
-Every request needs the pairing token.
-
-**Setup, once:**
-1. On the laptop: `sudo dnf install android-tools` (adb). (If the phone goes into the PC instead: `sudo apt install adb` there.)
-2. On the phone: Settings › About phone › Software information › tap Build number 7 times, then turn on Developer options › **USB debugging**. Plug it in and tap **Allow** on the "Allow USB debugging?" prompt (tick "Always allow").
-3. Say **"Batsy, install the widget app on my phone"**. Batsy installs it with adb and pairs it, with no code to type.
-   - Or download it from `http://<laptop>:8765/app.apk` in the phone's browser, then say "Batsy, pair my phone" and type the code it shows.
-4. Long-press the home screen › Widgets › Batsy. On Samsung, set Batsy's battery use to **Unrestricted** (Settings › Apps › Batsy › Battery) so the widgets keep refreshing.
-
-Rebuilding the app (on a machine with the Android SDK and a JDK): `android/build.sh`.
+On the iPhone the app is a **dashboard** (one scrolling page of cards, no clock). Updates arrive by themselves; only a new icon needs the app re-added.
 
 ## Reminders (no tokens)
 
 - "Remind me in 20 minutes to take the print off the bed" · "remind me at 5 pm to call mom" · "remind me tomorrow at 9 to submit the DBMS assignment" · "remind me on Friday at 4:30 to push the code" · "remind me tonight to charge the batteries" · "remind me at half past five to eat" · "set a reminder for 7 to go to the gym"
 - "What are my reminders?" · "cancel the reminder about the gym" · "cancel all reminders" · after one goes off: "snooze it" / "remind me again in 5 minutes"
+- **"Remember that…"** saves a note to long-term memory straight away; "what did I ask you to remember?" reads them back.
+- Said messily ("Pati, remind me at uh 11 30…") they still work; "remind me about X today" with no time asks what time.
 - Reminders survive restarts. If the laptop was asleep when one was due, it still goes off and says when it was due. Anything with "every…" ("remind me every Sunday to do laundry") becomes a tracked chore instead (see above).
 
 ## Speaks your language: developer, 3D and college vocabulary
@@ -314,6 +381,13 @@ Batsy controls the Spotify app on your iPad through Spotify Connect, using the S
 | `~/.local/share/batsy/skills/` | skills Batsy wrote for itself |
 | `~/.local/share/batsy/batsy.log` | log: what it heard, said and ran |
 | `~/Batsy/` | Batsy's workspace (Arduino sketches in `~/Batsy/arduino/`) |
+| `~/Batsy/inbox/<sender>/sliced/` | G-code, previews and 3D paths of each slice |
+| `~/.local/share/batsy/printer/` | your printer presets (from the bundles you sent) and `settings.json` |
+| `~/.local/share/batsy/prints/` | every print, to print again (`history.json`) |
+| `~/.local/share/batsy/calibration/` | calibration towers (OrcaSlicer's tower converted to STL in `orca/`) |
+| `~/.local/share/batsy/received.db` | every file received: who, when, where its copies are |
+| `~/.local/share/batsy/music_moods.json` · `music_profile.json` | song moods and your taste profile |
+| `~/.local/share/batsy/push_subs.json` · `vapid.pem` | phones with notifications on, and the key that signs them |
 
 ## The brain: local and free (with Claude on request)
 
@@ -352,4 +426,3 @@ Batsy controls the Spotify app on your iPad through Spotify Connect, using the S
 ## Cost and safety
 
 Every request sends the conversation to the Claude API, billed to your key. Prompt caching keeps repeat turns cheap. Batsy runs commands as you, with your permissions. Read the log if you want to see exactly what it did.
-# batsy
