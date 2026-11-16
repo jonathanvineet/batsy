@@ -26,7 +26,7 @@ async function api(path, body, timeout = 10000) {
     const r = await fetch(path, {method: body ? 'POST' : 'GET', signal: ctl.signal,
       headers: {'Authorization': 'Bearer ' + store.get('token', ''), ...(body ? {'Content-Type': 'application/json'} : {})},
       body: body ? JSON.stringify(body) : undefined});
-    if (r.status === 401) throw new Error('Not paired: tap the gear and pair again');
+    if (r.status === 401) { needPairing('Batsy doesn’t know this phone any more: pair again.'); throw new Error('Not paired'); }
     if (!r.ok) throw new Error('HTTP ' + r.status);
     setLink(true);
     return await r.json();
@@ -71,6 +71,53 @@ function confirmBox(text, from, {danger = false, yes = 'Yes'} = {}) {
   });
 }
 if (window.BatsyApp) { $('#gear').hidden = false; $('#gear').addEventListener('click', () => BatsyApp.settings()); }
+
+// --- installed as an app (iPhone home screen / browser): service worker, pairing, notifications ----------------
+const standalone = matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
+if ('serviceWorker' in navigator && location.protocol === 'https:' || location.hostname === '127.0.0.1') {
+  navigator.serviceWorker && navigator.serviceWorker.register('/app/sw.js', {scope: '/app/'}).catch(() => {});
+}
+function needPairing(msg = '') {
+  if (window.BatsyApp) return;  // the Android app pairs over USB itself
+  $('#pairsheet').hidden = false;
+  $('#pairmsg').textContent = msg;
+  setTimeout(() => $('#paircode').focus(), 300);
+}
+if (!store.get('token', '')) needPairing();
+$('#pairform').addEventListener('submit', async e => {
+  e.preventDefault();
+  const code = $('#paircode').value.trim();
+  if (!/^\d{6}$/.test(code)) { $('#pairmsg').textContent = 'The code is 6 digits.'; return; }
+  try {
+    const r = await fetch('/api/pair', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({code})});
+    if (!r.ok) { $('#pairmsg').textContent = 'That code didn’t work. Ask Batsy for a new one.'; return; }
+    store.set('token', (await r.json()).token);
+    store.set('via', 'Tailscale');
+    $('#pairsheet').hidden = true;
+    refresh(); loadLight(); loadFiles(); loadSlice(); showBell();
+  } catch { $('#pairmsg').textContent = 'Can’t reach the laptop. Is Tailscale on?'; }
+});
+// notifications: iPhone only allows them in the installed app, after a tap
+async function showBell() {
+  if (!('PushManager' in window) || !('serviceWorker' in navigator) || !store.get('token', '')) return;
+  if (/iPhone|iPad/.test(navigator.userAgent) && !standalone) return;  // iOS: only once it's on the home screen
+  const reg = await navigator.serviceWorker.ready.catch(() => null);
+  const sub = reg && await reg.pushManager.getSubscription();
+  $('#bell').hidden = !!(sub && Notification.permission === 'granted');
+}
+$('#bell').addEventListener('click', async () => {
+  try {
+    if (await Notification.requestPermission() !== 'granted') { toast('Notifications are off in Settings › Batsy.'); return; }
+    const reg = await navigator.serviceWorker.ready;
+    const {key} = await api('/api/push/key');
+    const pad = '='.repeat((4 - key.length % 4) % 4);
+    const raw = Uint8Array.from(atob((key + pad).replace(/-/g, '+').replace(/_/g, '/')), c => c.charCodeAt(0));
+    const sub = await reg.pushManager.subscribe({userVisibleOnly: true, applicationServerKey: raw});
+    const r = await api('/api/push/subscribe', {subscription: sub.toJSON(), device: navigator.userAgent.match(/iPhone|iPad|Android/)?.[0] || 'browser'});
+    toast(r.say); $('#bell').hidden = true;
+  } catch (e) { toast('Couldn’t turn notifications on: ' + e.message); }
+});
+showBell();
 
 // --- views (sideways) and stacks (up/down), each remembered ---------------------------------------------
 const views = $('#views');
@@ -358,8 +405,13 @@ async function loadPrinter(status) {
     pr.state = 'uploading'; pr.pct = p.uploading; return drawPrinter(p);
   }
   if (!p.printing && !p.paused && p.uploading == null) {
-    pr.state = p.progress >= 100 ? 'done' : 'idle';
-    if (pr.state === 'idle') { pr.pct = null; pr.samples = []; store.set('pr-samples', []); }
+    pr.state = p.done ? 'done' : 'idle';  // "done" for 15 minutes after a print, then back to the controls
+    pr.pct = pr.state === 'done' ? 100 : null;
+    if (pr.state === 'idle') { pr.samples = []; store.set('pr-samples', []); }
+    return drawPrinter(p);
+  }
+  if (p.streaming) {  // printing straight from the laptop: its own process has the USB port, Batsy has the numbers
+    pr.pct = p.progress; pr.state = p.paused ? 'paused' : (p.hotend_target && p.hotend < p.hotend_target - 8) ? 'heating' : 'printing';
     return drawPrinter(p);
   }
   try {
@@ -425,7 +477,7 @@ $('#pw-btns').addEventListener('click', async e => {
   if (!b) return;
   const a = b.dataset.pr;
   if (a === 'cancel' && !await confirmBox('Stop the print? It can\'t be resumed after this.', b, {danger: true, yes: 'Stop'})) return;
-  const heat = {preheat: ['pla', 'PLA (200° / 60°)'], 'preheat-petg': ['petg', 'PETG (235° / 75°)']}[a];
+  const heat = {preheat: ['pla', 'PLA (190° / 60°)'], 'preheat-petg': ['petg', 'PETG (235° / 75°)']}[a];
   if (heat && !await confirmBox(`Heat the printer for ${heat[1]}?`, b, {yes: 'Heat'})) return;
   // an Ender-5 moves its bed: the bed going down is Z going up
   const body = heat ? {action: 'preheat', material: heat[0]} : a === 'bed-down' ? {action: 'move', axis: 'Z', mm: 10}

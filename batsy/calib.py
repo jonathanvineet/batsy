@@ -179,9 +179,8 @@ def handle(app, n: str) -> str | None:
         if not app.ask_from_background(said + " Is the bed clear? Shall I print it?"):
             app.announce("Okay, it's ready whenever you say print it.")
             return
-        threading.Thread(target=pr.print_file, args=(Path(r["gcode"]), "the temperature tower"), daemon=True).start()
-        app.announce("Copying it to the printer. Afterwards, pick the block with the cleanest bridge and the least "
-                     "stringing: that's your temperature.")
+        app.announce(pr.print_now(Path(r["gcode"]), r.get("name") or "the temperature tower") + " Afterwards, pick "
+                     "the block with the cleanest bridge and the least stringing: that's your temperature.")
 
     threading.Thread(target=run, daemon=True, name="temp-tower").start()
     return ""

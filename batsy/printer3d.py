@@ -71,6 +71,14 @@ class Printer:
         import serial
 
         while not self._stop:
+            if self._streaming():  # a print is streaming from its own process: it has the port
+                self._sync_stream()
+                time.sleep(2)
+                continue
+            if getattr(self, "stream_seen", False) or getattr(self, "hand_over", False):
+                self._sync_stream()
+                self.stream_ended()
+                self.stream_seen = False
             port = find_port()
             if not port:
                 self.state["connected"] = False
@@ -157,7 +165,7 @@ class Printer:
                 self.state.update(printing=False, started=None, job=None)
             self.state["printing"] = False if not self.state["paused"] else self.state["printing"]
         if "Done printing file" in line:
-            self.state.update(printing=False, paused=False, progress=100, started=None)
+            self.state.update(printing=False, paused=False, progress=100, started=None, finished_at=time.time())
             self._say(f"The print is done: {self.state.get('job') or 'your model'}. Let the bed cool before taking it off.")
         if line.startswith("Error") or "!!" in line:
             self.state["error"] = line
@@ -180,6 +188,8 @@ class Printer:
         last = 0.0
         self.temps_at = getattr(self, "temps_at", 0.0)
         while not self._stop and self.ser:
+            if getattr(self, "hand_over", False):  # a print is about to stream: let go of the port
+                return
             if time.time() - self.temps_at > 6 and not self.state["uploading"]:  # no report by itself: ask
                 self.temps_at = time.time()
                 self.send("M105", 3)
@@ -271,6 +281,132 @@ class Printer:
                     raise OSError(f"the printer stopped answering at line {nxt}")
         return True
 
+    # --- printing straight over USB (batsy/printstream.py, its own process) --------------------------------
+    def print_now(self, gcode: Path, job: str) -> str:
+        """Print directly: no copying to the card. The file is kept in the print library to print again."""
+        import json
+        import os
+        import shutil
+        import subprocess
+        import sys
+
+        from batsy import printstream
+        from batsy.config import DATA_DIR, SOURCE_DIR
+
+        if self._streaming() or self.state["printing"]:
+            return "The printer is busy."
+        lib = DATA_DIR / "prints"
+        lib.mkdir(exist_ok=True)
+        keep = lib / gcode.name
+        if gcode.resolve() != keep.resolve():
+            shutil.copy2(gcode, keep)
+        hist_f = lib / "history.json"
+        try:
+            hist = json.loads(hist_f.read_text())
+        except (OSError, ValueError):
+            hist = []
+        hist = [h for h in hist if h.get("gcode") != str(keep)] + [{"job": job, "gcode": str(keep), "t": time.time()}]
+        hist_f.write_text(json.dumps(hist[-100:], indent=1))
+        port = find_port() or "/dev/ttyUSB0"
+        self.hand_over = True  # the poll loop lets go of the port
+        with self.lock:
+            try:
+                if self.ser:
+                    self.ser.close()  # -hupcl: closing doesn't restart the printer
+            except Exception:
+                pass
+            self.ser = None
+        printstream.STATUS.unlink(missing_ok=True)
+        cmd = [sys.executable, "-m", "batsy.printstream", str(keep), job, port]
+        if shutil.which("systemd-inhibit"):  # the laptop mustn't sleep in the middle of a print
+            cmd = ["systemd-inhibit", "--what=sleep:idle", "--who=Batsy", f"--why=Printing {job}", "--mode=block"] + cmd
+        subprocess.Popen(cmd, cwd=str(SOURCE_DIR.parent), stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                         stderr=open(DATA_DIR / "printstream.log", "ab"), start_new_session=True,
+                         env={**os.environ, "PYTHONPATH": str(SOURCE_DIR.parent)})
+        self.state.update(job=job, printing=True, paused=False, progress=0, started=time.time(), gcode=str(keep),
+                          uploading=None, connected=True)
+        self._load_times(str(keep))
+        self.stream_seen = False
+        return f"Printing {job} straight from the laptop. It's saved, so you can print it again any time."
+
+    def _stream_status(self) -> dict:
+        import json
+
+        from batsy import printstream
+
+        try:
+            return json.loads(printstream.STATUS.read_text())
+        except (OSError, ValueError):
+            return {}
+
+    def _streaming(self) -> bool:
+        import os
+
+        st = self._stream_status()
+        pid = st.get("pid")
+        if not pid or st.get("state") in ("done", "failed", "cancelled"):
+            return bool(getattr(self, "hand_over", False) and time.time() - (self.state.get("started") or 0) < 30)
+        try:
+            os.kill(pid, 0)
+            return True
+        except OSError:
+            return False
+
+    def _sync_stream(self) -> None:
+        """The streaming print's status into Batsy's (the app, the corner bar, "how's the printer")."""
+        st = self._stream_status()
+        if not st:
+            return
+        self.stream_seen = True
+        total = st.get("total") or 1
+        s = self.state
+        s.update(connected=True, job=st.get("job"), gcode=st.get("gcode"), started=st.get("started"),
+                 progress=round(100 * st.get("line", 0) / total, 1), paused=st.get("state") == "paused",
+                 printing=st.get("state") in ("printing", "paused", "starting"), uploading=None,
+                 hotend=st.get("hotend"), hotend_target=st.get("hotend_target") or 0, bed=st.get("bed"),
+                 bed_target=st.get("bed_target") or 0)
+        if not getattr(self, "time_table", None) and st.get("gcode"):
+            self._load_times(st["gcode"])
+        self._to_dock()
+
+    def stream_ended(self) -> None:
+        """Called once the streaming process is gone: say how it went, then take the port back."""
+        st = self._stream_status()
+        state = st.get("state")
+        if getattr(self, "announced_end", None) == st.get("started"):
+            return
+        self.announced_end = st.get("started")
+        self.hand_over = False
+        self.state.update(printing=False, paused=False)
+        if state == "done":
+            self.state.update(progress=100, finished_at=time.time())
+            self._say(f"The print is done: {st.get('job')}. Let the bed cool before taking it off.")
+        elif state == "failed":
+            self._say(f"The print stopped: {st.get('error') or 'the printer stopped answering'}.")
+        elif state == "cancelled":
+            self.state.update(progress=None)
+        self._to_dock()
+
+    def _control(self, what: str, said: str) -> str:
+        from batsy import printstream
+
+        printstream.CONTROL.write_text(what)
+        if what == "pause":
+            self.state["paused"] = True
+        elif what == "resume":
+            self.state["paused"] = False
+        return said
+
+    def history(self) -> list[dict]:
+        import json
+
+        from batsy.config import DATA_DIR
+
+        try:
+            return json.loads((DATA_DIR / "prints" / "history.json").read_text())
+        except (OSError, ValueError):
+            return []
+
     def _to_dock(self) -> None:
         """The copy / print progress under the bat in the screen's corner (cleared when idle)."""
         ov = getattr(self.app, "overlay", None)
@@ -293,6 +429,12 @@ class Printer:
                 pass
 
     def _say(self, text: str) -> None:
+        try:  # and on your phone: the printer's news is the kind you want away from the laptop
+            from batsy import push
+
+            push.notify("3D printer", text, tag="printer")
+        except Exception:
+            pass
         if self.app is not None:
             try:
                 self.app.announce(text)
@@ -425,7 +567,9 @@ class Printer:
         """For the phone app."""
         if self.stopped():
             self._mark_stopped(getattr(self, "last_byte", None))
-        return {**self.state, "remaining_s": round(self.remaining() or 0) or None}
+        done = bool(self.state.get("finished_at") and time.time() - self.state["finished_at"] < 900)
+        return {**self.state, "remaining_s": round(self.remaining() or 0) or None, "done": done,
+                "streaming": self._streaming()}
 
     def preheat(self, nozzle: int = 200, bed: int = 60) -> str:
         self.send(f"M104 S{nozzle}")
@@ -452,11 +596,15 @@ class Printer:
         return "Motors off. You can move the head by hand now."
 
     def pause(self) -> str:
+        if self._streaming():
+            return self._control("pause", "Paused. The printer finishes the move it's on and keeps its temperature.")
         self.send("M25")
         self.state["paused"] = True
         return "Paused."
 
     def resume(self) -> str:
+        if self._streaming():
+            return self._control("resume", "Carrying on.")
         self.send("M24")
         self.state["paused"] = False
         return "Carrying on."
@@ -497,6 +645,8 @@ class Printer:
         return f"Printing {job or name} from the card."
 
     def cancel(self) -> str:
+        if self._streaming():
+            return self._control("cancel", "Stopping the print: heaters off, and the head moves away.")
         ev = getattr(self, "cancel_upload", None)
         if ev is not None:
             ev.set()  # still copying: stop that too
@@ -624,6 +774,18 @@ MOTORS = re.compile(rf"^(?:please )?(?:turn off|disable|release) (?:the )?(?:{P}
 TEMPS_FOR = {"pla": (200, 60), "petg": (235, 75), "abs": (240, 95), "tpu": (220, 50)}
 
 
+def _tested_pla() -> None:
+    """PLA's nozzle temperature: the one your temperature tower picked, when there is one."""
+    from batsy import slicer
+
+    t = slicer.settings().get("nozzle_temp")
+    if t:
+        TEMPS_FOR["pla"] = (int(t), TEMPS_FOR["pla"][1])
+
+
+_tested_pla()
+
+
 def handle(app, n: str) -> str | None:
     pr: Printer | None = getattr(app, "printer3d", None)
     if pr is None:
@@ -658,12 +820,38 @@ def handle(app, n: str) -> str | None:
             return pr.move("Z", -mm if down else mm)
         if MOTORS.match(n):
             return pr.motors_off()
+        m = AGAIN.match(n)
+        if m:
+            return _again(app, pr, m["what"] or m["what2"])
         m = PRINT.match(n)
         if m and m["what"] not in ("screen", "the screen", "a document", "this page") and not re.search(r"\bpdf\b|\bpage", n):
             return _print(app, pr, m["what"], m["proc"])
     except OSError as e:
         return str(e)
     return None
+
+
+AGAIN = re.compile(r"^(?:please )?(?:print|reprint) (?P<what>.+?) again$|^reprint (?P<what2>.+)$")
+
+
+def _again(app, pr: Printer, what: str) -> str:
+    """"print the temperature tower again": straight from the print library, no slicing."""
+    from rapidfuzz import fuzz
+
+    hist = pr.history()
+    if not hist:
+        return "You haven't printed anything with me yet."
+    if what in ("it", "that", "this", "the last one", "the last print"):
+        pick = hist[-1]
+    else:
+        pick = max(reversed(hist), key=lambda h: fuzz.partial_ratio(what.lower(), h["job"].lower()))
+        if fuzz.partial_ratio(what.lower(), pick["job"].lower()) < 70:
+            return f"I haven't printed {what} before. Recent ones: {', '.join(h['job'] for h in hist[-3:])}."
+    if not Path(pick["gcode"]).exists():
+        return f"I can't find the file for {pick['job']} any more."
+    if not app._confirm_now(f"Print {pick['job']} again? Is the bed clear?"):
+        return "Okay, not printing."
+    return pr.print_now(Path(pick["gcode"]), pick["job"])
 
 
 def _print(app, pr: Printer, what: str, proc: str | None) -> str | None:
@@ -687,6 +875,4 @@ def _print(app, pr: Printer, what: str, proc: str | None) -> str | None:
     grams = f" and {round(r['grams'])} grams of filament" if r.get("grams") else ""
     if not app._confirm_now(f"Print {model.stem.replace('_', ' ')} with {r['process']}?{when}{grams}. Is the bed clear?"):
         return "Okay, not printing."
-    threading.Thread(target=pr.print_file, args=(Path(r["gcode"]), model.stem.replace("_", " ")), daemon=True,
-                     name="print-upload").start()
-    return "Copying it to the printer's card. It starts by itself when that's done, in a few minutes."
+    return pr.print_now(Path(r["gcode"]), model.stem.replace("_", " "))

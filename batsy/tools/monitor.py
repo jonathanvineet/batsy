@@ -57,6 +57,12 @@ def _loop(ctx) -> None:
                 if late > 300 and item.get("what"):  # the laptop was asleep or off when it was due
                     message += time.strftime(" It was due at %-I:%M %p.", time.localtime(item["next_run"]))
                 ctx.announce(message)
+                try:  # on your phone too
+                    from batsy import push
+
+                    push.notify("Reminder", message, tag=f"reminder-{mid}")
+                except Exception:
+                    pass
                 last_fired = {**item, "fired": now}
                 with _lock:
                     _items.pop(mid, None)

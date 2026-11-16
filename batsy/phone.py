@@ -43,7 +43,7 @@ TOKEN_FILE = DATA_DIR / "phone_token"
 APK = SOURCE_DIR.parent / "android" / "dist" / "batsy-widgets.apk"
 UI = SOURCE_DIR / "phone_ui"
 TYPES = {".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8",
-         ".svg": "image/svg+xml", ".png": "image/png", ".woff2": "font/woff2", ".json": "application/json"}
+         ".svg": "image/svg+xml", ".png": "image/png", ".woff2": "font/woff2", ".json": "application/json", ".webmanifest": "application/manifest+json"}
 PACKAGE = "dev.batsy.widgets"
 
 # What the PC reports about itself, as JSON, from one SSH call (Ubuntu: /proc and /sys only, no extra packages).
@@ -431,8 +431,15 @@ class Hub:
                     return {"ok": False, "say": "Nothing is sliced yet."}
                 if pr.state["printing"] or pr.state["uploading"] is not None:
                     return {"ok": False, "say": "The printer is busy."}
-                threading.Thread(target=pr.print_file, args=(Path(last["gcode"]), last["title"]), daemon=True).start()
-                return {"ok": True, "say": "Copying it to the printer. It starts by itself in a few minutes."}
+                return {"ok": True, "say": pr.print_now(Path(last["gcode"]), last["title"])}
+            if a == "history":
+                return {"ok": True, "prints": pr.history()[::-1][:20]}
+            if a == "print_again":  # from the print library (the app asks "Is the bed clear?" itself)
+                hist = pr.history()
+                pick = next((h for h in reversed(hist) if h["gcode"] == body.get("gcode")), None)
+                if not pick or not Path(pick["gcode"]).exists():
+                    return {"ok": False, "say": "I don't have that print any more."}
+                return {"ok": True, "say": pr.print_now(Path(pick["gcode"]), pick["job"])}
             if a == "copy_last":  # copy the newest slice to the card without printing (also a speed test)
                 last = self.last_slice()
                 if not last or pr.state["printing"] or pr.state["uploading"] is not None:
@@ -594,6 +601,10 @@ def _handler(hub: Hub):
                     return self._send(500, {"error": str(e)})
             if self.path.startswith("/api/files"):
                 return self._send(200, hub.files())
+            if self.path.startswith("/api/push/key"):
+                from batsy import push
+
+                return self._send(200, {"key": push.public_key()})
             if self.path.startswith("/api/slice"):
                 last = hub.last_slice()
                 if self.path.startswith("/api/slice/paths"):
@@ -627,6 +638,19 @@ def _handler(hub: Hub):
                     return self._send(200, hub.pc_action(str(body.get("action", ""))))
                 if self.path == "/api/home":
                     return self._send(200, hub.home_action(str(body.get("action", ""))))
+                if self.path == "/api/push/subscribe":
+                    from batsy import push
+
+                    n = push.subscribe(body.get("subscription") or {}, str(body.get("device", "")))
+                    push.notify("Batsy", "Notifications are on. You'll hear about your prints and reminders here.",
+                                tag="welcome")
+                    return self._send(200, {"ok": True, "say": f"Notifications on ({n} device{'s' if n != 1 else ''})."})
+                if self.path == "/api/push/test":
+                    from batsy import push
+
+                    n = push.notify("Batsy", body.get("text") or "This is a test notification.", tag="test")
+                    return self._send(200, {"ok": bool(n), "say": f"Sent to {n} device{'s' if n != 1 else ''}." if n
+                                            else "No phone has turned notifications on yet."})
                 if self.path == "/api/printer":
                     return self._send(200, hub.printer_action(body))
                 if self.path == "/api/files":
@@ -641,7 +665,8 @@ def _handler(hub: Hub):
 
 PHONE_INSTALL = re.compile(r"^(?:please )?(?:install|put|set up|update|reinstall) (?:the )?(?:batsy )?(?:widgets?|widget app|"
                            r"phone app|app) (?:on|to|onto) (?:my )?(?:phone|mobile|android|samsung|galaxy)$")
-PHONE_PAIR = re.compile(r"^(?:pair|connect|link) (?:my |the )?(?:phone|mobile|widgets?|app)(?: again| to batsy)?$")
+PHONE_PAIR = re.compile(r"^(?:pair|connect|link) (?:my |the )?(?:phone|mobile|widgets?|app|iphone|i phone|ipad)"
+                        r"(?: again| to batsy)?$")
 
 
 def handle(app, n: str) -> str | None:
@@ -653,6 +678,10 @@ def handle(app, n: str) -> str | None:
         app.overlay.send("status", text="Installing the app on your phone")
         return hub.install_over_usb()
     if PHONE_PAIR.match(n):
+        if re.search(r"\bi ?phone\b|\bipad\b", n):  # the iPhone app pairs with a code (USB pairing is Android's)
+            code = hub.new_pair_code()
+            app.show_visual("card", f"Pair your iPhone | In the Batsy app, type {code}. Valid for 10 minutes.")
+            return f"In the Batsy app on your iPhone, type {' '.join(code)}."
         if hub.pair_over_usb():
             return "Paired over USB. The widgets will fill in within a few seconds."
         code = hub.new_pair_code()

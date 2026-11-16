@@ -390,7 +390,9 @@ def slice_model(model: Path, process: str | None = None, overrides: dict | None 
     for cfg in (printer, proc):  # everything is complete now: no "only for printer X" checks against Orca's bundles
         cfg.pop("compatible_printers", None)
         cfg.pop("compatible_printers_condition", None)
-    fil = {**_filament(printer), **(filament_overrides or {})}
+    temp = settings().get("nozzle_temp")  # your tested temperature (the temperature tower), over the preset's
+    tested = {"nozzle_temperature": [str(temp)], "nozzle_temperature_initial_layer": [str(temp + 5)]} if temp else {}
+    fil = {**_filament(printer), **tested, **(filament_overrides or {})}
     for k in ("compatible_printers", "compatible_printers_condition", "compatible_prints", "compatible_prints_condition"):
         fil.pop(k, None)
     with _lock:
