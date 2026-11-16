@@ -43,17 +43,26 @@ def _flatpak_root() -> Path | None:
     return None
 
 
+ORCA_DATA = DATA_DIR / "orca-data"  # OrcaSlicer's settings folder for Batsy (its "system" folder must exist)
+
+
 def command() -> list[str] | None:
     if _flatpak_root():
-        return ["flatpak", "run", FLATPAK]
+        (ORCA_DATA / "system").mkdir(parents=True, exist_ok=True)
+        (ORCA_DATA / "user").mkdir(exist_ok=True)
+        return ["flatpak", "run", FLATPAK, "--datadir", str(ORCA_DATA)]
     exe = shutil.which("orca-slicer") or shutil.which("OrcaSlicer")
     return [exe] if exe else None
 
 
+ORCA_PROFILES = DATA_DIR / "orca-profiles"  # Orca's profile JSON from its GitHub (newer builds ship them packed, .opc)
+
+
 def resources() -> Path | None:
+    """Where OrcaSlicer's profiles are readable as JSON: the app's own (older builds), else the copy Batsy keeps."""
     root = _flatpak_root()
-    for p in ([root / "share/OrcaSlicer/resources", root / "resources"] if root else []):
-        if (p / "profiles").exists():
+    for p in ([root / "share/OrcaSlicer/resources", root / "share/OrcaSlicer", root / "resources"] if root else []) + [ORCA_PROFILES]:
+        if any((p / "profiles").glob("*/machine/*.json")):
             return p
     exe = shutil.which("orca-slicer")
     if exe:
@@ -177,8 +186,8 @@ def flatten(cfg: dict, kind: str, depth: int = 0) -> dict:
         f = _find(kind, parent)
         if f:
             base = flatten(json.loads(f.read_text()), kind, depth + 1)
-        else:
-            log.warning("slicer: no base profile %r: using only what the preset sets", parent)
+        else:  # Orca's own profiles are packed (.opc) in newer versions: let OrcaSlicer resolve the base itself
+            return {**cfg, "from": "User"}
     out = {**base, **cfg}
     out.pop("inherits", None)
     out["from"] = "User"
@@ -361,7 +370,8 @@ def _estimates(gcode: Path) -> dict:
     return out
 
 
-def slice_model(model: Path, process: str | None = None, overrides: dict | None = None, label: str = "") -> dict:
+def slice_model(model: Path, process: str | None = None, overrides: dict | None = None, label: str = "",
+                filament_overrides: dict | None = None) -> dict:
     """Slice model with your printer and the process (default "nicee"), plus any tweaks on top.
     Returns {"gcode", "time", "grams", ...}."""
     cmd = command()
@@ -370,20 +380,31 @@ def slice_model(model: Path, process: str | None = None, overrides: dict | None 
     if not (PRINTER / "printer.json").exists():
         raise ValueError("I don't have your printer's presets. Send me the printer bundle from Creality Print.")
     pname, pfile = _process_file(process)
-    printer = flatten(json.loads((PRINTER / "printer.json").read_text()), "machine")
+    machine = settings().get("machine")
+    if machine:  # the printer you really have, from OrcaSlicer's own profiles (your bundle's printer is an S1)
+        printer = flatten({"inherits": machine, "name": f"{machine} (Batsy)", "from": "User",
+                           "printer_settings_id": f"{machine} (Batsy)"}, "machine")
+    else:
+        printer = flatten(json.loads((PRINTER / "printer.json").read_text()), "machine")
     proc = {**flatten(json.loads(pfile.read_text()), "process"), **(overrides or {})}
-    fil = _filament(printer)
+    for cfg in (printer, proc):  # everything is complete now: no "only for printer X" checks against Orca's bundles
+        cfg.pop("compatible_printers", None)
+        cfg.pop("compatible_printers_condition", None)
+    fil = {**_filament(printer), **(filament_overrides or {})}
+    for k in ("compatible_printers", "compatible_printers_condition", "compatible_prints", "compatible_prints_condition"):
+        fil.pop(k, None)
     with _lock:
         work = PRINTER / "work"
         if work.exists():
             shutil.rmtree(work)
         work.mkdir()
-        (work / "machine.json").write_text(json.dumps(printer))
-        (work / "process.json").write_text(json.dumps(proc))
+        # OrcaSlicer needs to be told what each file is ("Preset type could not be resolved" otherwise)
+        (work / "machine.json").write_text(json.dumps({**printer, "type": "machine"}))
+        (work / "process.json").write_text(json.dumps({**proc, "type": "process"}))
         files = f"{work / 'machine.json'};{work / 'process.json'}"
         args = [*cmd, "--load-settings", files]
         if fil:
-            (work / "filament.json").write_text(json.dumps(fil))
+            (work / "filament.json").write_text(json.dumps({**fil, "type": "filament"}))
             args += ["--load-filaments", str(work / "filament.json")]
         args += ["--arrange", "1", "--orient", "0", "--slice", "0", "--outputdir", str(work), str(model)]
         t0 = time.time()
@@ -399,6 +420,15 @@ def slice_model(model: Path, process: str | None = None, overrides: dict | None 
         shutil.move(str(gcodes[0]), dest)
     result = {"gcode": str(dest), "process": pname + (f" ({label})" if label else ""), "secs": round(time.time() - t0, 1),
               **_estimates(dest)}
+    try:  # a picture of the sliced paths, so you can see the slicing
+        from batsy import preview
+
+        title = f"{model.stem.replace('_', ' ')} · {result['process']}"
+        result["preview"] = str(preview.render(dest, dest.with_suffix(".png"), title))
+        result["paths"] = str(preview.export(dest, dest.with_suffix(".paths.json"), title))
+        result["name"] = model.stem.replace("_", " ")
+    except Exception as e:
+        log.warning("slicer: no preview (%s)", e)
     log.info("sliced %s: %s", model.name, result)
     return result
 
@@ -434,6 +464,8 @@ KICK = re.compile(r"^(?:please )?(?:slice|re ?slice|make|print)\b")
 
 
 def handle(app, n: str) -> str | None:
+    if SHOW.match(n):
+        return "Opening the slice in 3D." if show_3d(app) else "I couldn't open the browser."
     if PROFILES.match(n):
         names = processes()
         if not names:
@@ -449,7 +481,13 @@ def handle(app, n: str) -> str | None:
         return describe(Path(last["model"]), last["result"])
     if not (KICK.match(n) or HOW_LONG.match(n)):
         return None
-    model = _named_model(n) or (Path(last["model"]) if last and n.startswith("make") else None) or _target(app, None)
+    named = _named_model(n)
+    # "slice it ...", "print this", "make it stronger", or just "slice": the last model. Anything else names a model.
+    generic = re.fullmatch(r"(?:please )?(?:re ?slice|slice|print|make)(?: (?:it|this|that|the model|the last one|"
+                           r"the last model|again)\b.*)?", n)
+    if not named and not generic and not n.startswith("make"):
+        return None  # you named something I don't have ("print a calibration test"): not the last model instead
+    model = named or (Path(last["model"]) if last and n.startswith("make") else None) or _target(app, None)
     if n.startswith("make") and not (last or model):
         return None  # "make it louder": not about printing
     names = processes()
@@ -484,6 +522,7 @@ def handle(app, n: str) -> str | None:
             all_o = {**((last or {}).get("overrides", {}) if relative else {}), **o}
             r = slice_model(model, base_name, all_o, label if all_o else "")
             app.slice_last = {"model": str(model), "process": base_name, "overrides": all_o, "result": r}
+            show_3d(app)  # the slicing in 3D: turn it around, scrub through the layers
             app.announce(describe(model, r))
         except Exception as e:
             app.announce(str(e))
@@ -551,3 +590,20 @@ def on_arrival(app, files: list[Path]) -> None:
                 log.warning("auto-slice %s: %s", model.name, e)
 
     threading.Thread(target=run, daemon=True, name="auto-slice").start()
+
+
+def show_3d(app=None) -> bool:
+    """The newest slice in 3D, in the browser on this laptop (the phone app's viewer page, with the token)."""
+    from batsy import phone
+
+    port = (getattr(app, "cfg", None) and app.cfg.get("phone.port")) or 8765
+    url = f"http://127.0.0.1:{port}/app/slice.html#t={phone.token()}"
+    try:
+        subprocess.Popen(["xdg-open", url], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+        return True
+    except OSError:
+        return False
+
+
+SHOW = re.compile(r"^(?:please )?(?:show|open|let me see)(?: me)? (?:the |my )?(?:slic(?:ing|e)|slice preview|preview|"
+                  r"toolpaths?|g ?code preview)(?: in 3d)?$|^show (?:me )?(?:it|the print) in 3d$")

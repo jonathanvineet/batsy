@@ -354,6 +354,9 @@ async function loadPrinter(status) {
   // calling "printing"); the printer itself gives the live percentage while it is
   const p = status && status.printer;
   if (!p || !p.connected) { pr.state = 'offline'; return drawPrinter(p); }
+  if (p.uploading != null) {  // copying the G-code to the printer's card: the liquid shows how far
+    pr.state = 'uploading'; pr.pct = p.uploading; return drawPrinter(p);
+  }
   if (!p.printing && !p.paused && p.uploading == null) {
     pr.state = p.progress >= 100 ? 'done' : 'idle';
     if (pr.state === 'idle') { pr.pct = null; pr.samples = []; store.set('pr-samples', []); }
@@ -389,18 +392,28 @@ function drawPrinter(p) {
   const shown = pr.pct == null ? null : Math.min(100, pr.pct);
   $('#pw-liquid').style.height = (shown == null ? 0 : Math.max(4, shown)) + '%';
   $('#pw-pct').textContent = shown == null ? (pr.state === 'offline' ? 'Off' : 'Idle') : (shown < 10 ? shown.toFixed(1) : Math.floor(shown)) + '%';
-  $('#pw-state').textContent = {printing: 'Printing', heating: 'Heating up', paused: 'Paused', done: 'Done', idle: 'Ready', offline: 'Not connected'}[pr.state];
-  const left = pr.state === 'printing' ? leftText() : pr.state === 'paused' ? 'paused' : pr.state === 'heating' ? 'heating up' : '';
+  $('#pw-state').textContent = {printing: 'Printing', heating: 'Heating up', paused: 'Paused', done: 'Done', idle: 'Ready',
+    offline: 'Not connected', uploading: 'Copying to card'}[pr.state];
+  const left = pr.state === 'printing' ? (p && p.remaining_s ? dur(p.remaining_s) + ' left' : leftText()) : pr.state === 'paused' ? 'paused' : pr.state === 'heating' ? 'heating up'
+    : pr.state === 'uploading' ? 'copying · then it prints' : '';
   $('#pw-left').textContent = left || (pr.state === 'printing' ? 'working out the time…' : '');
   $('#pw-file').textContent = p && p.job && pr.state !== 'idle' ? p.job
     : pr.state === 'idle' && pr.stoppedAt ? `Last print stopped at ${pr.stoppedAt.toFixed(1)}%`
     : (pr.total && pr.state !== 'idle' ? `${(pr.total / 1e6).toFixed(1)} MB file` : '');
-  const t = (v, g) => v == null ? '–' : `${Math.round(v)}°` + (g ? ` → ${Math.round(g)}°` : '');
-  $('#pw-noz').textContent = 'Nozzle ' + t(p && p.hotend, p && p.hotend_target);
-  $('#pw-bed').textContent = 'Bed ' + t(p && p.bed, p && p.bed_target);
+  // the print's details on one quiet line; when it'll be done goes next to the time left
+  const info = p && p.info, busy = ['printing', 'heating', 'paused', 'uploading'].includes(pr.state);
+  const meta = busy && info ? [info.metres ? `${info.metres} m of filament` : '', info.profile || '',
+    info.total ? info.total.replace(/ \d+s$/, '') + ' total' : ''].filter(Boolean).join('  ·  ') : '';
+  $('#pw-grams').textContent = busy && info && info.grams ? `${Math.round(info.grams)} g` : '';
+  if ($('#pw-info').textContent !== meta) $('#pw-info').textContent = meta;
+  $('#pw-done').textContent = pr.state === 'printing' && p && p.remaining_s
+    ? 'done at ' + new Date(Date.now() + p.remaining_s * 1000).toLocaleTimeString([], {hour: 'numeric', minute: '2-digit'}) : '';
+  const t = (v, g) => v == null ? '–' : `${Math.round(v)}°` + (g ? ` / ${Math.round(g)}°` : '');
+  $('#pw-noz').textContent = t(p && p.hotend, p && p.hotend_target);
+  $('#pw-bed').textContent = t(p && p.bed, p && p.bed_target);
   const btns = pr.state === 'printing' || pr.state === 'heating' ? [['pause', 'Pause'], ['cancel', 'Stop', 'danger']]
     : pr.state === 'paused' ? [['resume', 'Resume'], ['cancel', 'Stop', 'danger']]
-    : pr.state === 'offline' ? [] : null;
+    : pr.state === 'uploading' ? [['cancel', 'Stop', 'danger']] : pr.state === 'offline' ? [] : null;
   const html = btns ? btns.map(([a, l, c]) => `<button data-pr="${a}" class="${c || ''}">${l}</button>`).join('')
     : `<div class="pw-grid">${[['home', 'Home'], ['preheat', 'PLA'], ['preheat-petg', 'PETG'], ['cool', 'Cool'],
         ['bed-down', 'Bed ↓ 10'], ['bed-up', 'Bed ↑ 10'], ['motors_off', 'Motors off']]
@@ -419,6 +432,42 @@ $('#pw-btns').addEventListener('click', async e => {
     : a === 'bed-up' ? {action: 'move', axis: 'Z', mm: -10} : {action: a};
   try { toast((await api('/api/printer', body, a === 'home' ? 90000 : 20000)).say); setTimeout(refresh, 1500); }
   catch (err) { toast(err.message); }
+});
+
+// --- the newest slice ---------------------------------------------------------------------------------------
+let sliceT = 0;
+async function loadSlice() {
+  let s;
+  try { s = await api('/api/slice'); } catch { return; }
+  if (!s || !s.t) return;
+  $('#sw-title').textContent = s.title;
+  $('#sw-meta').textContent = [s.time, s.grams ? Math.round(s.grams) + ' g' : '', s.metres ? s.metres + ' m' : '']
+    .filter(Boolean).join(' · ');
+  if (s.t !== sliceT) {  // a new slice: fetch its picture (with the token, so not a plain <img src>)
+    sliceT = s.t;
+    try {
+      const r = await fetch('/api/slice/preview', {headers: {Authorization: 'Bearer ' + store.get('token', '')}});
+      if (r.ok) $('#sw-img').src = URL.createObjectURL(await r.blob());
+    } catch { /* keep the old one */ }
+  }
+}
+$('#sw-3d').addEventListener('click', () => {
+  const box = $('#slice3d');
+  $('#slice3d-frame').src = '/app/slice.html';
+  box.hidden = false;
+  requestAnimationFrame(() => box.classList.add('on'));
+});
+addEventListener('message', e => {
+  if (e.data && e.data.closeSlice) {
+    const box = $('#slice3d');
+    box.classList.remove('on');
+    setTimeout(() => { box.hidden = true; $('#slice3d-frame').src = 'about:blank'; }, 280);
+  }
+});
+$('#sw-print').addEventListener('click', async e => {
+  const t = $('#sw-title').textContent, meta = $('#sw-meta').textContent;
+  if (!await confirmBox(`Print ${t}? ${meta}. Is the bed clear?`, e.currentTarget, {yes: 'Print'})) return;
+  try { toast((await api('/api/printer', {action: 'print_last'}, 20000)).say); } catch (err) { toast(err.message); }
 });
 
 // --- files -----------------------------------------------------------------------------------------------
@@ -451,7 +500,7 @@ async function refresh() {
     if (String(e.message).startsWith('Not paired')) toast(e.message);
   } finally { busy = false; }
 }
-refresh(); loadLight(); loadFiles();
+refresh(); loadLight(); loadFiles(); loadSlice();
 setInterval(refresh, 3000);
-setInterval(() => { if (!document.hidden) { loadLight(); loadFiles(); } }, 20000);
-document.addEventListener('visibilitychange', () => { if (!document.hidden) { refresh(); loadLight(); loadFiles(); } });
+setInterval(() => { if (!document.hidden) { loadLight(); loadFiles(); loadSlice(); } }, 20000);
+document.addEventListener('visibilitychange', () => { if (!document.hidden) { refresh(); loadLight(); loadFiles(); loadSlice(); } });

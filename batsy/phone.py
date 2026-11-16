@@ -355,6 +355,8 @@ class Hub:
             text = (body.get("text") or "").strip()
             if not text:
                 return {"ok": False, "say": "Nothing to send."}
+            if self.app.answer_pending(text):  # Batsy asked yes / no: this is the answer
+                return {"ok": True, "say": "Got it."}
             said: list[str] = []
             self.app.overlay.heard(text)
             if not self._handled_locally(text, said.append):
@@ -423,6 +425,22 @@ class Hub:
                 if not re.fullmatch(r"M(20|20 L|27|27 C|33 \S+|23 \S+|105|114|115|119|503)", cmd):
                     return {"ok": False, "say": "Only read-only queries."}
                 return {"ok": True, "lines": pr.send(cmd, 10)}
+            if a == "print_last":  # the app asked "Is the bed clear?" itself
+                last = self.last_slice()
+                if not last or not Path(last["gcode"]).exists():
+                    return {"ok": False, "say": "Nothing is sliced yet."}
+                if pr.state["printing"] or pr.state["uploading"] is not None:
+                    return {"ok": False, "say": "The printer is busy."}
+                threading.Thread(target=pr.print_file, args=(Path(last["gcode"]), last["title"]), daemon=True).start()
+                return {"ok": True, "say": "Copying it to the printer. It starts by itself in a few minutes."}
+            if a == "copy_last":  # copy the newest slice to the card without printing (also a speed test)
+                last = self.last_slice()
+                if not last or pr.state["printing"] or pr.state["uploading"] is not None:
+                    return {"ok": False, "say": "Nothing to copy, or the printer is busy."}
+                threading.Thread(target=pr.print_file, args=(Path(last["gcode"]), last["title"], False), daemon=True).start()
+                return {"ok": True, "say": "Copying it to the card, without printing."}
+            if a == "copy_result":
+                return {"ok": True, "copy": getattr(pr, "last_copy", None)}
             if a == "files":
                 files = pr.sd_files()
                 return {"ok": True, "files": files, "names": pr.long_names(files) if body.get("long") else {}}
@@ -433,6 +451,24 @@ class Hub:
         except OSError as e:
             return {"ok": False, "say": str(e)}
         return {"ok": False, "say": f"Unknown action {a}"}
+
+    def last_slice(self) -> dict | None:
+        """The newest slice (yours, or a calibration print): its preview, 3D paths, G-code and estimates."""
+        from batsy import calib, slicer
+
+        found = sorted([*Path(self.cfg.get("files.inbox")).expanduser().glob("**/sliced/*.paths.json"),
+                        *(calib.OUT / "sliced").glob("*.paths.json")], key=lambda p: p.stat().st_mtime)
+        if not found:
+            return None
+        paths = found[-1]
+        gcode = paths.with_name(paths.name.removesuffix(".paths.json") + ".gcode")
+        try:
+            title = json.loads(paths.read_text()).get("title", "")
+        except (OSError, ValueError):
+            title = ""
+        est = slicer._estimates(gcode) if gcode.exists() else {}
+        return {"title": title or gcode.stem, "t": int(paths.stat().st_mtime), "gcode": str(gcode), "paths": str(paths),
+                "preview": str(gcode.with_suffix(".png")), **est}
 
     def home_action(self, action: str) -> dict:
         from batsy import home
@@ -558,6 +594,15 @@ def _handler(hub: Hub):
                     return self._send(500, {"error": str(e)})
             if self.path.startswith("/api/files"):
                 return self._send(200, hub.files())
+            if self.path.startswith("/api/slice"):
+                last = hub.last_slice()
+                if self.path.startswith("/api/slice/paths"):
+                    return self._send(200, body=Path(last["paths"]).read_bytes()) if last else self._send(404, {})
+                if self.path.startswith("/api/slice/preview"):
+                    ok = last and Path(last["preview"]).exists()
+                    return self._send(200, body=Path(last["preview"]).read_bytes(), ctype="image/png") if ok \
+                        else self._send(404, {})
+                return self._send(200, {k: v for k, v in (last or {}).items() if k not in ("gcode", "paths", "preview")})
             if self.path.startswith("/api/home"):
                 return self._send(200, hub.home_action("state"))
             self._send(404, {"error": "no such thing"})

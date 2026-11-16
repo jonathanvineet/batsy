@@ -143,7 +143,7 @@ input { font: inherit; color: inherit; }
 .progress div { height: 100%; width: 0; background: var(--text); }
 
 /* 3d printer: liquid fills the card as the print progresses */
-.pw { justify-content: space-between; isolation: isolate; }
+.pw { justify-content: flex-start; gap: clamp(8px, 2.6vmin, 14px); isolation: isolate; }
 .pw > :not(.pw-liquid) { position: relative; z-index: 1; }
 .pw-liquid { position: absolute; left: 0; right: 0; bottom: 0; height: 0%; z-index: 0; transition: height 1.6s cubic-bezier(.3, .7, .3, 1); }
 .pw-body { position: absolute; inset: 14px 0 0; background: linear-gradient(180deg, var(--liquid) 0%, var(--liquid-deep) 100%); }
@@ -155,17 +155,28 @@ input { font: inherit; color: inherit; }
 .pw.heating { --liquid: rgba(255, 122, 40, .7); --liquid-deep: rgba(120, 40, 0, .8); }
 .pw.paused { --liquid: rgba(255, 176, 46, .55); --liquid-deep: rgba(90, 60, 0, .8); }
 .pw.paused .pw-wave { animation-play-state: paused; }
+.pw.uploading { --liquid: rgba(122, 167, 255, .55); --liquid-deep: rgba(20, 40, 110, .8); }
 .pw.done { --liquid: rgba(79, 209, 139, .65); --liquid-deep: rgba(10, 80, 40, .85); }
 .pw.idle .pw-liquid, .pw.offline .pw-liquid { height: 0% !important; }
 .pw-top { display: flex; align-items: center; justify-content: space-between; }
-.pw-state { font: 600 clamp(12px, 3.4vmin, 15px)/1 var(--display); letter-spacing: .08em; text-transform: uppercase; color: var(--text);
-  background: rgba(0, 0, 0, .35); padding: 5px 9px; border-radius: 10px; }
-.pw-mid { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
-.pw-mid b { font: 700 clamp(48px, 20vmin, 120px)/.9 var(--display); text-shadow: 0 2px 18px rgba(0, 0, 0, .4); font-variant-numeric: tabular-nums; }
-.pw-mid span { font: 600 clamp(15px, 4.8vmin, 24px)/1.1 var(--display); color: var(--text); text-shadow: 0 1px 10px rgba(0, 0, 0, .5); }
-.pw-file { color: rgba(242, 237, 226, .8); font-size: clamp(12px, 3.4vmin, 15px); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.pw-temps { display: flex; gap: 14px; font-size: clamp(12px, 3.4vmin, 15px); color: var(--text); }
-.pw-temps span { background: rgba(0, 0, 0, .3); padding: 4px 9px; border-radius: 9px; font-variant-numeric: tabular-nums; }
+.pw-state { font: 600 clamp(11px, 3.1vmin, 14px)/1 var(--display); letter-spacing: .1em; text-transform: uppercase; color: var(--text);
+  background: rgba(0, 0, 0, .3); padding: 6px 10px; border-radius: 999px; }
+.pw-main { display: flex; align-items: center; gap: clamp(12px, 4vmin, 22px); margin: auto 0; }
+.pw-main b { font: 700 clamp(52px, 19vmin, 112px)/.85 var(--display); font-variant-numeric: tabular-nums; letter-spacing: -.01em; }
+.pw-eta { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.pw-eta span { font: 600 clamp(16px, 5.2vmin, 26px)/1.05 var(--display); color: var(--text); }
+.pw-eta small { font-size: clamp(11px, 3.2vmin, 14px); color: rgba(242, 237, 226, .6); }
+.pw-what { display: flex; align-items: center; gap: 12px; margin-top: auto; min-width: 0; }
+.pw-name { flex: 1; min-width: 0; font: 700 clamp(18px, 5.6vmin, 28px)/1.1 var(--display); color: var(--text);
+  overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.pw-grams { flex: none; align-self: center; font: 700 clamp(18px, 5.6vmin, 28px)/1 var(--display); color: var(--text);
+  background: rgba(0, 0, 0, .45); padding: 6px 12px; border-radius: 12px; font-variant-numeric: tabular-nums; }
+.pw-grams:empty { display: none; }
+.pw-meta { font-size: clamp(11px, 3.2vmin, 14px); color: rgba(242, 237, 226, .55); white-space: nowrap; overflow: hidden;
+  text-overflow: ellipsis; margin-top: -4px; }
+.pw-meta:empty { display: none; }
+.pw-temps { font-size: clamp(10px, 2.9vmin, 13px); color: rgba(242, 237, 226, .5); font-variant-numeric: tabular-nums; }
+.pw-temps b { font-weight: 600; color: rgba(242, 237, 226, .75); }
 .pw-btns { display: flex; gap: 8px; }
 .pw-btns button { flex: 1; height: clamp(34px, 10vmin, 44px); border-radius: 14px; background: rgba(0, 0, 0, .38); color: var(--text);
   font: 700 clamp(13px, 3.8vmin, 16px)/1 var(--display); letter-spacing: .05em; }
@@ -293,3 +304,19 @@ dialog .ghost { background: var(--w2); } dialog .danger { background: var(--bad)
 .g-no { background: rgba(255, 255, 255, .12); color: var(--text); }
 .g-yes { background: var(--signal); color: var(--ink); }
 .g-yes.danger { background: rgba(255, 92, 77, .92); color: #fff; }
+
+/* --- the newest slice ------------------------------------------------------------------------------------- */
+.sw { display: grid; grid-template-columns: 55% 1fr; gap: clamp(10px, 3vmin, 18px); }
+.sw-img { min-width: 0; min-height: 0; border-radius: calc(var(--r) * .6); overflow: hidden; background: #0b0d12; }
+.sw-img img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.sw-info { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 6px; }
+.sw-info b { font: 700 clamp(18px, 5.6vmin, 28px)/1.05 var(--display); display: -webkit-box; -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical; overflow: hidden; }
+.sw-info small { font-size: clamp(12px, 3.6vmin, 16px); }
+.sw-btns { margin-top: auto; display: flex; flex-direction: column; gap: 8px; }
+.sw-btns button { height: clamp(36px, 10vmin, 46px); border-radius: 999px; background: var(--w2); color: var(--text);
+  font: 700 clamp(14px, 4vmin, 17px)/1 var(--display); letter-spacing: .05em; }
+.sw-btns #sw-print { background: var(--signal); color: var(--ink); }
+#slice3d { position: fixed; inset: 0; z-index: 30; background: #000; opacity: 0; transition: opacity 260ms ease; }
+#slice3d.on { opacity: 1; }
+#slice3d iframe { width: 100%; height: 100%; border: 0; }

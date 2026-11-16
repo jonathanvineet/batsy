@@ -16,7 +16,7 @@ from batsy import safety, spotify
 from batsy import images
 from batsy.overlay import Overlay
 from batsy.routines import Routines
-from batsy import apps, calc, home, instant, keyboard, lifecycle, model3d, pc, printer3d, slicer, system
+from batsy import apps, calc, calib, home, instant, keyboard, lifecycle, model3d, pc, printer3d, slicer, system
 from batsy.learner import Automator, Learner
 from batsy.learning import ACTION, NEGATIVE, SkillBook, claude_cli
 from batsy.vocab import get_vocab
@@ -206,10 +206,26 @@ class Batsy:
         else:
             self.preview_saver(30)  # show what changed
 
+    def answer_pending(self, text: str) -> bool:
+        """A typed reply while Batsy is waiting for yes / no: it's the answer, not a new request."""
+        req = getattr(self, "confirm_request", None)
+        if not req or req["done"].is_set():
+            return False
+        req["typed_answer"] = text
+        if self.ears is not None:
+            self.ears.cancel.set()  # stop listening for a spoken answer: this one counts
+        if not req.get("asking"):  # not being asked out loud yet: answer straight away
+            req["answer"] = safety.is_yes(text)
+            req["done"].set()
+        return True
+
     def _typed(self, text: str) -> None:
         """Typed into the overlay: handled exactly like something you said after "Batsy"."""
         text = text.strip()
         if not text:
+            return
+        if self.answer_pending(text):  # "yes" typed while Batsy asks something
+            log.info("typed answer: %s", text)
             return
         log.info("typed: %s", text)
         self.typed.put(text)
@@ -543,6 +559,16 @@ class Batsy:
         except EOFError:
             return False
 
+    def ask_from_background(self, question: str) -> bool:
+        """Yes / no for a job running in the background (slicing, a calibration): the voice loop asks it out loud."""
+        if self.ears is None:
+            return self._confirm(question)
+        req = {"question": question, "done": threading.Event(), "answer": False}
+        self.confirm_request = req
+        req["done"].wait(timeout=90)
+        self.confirm_request = None
+        return req["answer"]
+
     def _confirm_voice(self, question: str) -> bool:
         # Called on the brain thread; the main voice loop owns the mic and answers it.
         abort = getattr(self, "_turn_abort", None)
@@ -556,11 +582,13 @@ class Batsy:
 
     def _serve_voice_confirm(self) -> None:
         req = self.confirm_request
+        req["asking"] = True
         self.speaker.say(req["question"] + " Say yes or no.")
         self.speaker.wait_idle()
         self.ears.drain()
         audio = self.ears.record_utterance(start_timeout=8)
-        answer = self.stt.transcribe(audio) if audio is not None else ""
+        typed = req.get("typed_answer")  # answered on the keyboard / phone while Batsy was listening
+        answer = typed if typed is not None else (self.stt.transcribe(audio) if audio is not None else "")
         req["answer"] = safety.is_yes(answer)
         if not req["answer"]:
             self.speaker.say("Okay, I won't.")
@@ -678,6 +706,12 @@ class Batsy:
         if said is not None:
             self._route = "command"
             self._reply(said)
+            return True
+        said = calib.handle(self, n)  # "print a temperature tower": calibration prints
+        if said is not None:
+            self._route = "command"
+            if said:
+                self._reply(said)
             return True
         said = printer3d.handle(self, n)  # the 3D printer on USB: "print it", "how's the printer", "preheat"
         if said is not None:
@@ -889,6 +923,11 @@ class Batsy:
         while True:
             try:
                 self._typed_turn = False
+                req = getattr(self, "confirm_request", None)
+                if req and not req["done"].is_set() and not req.get("asking"):  # a background job asks yes / no
+                    req["asking"] = True
+                    self._serve_voice_confirm()
+                    continue
                 if pending_text is None and not self.typed.empty():  # typed into the overlay
                     pending_text = self.typed.get_nowait()
                     self._typed_turn = True

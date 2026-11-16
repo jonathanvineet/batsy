@@ -6,6 +6,8 @@ X11 windows can). Driven by JSON lines on stdin from the daemon (batsy/overlay.p
   {"cmd": "away"}                           the overlay is opening from here: swell and fade out
   {"cmd": "rest", "you", "text", "image", "title"} the overlay closed into here: bat back, and a bubble with
                                                     the latest exchange (what you asked, Batsy's reply)
+  {"cmd": "progress", "pct": 0-100 | null, "label"} a slim bar under the bat ("Copying 14%", "Printing 37%");
+                                                    pct null hides it
 Events out: {"event": "open"} (bat or bubble clicked), {"event": "origin", "x", "y"} (the bat's centre on screen,
 so the overlay can grow out of exactly this spot).
 """
@@ -79,6 +81,7 @@ class Dock(QWidget):
         self.swell = 0.0       # 0 at rest; 1 = swollen and gone (the overlay took over)
         self.bubble = 0.0      # 0 hidden .. 1 fully open
         self.you, self.text, self.title, self.thumb = "", "", "", None
+        self.progress, self.plabel = None, ""  # the 3D printer's copy / print, under the bat
         self.anim = QVariantAnimation(self, duration=280, easingCurve=QEasingCurve.OutCubic)
         self.anim.valueChanged.connect(self._swell_to)
         self.banim = QVariantAnimation(self, duration=320, easingCurve=QEasingCurve.OutBack)
@@ -90,6 +93,13 @@ class Dock(QWidget):
     # --- commands ---------------------------------------------------------------------------------------
     def handle(self, m: dict) -> None:
         cmd = m.get("cmd")
+        if cmd == "progress":
+            pct = m.get("pct")
+            self.progress = None if pct is None else max(0.0, min(100.0, float(pct)))
+            self.plabel = m.get("label") or ""
+            self._shape()
+            self.update()
+            return
         if cmd == "standby":
             self._arrive(bubble=False)
         elif cmd == "away":
@@ -150,14 +160,15 @@ class Dock(QWidget):
 
     # --- geometry: clicks only land on the bat and the bubble; everything else passes through ----------
     def _bat_rect(self) -> QRectF:
-        return QRectF(self.center.x() - BAT_W / 2 - 8, self.center.y() - BAT_W / 2 - 4, BAT_W + 16, BAT_W * 0.6 + 8)
+        extra = 30 if self.progress is not None else 0  # the progress bar under it
+        return QRectF(self.center.x() - BAT_W / 2 - 8, self.center.y() - BAT_W / 2 - 4, BAT_W + 16, BAT_W * 0.6 + 8 + extra)
 
     def _bubble_rect(self) -> QRectF:
         f = QFont("Cantarell", 11)
         text_w = BUBBLE_W - 32 - (78 if self.thumb else 0)
         lines = QFontMetrics(f).boundingRect(QRect(0, 0, int(text_w), 2000), Qt.TextWordWrap, self._clip_text())
         h = max(lines.height() + (22 if self.title else 0) + (YOU_H if self.you else 0) + 26, 92 if self.thumb else 0)
-        top = self.center.y() + BAT_W * 0.3 + 12
+        top = self.center.y() + BAT_W * 0.3 + 12 + (30 if self.progress is not None else 0)
         return QRectF(W - 12 - BUBBLE_W, top, BUBBLE_W, min(h, H - top - 8))
 
     def _clip_text(self) -> str:
@@ -190,6 +201,22 @@ class Dock(QWidget):
         if self.bubble > 0.01:
             self._paint_bubble(p)
         self._paint_bat(p)
+        if self.progress is not None and self.swell < 0.5:
+            self._paint_progress(p)
+
+    def _paint_progress(self, p: QPainter) -> None:
+        """A slim bar under the bat with what it's doing: the 3D printer copying or printing."""
+        c = self.center
+        w = BAT_W + 16
+        x, y = c.x() - w / 2, c.y() + BAT_W * 0.3 + 6
+        p.setPen(Qt.NoPen)
+        p.setBrush(QColor(255, 255, 255, 40))
+        p.drawRoundedRect(QRectF(x, y, w, 4), 2, 2)
+        p.setBrush(SIGNAL)
+        p.drawRoundedRect(QRectF(x, y, w * self.progress / 100, 4), 2, 2)
+        p.setPen(QColor(238, 232, 218, 220))
+        p.setFont(QFont("Cantarell", 8, QFont.DemiBold))
+        p.drawText(QRectF(x - 20, y + 6, w + 40, 16), Qt.AlignHCenter | Qt.AlignTop, self.plabel)
 
     def _paint_bat(self, p: QPainter) -> None:
         s = self.swell

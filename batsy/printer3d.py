@@ -39,16 +39,6 @@ def find_port() -> str | None:
 class Printer:
     def __init__(self, app=None):
         self.app = app
-        from batsy.config import DATA_DIR
-
-        global STOPPED_FILE
-        STOPPED_FILE = DATA_DIR / "printer_stopped.json"
-        try:
-            import json
-
-            self.stopped_byte = json.loads(STOPPED_FILE.read_text()).get("byte")  # still frozen there: still stopped
-        except (OSError, ValueError):
-            self.stopped_byte = None
         self.ser = None
         self.lock = threading.Lock()          # one command at a time
         self.ok = threading.Event()
@@ -56,6 +46,22 @@ class Printer:
         self.state = {"connected": False, "hotend": None, "hotend_target": 0, "bed": None, "bed_target": 0,
                       "printing": False, "paused": False, "progress": None, "file": None, "started": None,
                       "job": None, "firmware": "", "uploading": None, "error": None}
+        from batsy.config import DATA_DIR
+
+        global STOPPED_FILE
+        STOPPED_FILE = DATA_DIR / "printer_stopped.json"
+        try:
+            import json
+
+            saved = json.loads(STOPPED_FILE.read_text())
+            self.stopped_byte = saved.get("byte")  # still frozen there: still stopped
+            if saved.get("job") and saved.get("byte") is None:  # a print that was running when Batsy restarted
+                self.state.update(job=saved["job"], file=saved.get("file"), started=saved.get("started"),
+                                  gcode=saved.get("gcode"))
+                self.ours = bool(saved.get("ours"))
+                self._load_times(saved.get("gcode"))
+        except (OSError, ValueError):
+            self.stopped_byte = None
         self._stop = False
         threading.Thread(target=self._keep, daemon=True, name="printer3d").start()
 
@@ -158,8 +164,14 @@ class Printer:
             log.warning("printer: %s", line)
             if "thermal" in line.lower() or "MINTEMP" in line or "MAXTEMP" in line:
                 self._say(f"The printer stopped with an error: {line.split(':', 1)[-1].strip()}.")
+        m = re.match(r"(?:Resend|rs):?\s*(\d+)", line, re.I)
+        if m:
+            self.resend_from = int(m.group(1))
+        if "error writing" in line.lower():
+            self.write_errors = getattr(self, "write_errors", 0) + 1
         if line.startswith("ok"):
             self.ok.set()
+            self.ok_count = getattr(self, "ok_count", 0) + 1
         elif not line.startswith(" T:") and not line.startswith("T:"):
             self.lines.append(line)
 
@@ -176,6 +188,9 @@ class Printer:
                     self._read_line()
             else:
                 time.sleep(0.05)
+            if time.time() - getattr(self, "dock_at", 0) > 4:
+                self.dock_at = time.time()
+                self._to_dock()
             if time.time() - last > 10 and self.state["uploading"] is None:  # progress, whoever started the print
                 last = time.time()
                 self.send("M27", 2)
@@ -184,18 +199,98 @@ class Printer:
                     self.want_name = False
                     self.send("M27 C", 2)  # newer firmware says the file name; 1.1.6 may not
 
-    def send(self, cmd: str, timeout: float = 5) -> list[str]:
-        """Send one G-code line and wait for its "ok". Returns what the printer said."""
+    def send(self, cmd: str, timeout: float = 5, until: str | None = None) -> list[str]:
+        """Send one G-code line and wait for its "ok" (or, with `until`, for a line matching that pattern: the
+        printer's real answer). Returns what the printer said.
+        Anything still waiting from before is read first: a late "ok" (a check that timed out) would otherwise be
+        taken as this command's, and every answer after it would be one command late."""
         if not self.ser:
             raise OSError("The printer isn't connected.")
         with self.lock:
+            while self.ser.in_waiting:  # the leftovers of earlier commands: not this one's
+                self._read_line()
             self.ok.clear()
             self.lines = []
             self.ser.write((cmd.strip() + "\n").encode())
             end = time.time() + timeout
-            while time.time() < end and not self.ok.is_set():
+            rx = re.compile(until, re.I) if until else None
+            while time.time() < end:
                 self._read_line()
+                if rx is None and self.ok.is_set():
+                    break
+                if rx is not None and any(rx.search(x) for x in self.lines):
+                    t = time.time() + 1.5  # and its "ok"
+                    while time.time() < t and not self.ok.is_set():
+                        self._read_line()
+                    break
             return list(self.lines)
+
+    def _send_fast(self, lines: list[str], window_bytes: int = 110, window_lines: int = 3) -> bool:
+        """Copy with a few lines in flight (the printer's 128-byte receive buffer holds them), so the cable never
+        sits idle waiting for each "ok": about twice as fast as line by line. Checksummed and numbered as always;
+        "Resend: N" goes back to line N. A card write error can't be pinned to one line with several in flight,
+        so it returns False and the caller starts over carefully. True when every line is in."""
+        self.write_errors, self.resend_from, self.ok_count = 0, None, 0
+        framed = []
+        for i, line in enumerate(lines, 1):
+            body = f"N{i} {line}"
+            framed.append(f"{body}*{_cs(body)}\n".encode())
+        nxt, inflight = 0, []  # inflight: sizes of lines sent but not yet acknowledged, oldest first
+        with self.lock:
+            while self.ser.in_waiting:
+                self._read_line()
+            last_progress = time.time()
+            while nxt < len(framed) or inflight:
+                if self.cancel_upload.is_set():
+                    raise OSError("stopped")
+                while nxt < len(framed) and len(inflight) < window_lines and sum(inflight) + len(framed[nxt]) <= window_bytes:
+                    self.ser.write(framed[nxt])
+                    inflight.append(len(framed[nxt]))
+                    nxt += 1
+                before = self.ok_count
+                self._read_line()
+                if self.write_errors:
+                    return False
+                if self.resend_from is not None:  # go back: the printer drops everything after the bad line
+                    nxt, inflight = self.resend_from - 1, []
+                    self.resend_from = None
+                    time.sleep(0.05)
+                    while self.ser.in_waiting:
+                        self._read_line()
+                    self.ok_count = 0
+                    continue
+                for _ in range(self.ok_count - before):
+                    if inflight:
+                        inflight.pop(0)
+                if self.ok_count > before:
+                    last_progress = time.time()
+                    if nxt % 500 < window_lines:
+                        self.state["uploading"] = round(100 * nxt / len(framed))
+                        self._to_dock()
+                elif time.time() - last_progress > 15:
+                    raise OSError(f"the printer stopped answering at line {nxt}")
+        return True
+
+    def _to_dock(self) -> None:
+        """The copy / print progress under the bat in the screen's corner (cleared when idle)."""
+        ov = getattr(self.app, "overlay", None)
+        if ov is None or not hasattr(ov, "_dock_send"):
+            return
+        s = self.state
+        if s["uploading"] is not None:
+            pct, label = s["uploading"], f"Copying to printer {s['uploading']}%"
+        elif s["printing"] and s["progress"] is not None and not self.stopped():
+            left = self.remaining()
+            pct = s["progress"]
+            label = f"Printing {s['progress']:.0f}%" + (f" · {_short(left)} left" if left else "")
+        else:
+            pct, label = None, ""
+        if (pct, label) != getattr(self, "dock_last", None):
+            self.dock_last = (pct, label)
+            try:
+                ov._dock_send("progress", pct=pct, label=label)
+            except Exception:
+                pass
 
     def _say(self, text: str) -> None:
         if self.app is not None:
@@ -211,8 +306,17 @@ class Printer:
         self.stopped_byte = byte
         self.state.update(printing=False, job=None, started=None)
         self.ours = False
+        self._save_job()
+
+    def _save_job(self) -> None:
+        """Remembered across Batsy restarts: a stopped print's frozen byte, or the running print's name."""
+        import json
+
+        s = self.state
         try:
-            STOPPED_FILE.write_text(json.dumps({"byte": byte, "t": time.time()}))
+            STOPPED_FILE.write_text(json.dumps({"byte": self.stopped_byte, "t": time.time(), "job": s.get("job"),
+                                                "file": s.get("file"), "started": s.get("started"), "gcode": s.get("gcode"),
+                                                "ours": bool(getattr(self, "ours", False))}))
         except OSError:
             pass
 
@@ -266,12 +370,50 @@ class Printer:
         self.send("M24", 5)
         self.byte_at = time.time()
 
+    def _load_times(self, gcode: str | None) -> None:
+        """The slicer's own time left at every layer ("M73 P<done> R<minutes>"), by position in the file: the
+        printer reports how far through the file it is, so this gives the real time left, not a guess."""
+        self.time_table = []
+        self.state["info"] = None
+        if not gcode or not Path(gcode).exists():
+            return
+        try:  # what the slicer says about it: weight, length, total time, the profile
+            from batsy import slicer
+
+            est = slicer._estimates(Path(gcode))
+            m = re.search(r" - (.+?)\.gcode$", Path(gcode).name)
+            self.state["info"] = {"grams": est.get("grams"), "metres": est.get("metres"), "total": est.get("time"),
+                                  "profile": m.group(1) if m else ""}
+        except Exception:
+            pass
+        n, marks = 0, []
+        for raw in Path(gcode).read_text(errors="replace").splitlines():
+            line = raw.split(";", 1)[0].strip()
+            if not line:
+                continue
+            n += 1
+            if line.startswith("M73") and " R" in line:
+                m = re.search(r"R(\d+)", line)
+                if m:
+                    marks.append((n, int(m.group(1))))
+        self.time_table = [(i / n, r) for i, r in marks] if n else []
+
     def remaining(self) -> float | None:
-        """Seconds left, from how fast the progress has been moving (the last 15 minutes), else since the start."""
+        """Seconds left: the slicer's per-layer estimate at the printer's place in the file; without one, from how
+        fast the progress has been moving (the last 15 minutes)."""
         s, samples = self.state, getattr(self, "samples", [])
         p = s.get("progress")
         if not p or p >= 100:
             return None
+        table = getattr(self, "time_table", [])
+        if table:
+            f = p / 100
+            prev = table[0]
+            for frac, mins in table:
+                if frac > f:
+                    break
+                prev = (frac, mins)
+            return prev[1] * 60
         if len(samples) >= 3 and samples[-1][1] > samples[0][1]:
             rate = (samples[-1][1] - samples[0][1]) / (samples[-1][0] - samples[0][0])  # percent per second
             return (100 - p) / rate
@@ -322,7 +464,7 @@ class Printer:
     def sd_files(self) -> list[str]:
         """What's on the printer's SD card (G-code only)."""
         self.send("M21", 5)
-        said = self.send("M20", 10)
+        said = self.send("M20", 15, until=r"End file list")
         files, inside = [], False
         for l in said:
             if "Begin file list" in l:
@@ -355,6 +497,9 @@ class Printer:
         return f"Printing {job or name} from the card."
 
     def cancel(self) -> str:
+        ev = getattr(self, "cancel_upload", None)
+        if ev is not None:
+            ev.set()  # still copying: stop that too
         for c in ("M25", "M104 S0", "M140 S0", "M107", "G91", "G1 Z10 F600", "G90", "G28 X Y", "M84"):
             try:
                 self.send(c, 30)
@@ -363,42 +508,86 @@ class Printer:
         self.state.update(printing=False, paused=False, progress=None)
         return "Stopped the print, turned the heaters off and moved the head away."
 
-    def print_file(self, gcode: Path, job: str) -> None:
-        """Copy to the SD card, then start it there. Runs in the background; announces how it goes."""
-        name = "BATSY" + time.strftime("%H%M") + ".GCO"  # 8.3: what Marlin 1.1 can write
+    def print_file(self, gcode: Path, job: str, start: bool = True) -> None:
+        """Copy to the SD card, then start it there. Runs in the background; announces how it goes.
+        Every step is checked: if the card won't open the file, nothing is sent (the lines would be EXECUTED, not
+        saved, as happened once), and a line the printer doesn't acknowledge stops the copy."""
+        name = "BT" + time.strftime("%d%H%M") + ".GCO"  # 8.3, at most 8 letters before the dot: Marlin 1.1 is strict
         lines = []
         for raw in gcode.read_text(errors="replace").splitlines():
             line = raw.split(";", 1)[0].strip()
             if line:
                 lines.append(line)
+        self.cancel_upload = threading.Event()
+        self.write_errors = 0
+        self.copy_t0 = time.time()
         self.state.update(job=job, uploading=0, error=None)
         try:
-            self.send("M21", 5)                 # card ready
-            self.send("M110 N0", 3)
-            self.send(f"M28 {name}", 10)
-            n = 0
-            for i, line in enumerate(lines, 1):
-                n = i
+            for c, t in (("M29", 5), ("M21", 8), ("M110 N0", 3)):  # close a stale file; card ready; line numbers from 0
+                log.info("printer: %s -> %s", c, self.send(c, t))  # (M110 BEFORE M28: an open file would swallow it)
+            said = self.send(f"M28 {name}", 20, until=r"Writing to file|open failed|error")
+            log.info("printer: M28 %s -> %s", name, said)
+            opened = " ".join(said)
+            if "Writing to file" not in opened:
+                raise OSError(f"the printer's card wouldn't open a file ({opened.strip()[:80] or 'no answer'})")
+            fast_ok = self._send_fast(lines) if getattr(self, "fast_copy", True) else False
+            if not fast_ok:  # careful mode: one line at a time, each acknowledged before the next
+                if fast_ok is False and getattr(self, "fast_copy", True):
+                    log.info("printer: fast copy hit a card write error: starting over line by line")
+                    self.send("M29", 5)
+                    self.send("M110 N0", 3)
+                    said = self.send(f"M28 {name}", 20, until=r"Writing to file|open failed|error")
+                    if not any("Writing to file" in x for x in said):
+                        raise OSError("the printer's card wouldn't open the file again")
+            for i, line in enumerate(lines if not fast_ok else [], 1):
+                if self.cancel_upload.is_set():
+                    raise OSError("stopped")
                 body = f"N{i} {line}"
-                cs = 0
-                for ch in body.encode():
-                    cs ^= ch
-                for attempt in range(3):
-                    said = self.send(f"{body}*{cs}", 10)
-                    if not any("Resend" in x or "rs " in x.lower() for x in said):
+                for attempt in range(4):
+                    self.ok.clear()
+                    said = self.send(f"{body}*{_cs(body)}", 10)
+                    bad_write = any("error writing" in x.lower() for x in said)  # the card dropped this line: again
+                    if bad_write:
+                        self.write_errors = getattr(self, "write_errors", 0) + 1
+                        log.info("printer: card write error at line %d, sending it again", i)
+                    if self.ok.is_set() and not bad_write and not any("Resend" in x or x.lower().startswith("rs") for x in said):
                         break
+                else:
+                    raise OSError(f"the printer stopped answering at line {i}")
                 if i % 500 == 0:
                     self.state["uploading"] = round(100 * i / len(lines))
-            self.send(f"N{n + 1} M29*" + str(_cs(f"N{n + 1} M29")), 10)  # end of file: Marlin closes it
+                    self._to_dock()
+            n = len(lines) + 1
+            self.send(f"N{n} M29*{_cs(f'N{n} M29')}", 10)  # end of file: the card closes it
+            self.send("M29", 5)  # in case the numbered one above wasn't taken (it's harmless twice)
+            listing = " ".join(self.send("M20", 15, until=r"End file list"))
+            if name.split(".")[0] not in listing.upper():
+                raise OSError("the file isn't on the card after copying")
+            if not start:  # copy only (a speed test, or to print it later from the printer's screen)
+                self.state["uploading"] = None
+                self.last_copy = {"file": name, "secs": round(time.time() - self.copy_t0), "lines": len(lines)}
+                log.info("printer: copied %s in %s s", name, self.last_copy["secs"])
+                self._to_dock()
+                return
             self.send(f"M23 {name}", 10)
             self.send("M24", 5)
-            self.state.update(uploading=None, printing=True, paused=False, progress=0, started=time.time(), file=name)
-            self.ours, self.unstuck_once, self.byte_at = True, False, time.time()
+            self.state.update(uploading=None, printing=True, paused=False, progress=0, started=time.time(), file=name,
+                              gcode=str(gcode))
+            self._load_times(str(gcode))
+            self.ours, self.unstuck_once, self.byte_at, self.samples = True, False, time.time(), []
+            self._mark_stopped(None)
+            self.state.update(job=job, printing=True)
+            self._save_job()
             self._say(f"{job} is printing. It's running from the printer's card, so it carries on by itself.")
         except Exception as e:
             self.state["uploading"] = None
-            log.exception("printer: upload failed")
-            self._say(f"I couldn't start the print: {e}")
+            try:
+                self.send("M29", 5)  # close the file if one is open
+            except Exception:
+                pass
+            log.warning("printer: upload failed: %s", e)
+            if str(e) != "stopped":
+                self._say(f"I couldn't start the print: {e}.")
 
 
 def _cs(s: str) -> int:
@@ -406,6 +595,11 @@ def _cs(s: str) -> int:
     for ch in s.encode():
         c ^= ch
     return c
+
+
+def _short(secs: float) -> str:
+    h, m = int(secs // 3600), int(secs % 3600 // 60)
+    return f"{h}h {m}m" if h else f"{m}m"
 
 
 def _dur(secs: float) -> str:

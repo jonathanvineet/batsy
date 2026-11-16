@@ -56,10 +56,20 @@
       <article class="w pw" id="pw">
         <div class="pw-liquid" id="pw-liquid"><svg class="pw-wave back" viewBox="0 0 1200 60" preserveAspectRatio="none"><path d="M0 30 Q 75 0 150 30 T 300 30 T 450 30 T 600 30 T 750 30 T 900 30 T 1050 30 T 1200 30 V 60 H 0 Z"/></svg><svg class="pw-wave front" viewBox="0 0 1200 60" preserveAspectRatio="none"><path d="M0 30 Q 75 0 150 30 T 300 30 T 450 30 T 600 30 T 750 30 T 900 30 T 1050 30 T 1200 30 V 60 H 0 Z"/></svg><div class="pw-body"></div></div>
         <div class="pw-top"><h3>Printer</h3><span class="pw-state" id="pw-state">…</span></div>
-        <div class="pw-mid"><b id="pw-pct">–</b><span id="pw-left"></span></div>
-        <div class="pw-file" id="pw-file"></div>
-        <div class="pw-temps"><span id="pw-noz">Nozzle –</span><span id="pw-bed">Bed –</span></div>
+        <div class="pw-main">
+          <b id="pw-pct">–</b>
+          <div class="pw-eta"><span id="pw-left"></span><small id="pw-done"></small></div>
+        </div>
+        <div class="pw-what"><div class="pw-name" id="pw-file"></div><b class="pw-grams" id="pw-grams"></b></div>
+        <div class="pw-meta" id="pw-info"></div>
+        <div class="pw-temps">Nozzle <b id="pw-noz">–</b> · Bed <b id="pw-bed">–</b></div>
         <div class="pw-btns" id="pw-btns"></div>
+      </article>
+      <!-- the newest slice: its picture, time and filament; 3D opens the toolpaths to turn around -->
+      <article class="w sw" id="sw">
+        <div class="sw-img"><img id="sw-img" alt=""></div>
+        <div class="sw-info"><h3>Sliced</h3><b id="sw-title">Nothing sliced yet</b><small id="sw-meta"></small>
+          <div class="sw-btns"><button id="sw-3d">3D view</button><button id="sw-print">Print</button></div></div>
       </article>
       <article class="w machines-w" id="machines-w"></article>
       <article class="w claude-w">
@@ -115,6 +125,7 @@
 <!-- PC controls sheet -->
 <div id="pcsheet" hidden><div class="panel" id="pcpanel"></div></div>
 
+<div id="slice3d" hidden><iframe id="slice3d-frame" title="Slice preview"></iframe></div>
 <div id="toast" role="status"></div>
 <dialog id="confirm"><p id="confirm-text"></p><div class="row"><button value="no" class="ghost">Cancel</button><button value="yes" class="danger">Yes</button></div></dialog>
 <script src="/app/app.js"></script>
