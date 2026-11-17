@@ -23,7 +23,7 @@ DEFAULTS = {
     "local": {
         "url": "http://127.0.0.1:11434",
         "model": "qwen2.5:3b",     # fast on 8 GB RAM; "llama3.2:3b" or "qwen2.5:1.5b" (faster, simpler) also work
-        "keep_alive": "2h",        # keep the model loaded so replies start instantly
+        "keep_alive": "15m",       # loaded for quick replies, then out of memory (it holds 2.6 GB of the 8)
         "context": 4096,
         "recent_exchanges": 4,     # short memory keeps the CPU's prompt reading fast
         "related_exchanges": 1,
@@ -166,6 +166,8 @@ DEFAULTS = {
     "safety": {
         "confirm_dangerous": True,
     },
+    # things to 3D print: Printables + MakerWorld need nothing; Thingiverse an app token (thingiverse.com/developers)
+    "models": {"thingiverse_token": ""},
     # Batsy Brain: the Obsidian vault Batsy writes and reads (vault.py)
     "vault": {
         "enabled": True,

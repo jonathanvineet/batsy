@@ -108,6 +108,11 @@ broadcast = "10.10.10.255"
 | "How's the printer?" · "pause / resume / stop the print" · "preheat the printer (for PETG)" · "cool down" · "home the printer" · "lower the bed 10 mm" · "turn off the motors" | |
 | **"Print a temperature tower"** · "temperature tower from 230 to 190" | OrcaSlicer's own tower, cut to your range, 5 °C per 10 mm block |
 
+**Finding things to print** (Printables and MakerWorld, no accounts; Thingiverse with a free key under `[models] thingiverse_token`):
+- "**Find me a phone stand to print**" · "search printables for a cable clip" · "find a 3d model of a headphone hook": all sites at once in about 4 s, as **numbered photo cards** on the laptop's screen and in the phone app, best first.
+- "**The second one**" / "the geared one", or tap a card: Batsy fetches just the file and shows a **quick preview** (its outline, its size in mm, whether it fits the 220 × 220 × 300 bed, the volume and how many parts) on the laptop and the phone, then asks "**Want me to slice it?**". Yes (or **Slice it** on the phone) slices it with your presets, as usual. MakerWorld downloads need your Bambu login, so its page opens instead.
+- Every model you pick gets a card in the brain (`04 Resources/Models`).
+
 **Printing goes straight over USB**, no copying to the card: a separate process (`batsy/printstream.py`) owns the port for the whole print, so Batsy restarting doesn't touch it, and the laptop is kept awake. Every print is saved in `~/.local/share/batsy/prints/` to print again. Progress and time left come from the slicer's own per-layer estimates. You get told when a print finishes, fails or pauses by itself (and on your iPhone).
 
 Notes for this printer (Marlin 1.1.6, 2019): the USB port is set to `-hupcl` so reconnecting never restarts the board; it reports "TF printing" for card prints (a print stopped on its screen keeps saying it, which Batsy recognises); it has no bed PID and gives only 8.3 file names.

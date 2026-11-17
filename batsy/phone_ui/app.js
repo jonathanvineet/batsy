@@ -256,6 +256,91 @@ function closeTakeover() {
 }
 $('#takeover').addEventListener('click', closeTakeover);
 
+// --- things to print: the cards from the last model search ("find me a phone stand to print") ------------------------
+let mdItems = [];
+function takeModels(m) {
+  if (!m || !m.t || m.t <= store.get('mdSeen', 0)) return;
+  store.set('mdSeen', m.t);
+  mdItems = m.items;
+  $('#md-title').textContent = `“${m.q}” · ${m.items.length} models`;
+  $('#md-grid').innerHTML = m.items.map((it, i) => `<button class="ct md" data-i="${i}">
+    <div class="ct-pic">${it.image ? `<img loading="lazy" alt="" src="${esc(it.image)}" data-full="${esc(it.image_full || '')}" onerror="if (this.dataset.full && this.src !== this.dataset.full) this.src = this.dataset.full">` : ''}<span class="md-n">${i + 1}</span>
+      <span class="md-site ${esc(it.site)}">${esc(it.site)}</span></div>
+    <b>${esc(it.name)}</b><small>${_k(it.downloads)} downloads · ${_k(it.likes)} likes${it.can_download ? '' : ' · opens the page'}</small></button>`).join('');
+  const p = $('#models'); p.hidden = false; requestAnimationFrame(() => p.classList.add('on'));
+}
+const _k = n => n >= 1000 ? (n / 1000).toFixed(1).replace('.0', '') + 'k' : String(n || 0);
+function closeModels() { const p = $('#models'); p.classList.remove('on'); setTimeout(() => { p.hidden = true; }, 280); }
+$('#md-close').addEventListener('click', closeModels);
+$('#md-grid').addEventListener('click', async e => {
+  const t = e.target.closest('.md'); if (!t) return;
+  const it = mdItems[+t.dataset.i];
+  if (!await confirmBox(it.can_download ? `Get “${it.name}” from ${it.site}? You’ll see its size and shape first.` : `“${it.name}” is on MakerWorld (needs your Bambu login). Open its page on the laptop?`, t, {yes: it.can_download ? 'Get it' : 'Open'})) return;
+  if (it.can_download) cardLoading(t);  // the bat fills on the card while Batsy fetches and measures it
+  try {
+    const r = await api('/api/models', {i: +t.dataset.i}, 20000);
+    if (!it.can_download) { toast(r.say); closeModels(); }
+  } catch (err) { toast(err.message); cardDone(false); }
+});
+
+// the filling bat, on the tapped card: rises while the model is fetched (no exact progress: fast, then slower)
+let loadingCard = null;
+function cardLoading(card) {
+  cardDone(false);
+  const bat = $('#viewer-load .fillbat').cloneNode(true);
+  bat.querySelector('clipPath').id = 'cardclip';
+  bat.querySelector('[clip-path]').setAttribute('clip-path', 'url(#cardclip)');
+  const lvl = bat.querySelector('#vlevel'); lvl.removeAttribute('id');
+  const box = document.createElement('div');
+  box.className = 'card-load';
+  box.append(bat);
+  box.insertAdjacentHTML('beforeend', '<small>Getting the model…</small>');
+  card.querySelector('.ct-pic').append(box);
+  card.classList.add('loading');
+  const fill = f => { lvl.style.transform = `translateY(${(1 - Math.min(1, f)) * 12 - 3}px)`; };
+  const t0 = Date.now();
+  fill(0.05);
+  loadingCard = {card, box, fill, tick: setInterval(() => fill(0.9 * (1 - Math.exp(-(Date.now() - t0) / 3000))), 200)};
+}
+function cardDone(ok) {
+  const l = loadingCard; if (!l) return;
+  loadingCard = null; clearInterval(l.tick);
+  if (ok) { l.fill(1); l.box.querySelector('small').textContent = 'Ready'; }
+  setTimeout(() => { l.box.remove(); l.card.classList.remove('loading'); }, ok ? 500 : 0);
+}
+
+// a picked model, before slicing: its size, whether it fits the bed, and its outline
+function takePreview(p) {
+  if (!p || !p.t) return;
+  const box = $('#mpv');
+  if (p.state !== 'asking') { if (!box.hidden && box.dataset.t == p.t) closePreview(); return; }
+  if (box.dataset.t == p.t) return;
+  box.dataset.t = p.t;
+  const i = p.info || {};
+  if (loadingCard) { cardDone(true); setTimeout(() => takePreviewNow(p, i), 550); } else takePreviewNow(p, i);
+}
+function takePreviewNow(p, i) {
+  closeModels();
+  const box = $('#mpv');
+  // the model itself, to turn around (with its own filling bat while it downloads)
+  $('#mpv-3d').src = `/app/model.html?src=${encodeURIComponent(p.mesh || '')}&x=${i.x}&y=${i.y}&z=${i.z}`;
+  $('#mpv-site').textContent = p.site;
+  $('#mpv-name').textContent = p.name;
+  $('#mpv-rows').innerHTML = [
+    ['Size', `${i.x} × ${i.y} × ${i.z} mm`], ['Bed', i.fits ? 'fits ✓' : 'too big ✗'],
+    ['Volume', i.cm3 ? `${i.cm3} cm³` : '–'], ['Parts', i.parts || 1]]
+    .map(([k, v]) => `<div><small>${k}</small><b class="${k === 'Bed' ? (i.fits ? 'ok' : 'bad') : ''}">${esc(String(v))}</b></div>`).join('');
+  box.hidden = false; requestAnimationFrame(() => box.classList.add('on'));
+}
+function closePreview() {
+  const b = $('#mpv'); b.classList.remove('on');
+  setTimeout(() => { b.hidden = true; $('#mpv-3d').src = 'about:blank'; }, 300);  // (stops the 3D view)
+}
+['slice', 'skip'].forEach(act => $('#mpv-' + act).addEventListener('click', async () => {
+  closePreview();
+  try { toast((await api('/api/models', {action: act}, 20000)).say); } catch (err) { toast(err.message); }
+}));
+
 // --- the phone's microphone: hold to talk, or let the phone be Batsy's ears for a while ------------------------------
 // Audio goes to the laptop (Whisper there turns it into words; Batsy handles it like anything you'd say); Batsy
 // answers out loud from the laptop, and as text here. The phone is only the microphone.
@@ -323,30 +408,38 @@ function answered(d) {
   mic.mute = true;
   setTimeout(() => { mic.mute = false; }, Math.min(15000, 1500 + 70 * (d.say || '').length));
 }
-// hold to talk
-const micBtn = $('#b-mic');
-micBtn.addEventListener('click', e => e.stopPropagation());
-micBtn.addEventListener('pointerdown', async e => {
-  e.stopPropagation(); e.preventDefault();
-  unlockAudio();
-  micBtn.setPointerCapture && micBtn.setPointerCapture(e.pointerId);
-  micBtn.dataset.down = '1';
-  try { await micStream(); } catch (err) { micBtn.dataset.down = ''; return toast(err.message); }
-  if (!micBtn.dataset.down) return;  // let go while the permission prompt was up
-  startRec(); micBtn.classList.add('rec'); chime(true);
-  $('#b-said').textContent = 'Listening… let go when you’re done';
-});
-['pointerup', 'pointercancel'].forEach(ev => micBtn.addEventListener(ev, async e => {
-  e.stopPropagation();
-  micBtn.dataset.down = '';
-  if (!mic.rec) return;
-  micBtn.classList.remove('rec');
-  const got = await stopRec();
-  if (!got || got.ms < 400) { $('#b-said').textContent = 'Hold the mic while you talk.'; return; }
-  $('#b-said').textContent = 'Thinking…'; micBtn.classList.add('wait');
-  try { answered(await sendVoice(got.blob, 'ptt')); } catch (err) { toast(err.message); }
-  micBtn.classList.remove('wait');
-}));
+// hold to talk: the button in the Batsy widget, and the big round one that floats over every screen
+function holdToTalk(btn) {
+  const status = t => { $('#b-said').textContent = t; $('#fab-said').textContent = t; };
+  btn.addEventListener('click', e => e.stopPropagation());
+  btn.addEventListener('contextmenu', e => e.preventDefault());
+  btn.addEventListener('pointerdown', async e => {
+    e.stopPropagation(); e.preventDefault();
+    unlockAudio();
+    btn.setPointerCapture && btn.setPointerCapture(e.pointerId);
+    btn.dataset.down = '1';
+    try { await micStream(); } catch (err) { btn.dataset.down = ''; return toast(err.message); }
+    if (!btn.dataset.down) return;  // let go while the permission prompt was up
+    if (mic.ears) mic.mute = true;  // ears mode: this recording, not that one
+    startRec(); btn.classList.add('rec'); document.body.classList.add('ptt'); chime(true);
+    status('Listening… let go when you’re done');
+  });
+  ['pointerup', 'pointercancel'].forEach(ev => btn.addEventListener(ev, async e => {
+    e.stopPropagation();
+    btn.dataset.down = '';
+    if (!mic.rec || !btn.classList.contains('rec')) return;
+    btn.classList.remove('rec');
+    const got = await stopRec();
+    if (!got || got.ms < 400) { status('Hold the mic while you talk.'); setTimeout(() => document.body.classList.remove('ptt'), 1200); return; }
+    status('Thinking…'); btn.classList.add('wait');
+    try { answered(await sendVoice(got.blob, 'ptt')); } catch (err) { toast(err.message); }
+    btn.classList.remove('wait');
+    $('#fab-said').textContent = $('#b-said').textContent;  // the answer, under the big mic for a moment
+    setTimeout(() => document.body.classList.remove('ptt'), 4000);
+  }));
+}
+holdToTalk($('#b-mic'));
+holdToTalk($('#fab-mic'));
 
 // the phone as Batsy's ears: it listens for "Batsy" (the laptop's mic stands down meanwhile)
 async function earsOn() {
@@ -1285,6 +1378,8 @@ async function refresh() {
     const s = await api('/api/status');
     drawBatsy(s.batsy || {}); drawClaude(s.claude); drawMachines(s.machines || []); drawMusic(s.spotify);
     takeEvents(s.events);
+    takeModels(s.models);
+    takePreview(s.model_preview);
     if (Date.now() - (window.prAt || 0) > 9000) { window.prAt = Date.now(); loadPrinter(s); } else drawPrinter(s.printer);
   } catch (e) {
     if (String(e.message).startsWith('Not paired')) toast(e.message);

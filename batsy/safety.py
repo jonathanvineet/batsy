@@ -27,6 +27,20 @@ def danger_reason(command: str) -> str | None:
     return None
 
 
+NO_WORDS = ("no", "nope", "nah", "don't", "dont", "cancel", "stop", "negative", "abort", "skip", "later")
+
+
+def answer(text: str) -> bool | None:
+    """True for a clear yes, False for a clear no, None when it's neither (background talk, a mishearing)."""
+    words = re.findall(r"[a-z']+", text.lower())
+    if any(w in NO_WORDS for w in words) or "not now" in " ".join(words):
+        return False
+    if any(w in ("yes", "yeah", "yep", "yup", "sure", "confirm", "confirmed", "do", "go", "proceed", "affirmative", "ok",
+                 "okay", "please") for w in words):
+        return True
+    return None
+
+
 def is_yes(answer: str) -> bool:
     words = re.findall(r"[a-z']+", answer.lower())
     if any(w in ("no", "nope", "don't", "dont", "cancel", "stop", "negative", "abort") for w in words):

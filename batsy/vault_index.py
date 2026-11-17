@@ -196,6 +196,6 @@ def start(app) -> None:
                 reindex()
             except Exception:
                 log.exception("vault index")
-            time.sleep(20)
+            time.sleep(60)  # (a search reindexes first anyway, so answers are never stale)
 
     threading.Thread(target=loop, daemon=True, name="vault-index").start()

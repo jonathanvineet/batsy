@@ -127,8 +127,8 @@ def temperature_tower(hi: int = 220, lo: int = 190, process: str | None = None) 
     from batsy import preview
 
     title = f"Temperature tower {temps[0]} → {temps[-1]} °C"
-    r["preview"] = str(preview.render(Path(r["gcode"]), Path(r["gcode"]).with_suffix(".png"), title, marks))
-    r["paths"] = str(preview.export(Path(r["gcode"]), Path(r["gcode"]).with_suffix(".paths.json"), title, marks))
+    png, paths = preview.both(Path(r["gcode"]), title, marks)  # (drawn in its own process)
+    r["preview"], r["paths"] = str(png), str(paths)
     r["name"] = title
     r.update(temps=temps, marks=marks, model=str(model))
     return r

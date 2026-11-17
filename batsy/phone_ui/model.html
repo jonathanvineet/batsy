@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Model preview</title>
+<style>
+  :root { --bg: #0b0c0f; --text: #f2ede2; --muted: #8d95a5; --signal: #ffc20e; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text); font: 15px/1.3 system-ui, Roboto, sans-serif;
+    overflow: hidden; user-select: none; }
+  canvas { display: block; touch-action: none; }
+  .dims { position: fixed; left: 12px; bottom: 10px; color: var(--muted); font-size: 13px; pointer-events: none; }
+  .dims b { color: var(--text); }
+  .msg { position: fixed; inset: 0; display: grid; place-content: center; justify-items: center; gap: 14px; color: var(--muted);
+    text-align: center; padding: 24px; }
+  .fillbat { width: min(220px, 56vw); height: auto; overflow: visible; filter: drop-shadow(0 0 18px rgba(255, 194, 14, .25)); }
+  #level { transition: transform .35s ease-out; }
+  .wave { fill: var(--signal); }
+  .wave.back { opacity: .45; animation: wave 2.6s linear infinite reverse; }
+  .wave.front { animation: wave 1.8s linear infinite; }
+  @keyframes wave { from { transform: translateX(0); } to { transform: translateX(12px); } }
+  .msg b { color: var(--text); font-size: 17px; }
+  .msg small { font-variant-numeric: tabular-nums; }
+</style>
+<script type="importmap">{"imports": {"three": "/app/vendor/three.module.min.js"}}</script>
+</head>
+<body>
+<div class="dims" id="dims"></div>
+<div class="msg" id="msg">
+  <svg class="fillbat" viewBox="0 4 24 14" aria-hidden="true">
+    <defs><clipPath id="batclip"><path d="M12,15.6c-0.4,-1.3 -1.2,-2.1 -2.4,-2.2c-0.6,-1.5 -2.1,-2.3 -3.9,-1.9c0.5,-1.2 0.2,-2.6 -0.8,-3.6C3.3,8.6 1.9,9.9 1,11.6c1.5,-0.4 2.8,0 3.6,1.1c1.3,-0.5 2.8,0 3.4,1.3c1.4,0 2.6,0.8 3,2.2l0.5,0.6l0.5,-0.6c0.4,-1.4 1.6,-2.2 3,-2.2c0.6,-1.3 2.1,-1.8 3.4,-1.3c0.8,-1.1 2.1,-1.5 3.6,-1.1c-0.9,-1.7 -2.3,-3 -4.1,-3.7c-1,1 -1.3,2.4 -0.8,3.6c-1.8,-0.4 -3.3,0.4 -3.9,1.9c-0.4,0 -0.8,0.1 -1.1,0.3l-0.2,-1.3l-0.5,0.6l-0.5,-0.6l-0.2,1.3C12.8,13.5 12.4,13.4 12,13.4z"/></clipPath></defs>
+    <path d="M12,15.6c-0.4,-1.3 -1.2,-2.1 -2.4,-2.2c-0.6,-1.5 -2.1,-2.3 -3.9,-1.9c0.5,-1.2 0.2,-2.6 -0.8,-3.6C3.3,8.6 1.9,9.9 1,11.6c1.5,-0.4 2.8,0 3.6,1.1c1.3,-0.5 2.8,0 3.4,1.3c1.4,0 2.6,0.8 3,2.2l0.5,0.6l0.5,-0.6c0.4,-1.4 1.6,-2.2 3,-2.2c0.6,-1.3 2.1,-1.8 3.4,-1.3c0.8,-1.1 2.1,-1.5 3.6,-1.1c-0.9,-1.7 -2.3,-3 -4.1,-3.7c-1,1 -1.3,2.4 -0.8,3.6c-1.8,-0.4 -3.3,0.4 -3.9,1.9c-0.4,0 -0.8,0.1 -1.1,0.3l-0.2,-1.3l-0.5,0.6l-0.5,-0.6l-0.2,1.3C12.8,13.5 12.4,13.4 12,13.4z" fill="rgba(255,255,255,.10)"/>
+    <g clip-path="url(#batclip)">
+      <g id="level" style="transform: translateY(12px)">
+        <path class="wave back" d="M-24 9 Q -21 8 -18 9 T -12 9 T -6 9 T 0 9 T 6 9 T 12 9 T 18 9 T 24 9 T 30 9 T 36 9 T 42 9 T 48 9 V 30 H -24 Z"/>
+        <path class="wave front" d="M-24 9 Q -21 10 -18 9 T -12 9 T -6 9 T 0 9 T 6 9 T 12 9 T 18 9 T 24 9 T 30 9 T 36 9 T 42 9 T 48 9 V 30 H -24 Z"/>
+      </g>
+    </g>
+  </svg>
+  <b id="msg-t">Getting the model</b>
+  <small id="msg-n">connecting…</small>
+</div>
+<script type="module">
+// A model to print, before slicing: drag to turn it, pinch to zoom. It stands on an outline of the 220 x 220 mm bed.
+import * as THREE from 'three';
+import {OrbitControls} from '/app/vendor/OrbitControls.js';
+import {STLLoader} from '/app/vendor/STLLoader.js';
+
+const q = new URLSearchParams(location.search), $ = s => document.querySelector(s);
+const fill = f => { $('#level').style.transform = `translateY(${(1 - Math.min(1, f)) * 12 - 3}px)`; };
+fill(0.04);
+if (q.get('x')) $('#dims').innerHTML = `<b>${q.get('x')} × ${q.get('y')} × ${q.get('z')} mm</b> · on a 220 × 220 bed`;
+
+// the file, with the bat filling as it arrives
+const res = await fetch(q.get('src'));
+if (!res.ok) { $('#msg-t').textContent = 'Couldn’t get the model.'; $('#msg-n').textContent = ''; throw 0; }
+const total = +res.headers.get('Content-Length') || 0, parts = [];
+let got = 0;
+for (const reader = res.body.getReader();;) {
+  const {done, value} = await reader.read();
+  if (done) break;
+  parts.push(value); got += value.length;
+  fill(total ? got / total : Math.min(.9, got / 4e6));
+  $('#msg-n').textContent = total ? `${Math.round(100 * got / total)}% · ${(got / 1e6).toFixed(1)} of ${(total / 1e6).toFixed(1)} MB` : `${(got / 1e6).toFixed(1)} MB`;
+}
+fill(1); $('#msg-t').textContent = 'Building the 3D view'; $('#msg-n').textContent = '';
+await new Promise(r => setTimeout(r, 60));
+const buf = new Uint8Array(got); { let o = 0; for (const p of parts) { buf.set(p, o); o += p.length; } }
+const geo = new STLLoader().parse(buf.buffer);
+geo.computeBoundingBox();
+const bb = geo.boundingBox, size = new THREE.Vector3(); bb.getSize(size);
+geo.translate(-(bb.min.x + bb.max.x) / 2, -(bb.min.y + bb.max.y) / 2, -bb.min.z);  // centred, standing on the bed
+geo.rotateX(-Math.PI / 2);  // the printer's Z is up
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x0b0c0f);
+const renderer = new THREE.WebGLRenderer({antialias: true});
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+document.body.appendChild(renderer.domElement);
+scene.add(new THREE.HemisphereLight(0xffffff, 0x222233, 1.6));
+const sun = new THREE.DirectionalLight(0xffffff, 1.8); sun.position.set(1, 2, 1.5); scene.add(sun);
+const body = new THREE.Mesh(geo, new THREE.MeshStandardMaterial({color: 0x2a2d35, roughness: .55, metalness: .1,
+  flatShading: true, polygonOffset: true, polygonOffsetFactor: 1, polygonOffsetUnits: 1}));
+scene.add(body);
+const edges = new THREE.LineSegments(new THREE.EdgesGeometry(geo, 28), new THREE.LineBasicMaterial({color: 0xffc20e}));
+scene.add(edges);  // the outline: its sharp edges in Batsy yellow
+const bed = new THREE.LineSegments(new THREE.EdgesGeometry(new THREE.PlaneGeometry(220, 220).rotateX(-Math.PI / 2)),
+  new THREE.LineBasicMaterial({color: 0x8d95a5, transparent: true, opacity: .5}));
+scene.add(bed);
+const grid = new THREE.GridHelper(220, 11, 0x3a3f4a, 0x22262e); grid.position.y = -0.05; scene.add(grid);
+
+const span = Math.max(size.x, size.y, size.z, 60);
+const camera = new THREE.PerspectiveCamera(40, 1, 1, 5000);
+camera.position.set(span * 1.3, span * 1.05, span * 1.5);
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.target.set(0, size.z / 2, 0); controls.enableDamping = true; controls.autoRotate = true; controls.autoRotateSpeed = 1.6;
+controls.addEventListener('start', () => { controls.autoRotate = false; });
+function resize() { renderer.setSize(innerWidth, innerHeight); camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix(); }
+addEventListener('resize', resize); resize();
+$('#msg').remove();
+renderer.setAnimationLoop(() => { controls.update(); renderer.render(scene, camera); });
+</script>
+</body>
+</html>

@@ -432,8 +432,8 @@ def slice_model(model: Path, process: str | None = None, overrides: dict | None 
         from batsy import preview
 
         title = f"{model.stem.replace('_', ' ')} · {result['process']}"
-        result["preview"] = str(preview.render(dest, dest.with_suffix(".png"), title))
-        result["paths"] = str(preview.export(dest, dest.with_suffix(".paths.json"), title))
+        png, paths = preview.both(dest, title)  # (drawn in its own process)
+        result["preview"], result["paths"] = str(png), str(paths)
         result["name"] = model.stem.replace("_", " ")
     except Exception as e:
         log.warning("slicer: no preview (%s)", e)

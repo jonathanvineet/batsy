@@ -223,12 +223,15 @@ class Batsy:
         req = getattr(self, "confirm_request", None)
         if not req or req["done"].is_set():
             return False
+        if req.get("parked") and safety.answer(text) is None:
+            return False  # a question still waiting, but this isn't a yes or a no: it's a new request
         req["typed_answer"] = text
         if self.ears is not None:
             self.ears.cancel.set()  # stop listening for a spoken answer: this one counts
-        if not req.get("asking"):  # not being asked out loud yet: answer straight away
-            req["answer"] = safety.is_yes(text)
+        if not req.get("asking"):  # not being asked out loud yet (or asked and waiting): answer straight away
+            req["answer"] = bool(safety.answer(text))
             req["done"].set()
+            self.confirm_request = None
         return True
 
     def _typed(self, text: str) -> None:
@@ -566,6 +569,8 @@ class Batsy:
         ) if any(w in low for w in words)), ("batsy", "Batsy"))
         if question:
             kind, title = "ask", "Batsy asks"
+        elif re.match(r"I found \d+ .* models\.", text):
+            return  # a model search: the phone shows the cards themselves, not this sentence
         self.events = (self.events + [{"id": (self.events[-1]["id"] + 1) if self.events else int(time.time()),
                                        "t": time.time(), "kind": kind, "title": title, "text": text}])[-20:]
 
@@ -617,14 +622,24 @@ class Batsy:
     def _serve_voice_confirm(self) -> None:
         req = self.confirm_request
         req["asking"] = True
-        self.speaker.say(req["question"] + " Say yes or no.")
-        self.speaker.wait_idle()
-        self.ears.drain()
-        audio = self.ears.record_utterance(start_timeout=8)
-        typed = req.get("typed_answer")  # answered on the keyboard / phone while Batsy was listening
-        answer = typed if typed is not None else (self.stt.transcribe(audio) if audio is not None else "")
-        req["answer"] = safety.is_yes(answer)
-        if not req["answer"]:
+        said = None
+        for prompt in (req["question"] + " Say yes or no.", "Sorry, was that a yes or a no?"):
+            self.speaker.say(prompt)
+            self.speaker.wait_idle()
+            self.ears.drain()
+            audio = self.ears.record_utterance(start_timeout=8)
+            typed = req.get("typed_answer")  # answered on the keyboard / phone while Batsy was listening
+            heard = typed if typed is not None else (self.stt.transcribe(audio) if audio is not None else "")
+            said = safety.answer(heard)
+            if said is not None or typed is not None or not heard.strip():
+                break  # a clear answer, or silence (no point asking again)
+            log.info("not a yes or a no: %r", heard)
+        if said is None:  # background talk or silence: never decide for you; the question stays open a while
+            req["asking"], req["parked"] = False, True  # (typed / tapped on the phone, it's answered at once)
+            self.speaker.say("I'll wait. Answer on the phone, or just say yes.")
+            return
+        req["answer"] = said
+        if not said:
             self.speaker.say("Okay, I won't.")
         req["done"].set()
         self.confirm_request = None
@@ -729,6 +744,11 @@ class Batsy:
     def _local_command(self, text: str) -> bool:
         from batsy.tools import screen
 
+        req = getattr(self, "confirm_request", None)
+        if req and req.get("parked") and self.answer_pending(text):  # "Batsy, yes": the question that was waiting
+            self._reply("Okay." if req["answer"] else "Okay, I won't.")
+            return True
+
         n = _strip_fillers(_norm(text))
         self.last_raw_text = text.strip()
         if n in STOP_WORDS:
@@ -739,6 +759,13 @@ class Batsy:
         from batsy import vault_talk
 
         said = vault_talk.handle(self, n, text)  # the brain: "note that…", "what did I do yesterday", "open my brain"
+        if said:
+            self._route = "instant"
+            self._reply(said)
+            return True
+        from batsy import printsearch
+
+        said = printsearch.handle(self, n)  # "find me a phone stand to print", then "the second one"
         if said:
             self._route = "instant"
             self._reply(said)
@@ -984,7 +1011,8 @@ class Batsy:
             try:
                 self._typed_turn = False
                 req = getattr(self, "confirm_request", None)
-                if req and not req["done"].is_set() and not req.get("asking"):  # a background job asks yes / no
+                if req and not req["done"].is_set() and not req.get("asking") and not req.get("parked"):  # a background
+                    # job asks yes / no (a parked one already asked: it waits for a typed / tapped / spoken yes)
                     req["asking"] = True
                     self._serve_voice_confirm()
                     continue

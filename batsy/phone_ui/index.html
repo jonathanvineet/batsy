@@ -164,6 +164,24 @@
 <div class="editbar" id="editbar" hidden>
   <button id="ed-reset">Reset</button><button id="ed-add">＋ Add widgets</button><button id="ed-done">Done</button>
 </div>
+<div class="cloud models" id="models" hidden>
+  <header><button id="md-close" aria-label="Close">✕</button>
+    <div class="cl-title"><b id="md-title">Models</b><small>Tap one: see its size and shape, then slice it</small></div></header>
+  <div class="cgrid big md-grid" id="md-grid"></div>
+</div>
+<div class="mpv" id="mpv" hidden>
+  <div class="mpv-card">
+    <iframe id="mpv-3d" title="The model in 3D"></iframe>
+    <div class="mpv-side">
+      <small id="mpv-site"></small><b id="mpv-name"></b>
+      <div class="mpv-rows" id="mpv-rows"></div>
+      <div class="mpv-btns"><button id="mpv-skip">Not now</button><button id="mpv-slice">Slice it</button></div>
+    </div>
+  </div>
+</div>
+<!-- push to talk, on every screen -->
+<div class="fab-said" id="fab-said"></div>
+<button class="fab-mic" id="fab-mic" aria-label="Hold to talk to Batsy"><svg viewBox="0 0 24 24"><path fill="currentColor" d="M12 14a3 3 0 0 0 3-3V5a3 3 0 0 0-6 0v6a3 3 0 0 0 3 3zm5-3a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.92V21h2v-3.08A7 7 0 0 0 19 11z"/></svg></button>
 <div class="takeover" id="takeover" hidden>
   <div class="to-glow" id="to-glow"></div>
   <div class="to-main">

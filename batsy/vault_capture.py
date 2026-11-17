@@ -293,6 +293,19 @@ def task_logged(title: str, kind: str, status: str, note: str = "") -> None:
 
 
 @_bg
+def model_picked(item: dict) -> None:
+    """A model chosen from Printables / MakerWorld / Thingiverse: its card (photo, link, popularity)."""
+    p = vault.path("models", item["name"])
+    vault.create(p, vault.frontmatter(type="model", site=item["site"], url=item["url"], by=item.get("by", ""),
+                                      likes=item.get("likes", 0), downloads=item.get("downloads", 0),
+                                      picked=dt.date.today().isoformat(), tags=["model", "3d-printing"]) +
+                 f"# {item['name']}\n[{item['site']}]({item['url']}) · by {item.get('by') or '?'} · "
+                 f"[[3D Printing]]\n\n" + (f"![]({item['image']})\n\n" if item.get("image") else "") +
+                 "## Prints\n- \n\n## Notes\n- \n")
+    _timeline(f"🧩 Picked {vault.link(p.stem)} from {item['site']}")
+
+
+@_bg
 def shopping(query: str, summary: str, report: str = "") -> None:
     p = vault.path("shopping", query.capitalize())
     head = vault.frontmatter(type="shopping", query=query, date=dt.date.today().isoformat(), tags=["shopping"])

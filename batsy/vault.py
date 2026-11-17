@@ -32,7 +32,7 @@ log = logging.getLogger("batsy.vault")
 
 ROOT = WORKSPACE / "Brain"
 DIRS = {"inbox": "00 Inbox", "daily": "01 Daily", "projects": "02 Projects", "areas": "03 Areas",
-        "files": "04 Resources/Files", "prints": "04 Resources/Prints", "shopping": "04 Resources/Shopping",
+        "files": "04 Resources/Files", "prints": "04 Resources/Prints", "models": "04 Resources/Models", "shopping": "04 Resources/Shopping",
         "people": "05 People", "memory": "06 Memory", "archive": "07 Archive", "weekly": "01 Daily/Weekly",
         "templates": "Batsy/Templates", "bases": "Batsy/Bases", "attachments": "_attachments"}
 DAY_STARTS_AT = 5  # until 5 AM it's still "last night" (same as routines.day_starts_at)

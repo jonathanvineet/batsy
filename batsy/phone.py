@@ -228,6 +228,15 @@ class Hub:
         out = {"t": int(time.time()), "machines": [self._laptop()], "claude": self._claude(),
                "spotify": self._spotify(), "batsy": self._batsy(),
                "events": [e for e in getattr(self.app, "events", []) if time.time() - e["t"] < 600][-5:]}
+        mp = getattr(self.app, "model_preview", None)
+        if mp and time.time() - mp["t"] < 900:  # a picked model's size + outline, before slicing
+            out["model_preview"] = {"t": mp["t"], "name": mp["item"]["name"], "site": mp["item"]["site"],
+                                    "url": mp["item"]["url"], "info": mp["info"], "state": mp["state"],
+                                    "image": f"/api/models/preview?k={self.thumb_key()}&t={int(mp['t'])}",
+                                    "mesh": f"/api/models/mesh?k={self.thumb_key()}&t={int(mp['t'])}"}
+        ms = getattr(self.app, "model_results", None)
+        if ms and ms.get("t") and time.time() - ms["t"] < 600:  # a model search: the phone shows the cards
+            out["models"] = {"q": ms["q"], "t": ms["t"], "items": ms["items"]}
         pr = getattr(self.app, "printer3d", None)
         if pr is not None:
             out["printer"] = pr.snapshot()
@@ -830,6 +839,23 @@ def _handler(hub: Hub):
                     self.end_headers()
                     self.wfile.write(jpg)
                     return
+            if self.path.startswith("/api/models/mesh"):  # the picked model, as a light STL for the phone's 3D view
+                from urllib.parse import parse_qs, urlparse
+
+                q = {k: v[0] for k, v in parse_qs(urlparse(self.path).query).items()}
+                mp = getattr(hub.app, "model_preview", None)
+                mesh = Path((mp or {}).get("info", {}).get("mesh") or "")
+                if not mp or not secrets.compare_digest(q.get("k", ""), hub.thumb_key()) or not mesh.is_file():
+                    return self._send(404, {"error": "no model"})
+                return self._send(200, body=mesh.read_bytes(), ctype="model/stl")
+            if self.path.startswith("/api/models/preview"):  # the picked model's outline picture: <img>, so by key
+                from urllib.parse import parse_qs, urlparse
+
+                q = {k: v[0] for k, v in parse_qs(urlparse(self.path).query).items()}
+                mp = getattr(hub.app, "model_preview", None)
+                if not mp or not secrets.compare_digest(q.get("k", ""), hub.thumb_key()):
+                    return self._send(404, {"error": "no preview"})
+                return self._send(200, body=Path(mp["image"]).read_bytes(), ctype="image/png")
             if self.path.startswith("/api/brain/file"):  # a picture in a note (print previews): <img>, so by key
                 from urllib.parse import parse_qs, urlparse
                 import mimetypes
@@ -969,6 +995,26 @@ def _handler(hub: Hub):
                     return self._send(200, hub.printer_action(body))
                 if self.path == "/api/files":
                     return self._send(200, hub.file_action(body))
+                if self.path == "/api/models":  # a model picked on the phone (from the last search)
+                    from batsy import printsearch
+
+                    if body.get("action") in ("slice", "skip"):  # the buttons under a model's preview
+                        from batsy import printsearch
+
+                        yes = body["action"] == "slice"
+                        if hub.app.confirm_request is not None:  # Batsy is asking "want me to slice it?": answer it
+                            hub.app.answer_pending("yes" if yes else "no")
+                            return self._send(200, {"ok": True, "say": "Slicing it." if yes else "Okay."})
+                        return self._send(200, {"ok": True, "say": printsearch.slice_it(hub.app) if yes else "Okay."})
+                    ms = getattr(hub.app, "model_results", None) or {}
+                    items = ms.get("items") or []
+                    i = int(body.get("i", -1))
+                    if not 0 <= i < len(items):
+                        return self._send(400, {"ok": False, "say": "That search has expired."})
+                    ms["t"] = 0
+                    said = printsearch.pick(hub.app, items[i])
+                    hub.app._reply(said)
+                    return self._send(200, {"ok": True, "say": said})
                 if self.path == "/api/brain":  # a note from the phone: the brain's inbox
                     text = str(body.get("text", "")).strip()
                     if not text:

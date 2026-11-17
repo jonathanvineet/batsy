@@ -3,6 +3,7 @@
 Only extruding moves are drawn (travel is left out), coloured by height, or by temperature band for a temperature
 tower, with labels. Rendered with matplotlib off-screen to a PNG that Batsy shows on its screen and in the app.
 """
+import json
 import re
 from pathlib import Path
 
@@ -110,3 +111,27 @@ def export(gcode: Path, out: Path, title: str = "", bands: list[tuple[float, int
                                "bands": [{"z": z, "temp": t} for z, t in (bands or [])],
                                "pos": base64.b64encode(a.tobytes()).decode()}))
     return out
+
+
+def both(gcode: Path, title: str = "", bands: list[tuple[float, int]] | None = None) -> tuple[Path, Path]:
+    """The picture and the 3D paths, drawn in a short-lived process: matplotlib and the parsed G-code (hundreds of
+    MB for a big print) go away with it instead of staying in Batsy's memory for good."""
+    import subprocess
+    import sys
+
+    png, paths_json = gcode.with_suffix(".png"), gcode.with_suffix(".paths.json")
+    r = subprocess.run([sys.executable, "-m", "batsy.preview", str(gcode), title, json.dumps(bands or [])],
+                       capture_output=True, text=True, timeout=300)
+    if r.returncode or not png.exists():
+        raise RuntimeError(r.stderr.strip()[-300:] or "the preview failed")
+    return png, paths_json
+
+
+if __name__ == "__main__":
+    import sys
+
+    g, t = Path(sys.argv[1]), sys.argv[2]
+    b = [tuple(x) for x in json.loads(sys.argv[3])] if len(sys.argv) > 3 else None
+    render(g, g.with_suffix(".png"), t, b)
+    export(g, g.with_suffix(".paths.json"), t, b)
+
