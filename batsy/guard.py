@@ -31,6 +31,10 @@ def check(call: dict) -> str | None:
     if call.get("tool_name") != "Bash":
         return None
     command = str((call.get("tool_input") or {}).get("command", ""))
+    if re.search(r"\bgit\b.*\b(?:commit|tag)\b", command, re.S) and \
+            re.search(r"co-authored-by:[^\n]*(?:claude|anthropic)|generated with \[?claude", command, re.I):
+        return ("Jonathan never wants Claude credited in his commits. Remove the Co-Authored-By / 'Generated with "
+                "Claude Code' lines from the message and commit again.")
     if re.search(r"(^|[;&|]\s*)sudo\b", command):
         return ("sudo can't prompt for a password here. Use pkexec instead (it shows the user a GNOME password "
                 "dialog), e.g. pkexec dnf install -y PACKAGE.")

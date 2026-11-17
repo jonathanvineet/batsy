@@ -245,6 +245,8 @@ class Batsy:
             log.info("typed answer: %s", text)
             return
         log.info("typed: %s", text)
+        if self.turn_lock.locked():
+            self._reply("Got it, right after this one.")  # (it was silently queued before)
         self.typed.put(text)
         abort = getattr(self, "_turn_abort", None)
         if abort is not None and getattr(self, "_turn_source", "") == "voice" and not abort.is_set():
@@ -697,7 +699,10 @@ class Batsy:
                 from batsy import vault_capture
 
                 vault_capture.exchange(text, reply, route, source)
-            if route in ("quick", "full", "claude") and secs > 6 and not abort.is_set():
+            from batsy.local_brain import ONE_OFF
+
+            if route in ("quick", "full", "claude") and secs > 6 and not abort.is_set() and not ONE_OFF.search(text) \
+                    and not (reply or "").lower().startswith(("sorry", "one moment")):
                 self.automator.learn_soon(text, n)  # slow once is enough: have Claude make it instant
             plain = not [a for a in getattr(self.brain, "last_actions", []) if a != "answered by Claude"]
             if route in ("quick", "claude") and plain and not abort.is_set():

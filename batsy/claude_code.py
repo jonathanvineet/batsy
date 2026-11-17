@@ -115,7 +115,9 @@ def settings() -> str:
     """Claude Code settings for every Batsy call: a guard that voice-confirms risky shell commands."""
     guard = f"{shlex.quote(sys.executable)} -m batsy.guard"
     return json.dumps({"hooks": {"PreToolUse": [{"matcher": "Bash", "hooks": [{"type": "command", "command": guard,
-                                                                                 "timeout": 120}]}]}})
+                                                                                 "timeout": 120}]}]},
+                       # commits and PRs are Jonathan's: no "Co-Authored-By: Claude" / "Generated with Claude Code"
+                       "includeCoAuthoredBy": False, "attribution": {"commit": "", "pr": ""}})
 
 
 _running: dict[subprocess.Popen, str] = {}  # live `claude` processes -> the thread that started them

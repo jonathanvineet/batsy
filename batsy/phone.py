@@ -374,6 +374,8 @@ class Hub:
             if self.app.answer_pending(text):  # Batsy asked yes / no: this is the answer
                 return {"ok": True, "say": "Got it."}
             said: list[str] = []
+            if self.app.turn_lock.locked():  # Batsy is still working on the last thing: say so, don't go quiet
+                self.app.speaker.say("Got it, right after this one.")
             self.app.overlay.heard(text)
             if not self._handled_locally(text, said.append, speak=not body.get("quiet")):
                 aloud = body.get("speak")  # said into the phone's mic: answered out loud from the laptop

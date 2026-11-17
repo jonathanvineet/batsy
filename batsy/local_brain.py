@@ -78,7 +78,14 @@ COMPLEX = re.compile(
     r"solve|prove|derive|translate|strategy|optimi[sz]e|review my|in detail|detailed|research)\b"
     # your own code and projects: Claude can actually look (the small model would guess)
     r"|\b(?:my|in my|on my|from my) (?:github|git ?hub|repo|repos|repository|repositories|codebase)\b"
-    r"|\b(?:see|check|find out|look up|look into) what (?:is |are )?\w+")
+    r"|\b(?:see|check|find out|look up|look into) what (?:is |are )?\w+"
+    # git and repos: real work in the right folder (the small model ran git in the wrong place and gave up)
+    r"|\b(?:git|commit|commits|push|pushed|pull request|rebase|amend|stage|unstage|co-?authors?|branch|merge|"
+    r"revert|stash|diff)\b")
+
+# One-off jobs and questions: never turned into "skills" (a skill that force-pushes was learned from one)
+ONE_OFF = re.compile(r"\b(?:git|commit|push|github|repo|repository|amend|co-?author|see what|what is|what's|who is|"
+                     r"explain|why|how does|remember)\b", re.I)
 
 
 # Questions about what the camera or screen shows: the small model can't see, so Claude looks at one frame.
@@ -453,7 +460,9 @@ class LocalBrain:
             return self._finish(source, text, spoken, actions, abort)
 
         self.route = "claude"
-        if self.claude_ok and is_complex(text):
+        followup = time.time() - getattr(self, "last_claude_t", 0) < 180  # "not apache, the batsy folder": same job
+        if self.claude_ok and (is_complex(text) or followup):
+            self.last_claude_t = time.time()
             self._claude(text, context, emit, on_marker, on_tool, actions)
             return self._finish(source, text, spoken, actions, abort)
 
@@ -631,7 +640,9 @@ name]] for a picture, [[pull: exact name]] for a person/place/thing with its fac
 for steps, lists, numbers or code summaries. Put any code or files under {workspace} and just say where.
 Their notes are an Obsidian vault at {home}/Batsy/Brain (daily notes, projects, files, prints, people, memory): \
 search and read it when the question is about their own work or plans; when you add to it, keep the frontmatter and \
-never edit inside %% batsy:… %% blocks (Batsy owns those).
+never edit inside %% batsy:… %% blocks (Batsy owns those). \
+Git commits and pull requests you make are Jonathan's own: never add Co-Authored-By, "Generated with Claude Code" \
+or any other Claude/AI credit to them.
 {context}
 User: {request}"""
 
