@@ -110,12 +110,8 @@ def run(app, path: Path, push: bool) -> None:
         app.announce(f"Staged {n} file{'s' if n != 1 else ''} in {name}. Writing the commit message.")
         msg = message(path, app.cfg)
         first = msg.splitlines()[0].rstrip(".")
-        branch = _git(path, "rev-parse", "--abbrev-ref", "HEAD")[1] or "main"
-        q = f"Commit {n} file{'s' if n != 1 else ''} as: {first}." + (f" And push to {branch}?" if push else " Okay?")
-        if not app.ask_from_background(q):
-            _git(path, "reset", "-q")  # unstaged again: as it was
-            app.announce("Okay, I left it uncommitted.")
-            return
+        # you said commit (and push): no "are you sure?" - just say what it's called ("undo the commit" takes it back)
+        app.announce(f"Committing {n} file{'s' if n != 1 else ''} as: {first}.")
         code, out = _commit(path, msg)
         if code:
             app.announce(f"The commit failed: {out[-200:]}")
@@ -136,7 +132,23 @@ def _commit(path: Path, msg: str) -> tuple[int, str]:
     return r.returncode, (r.stdout + r.stderr).strip()
 
 
+UNDO = re.compile(PRE + r"(?:undo|revert|take back|cancel) (?:the |that |my )?(?:last )?commit(?: (?:in|on|for) " + REPO + r")?$")
+
+
+def undo(path: Path) -> str:
+    """The last commit, taken back (its changes stay in the folder) - unless it's already on GitHub."""
+    code, ahead = _git(path, "rev-list", "--count", "@{u}..HEAD")
+    if code == 0 and ahead.strip() == "0":
+        return "That commit is already pushed to GitHub, so I'll leave it."
+    code, out = _git(path, "reset", "--soft", "HEAD~1")
+    return f"Undone: the changes are back in {path.name}, uncommitted." if code == 0 else f"I couldn't undo it: {out[-120:]}"
+
+
 def handle(app, n: str) -> str | None:
+    m = UNDO.match(n)
+    if m:
+        path = find_repo(m.group("what") or "it")
+        return undo(path) if path else "Which folder?"
     m = COMMIT.match(n) or COMMIT_ALT.match(n)
     push = bool(m and (m.groupdict().get("push") or m.groupdict().get("push2") or " push" in n))
     what = m.group("what") if m else None

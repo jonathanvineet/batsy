@@ -40,8 +40,9 @@ def wants(n: str, app=None) -> bool:
     """Is this about planning a print (for the expert), rather than a plain printer command?"""
     if CONTROL.search(n) and not re.search(r"\b(?:but|faster|slower|quality|smaller|bigger|instead)\b", n):
         return False
-    if NOT_PRINT.search(n):
-        return False
+    if NOT_PRINT.search(n) or re.match(r"(?:hey |ok |so )?(?:batsy )?(?:please )?(?:remember|don'?t forget|keep in mind|"
+                                        r"note (?:that|down)|jot|write down|i(?:'m| am) (?:learning|studying))\b", n):
+        return False  # a note to keep (even about 3D design): memory and the brain, not the print expert
     if app is not None and time.time() - getattr(app, "print_asked_t", 0) < 240 and len(n.split()) <= 25 \
             and not re.match(r"(?:stop|cancel|never ?mind|forget it)\b", n):
         return True  # it just asked you something ("want three instead?"): this is the answer

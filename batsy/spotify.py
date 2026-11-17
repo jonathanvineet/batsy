@@ -517,6 +517,21 @@ class Spotify:
                         f"the album {a['name']} by {a['artists'][0]['name']}"))
         for p in [x for x in res.get("playlists", {}).get("items", []) if x][:2]:
             out.append((_score(q, p["name"]) - 0.05, {"context_uri": p["uri"]}, f"the playlist {p['name']}"))
+        # "Malare from Premam" (a song from a film): the mic hears "malary from fremont", and searching the whole phrase
+        # finds nothing. Search the song alone and with the film; rank by the song's name, plus the film's sound.
+        m = re.match(r"(?P<t>.+?) from (?:the )?(?:movie |film |album )?(?P<f>.+?)(?: movie| film| album)?$", q, re.I) \
+            if kind in ("auto", "track") else None
+        if m:
+            from rapidfuzz import fuzz
+
+            song, film = m.group("t").strip(), m.group("f").strip()
+            for sq in (f"{song} {film}", song):
+                for t in [x for x in self.search(sq, "track", 5).get("tracks", {}).get("items", []) if x]:
+                    album = (t.get("album") or {}).get("name", "")
+                    film_bonus = 0.25 * max(fuzz.partial_ratio(film.lower(), album.lower()),
+                                            fuzz.partial_ratio(film.lower(), t["name"].lower())) / 100
+                    out.append((_score(song, t["name"], t["artists"][0]["name"]) + film_bonus, {"uris": [t["uri"]]},
+                                f"{t['name']} by {t['artists'][0]['name']}"))
         # One entry per song: other releases of it ("- From the film", "Remastered") and playlists or albums that
         # merely share its title aren't rivals, so they mustn't make Batsy unsure.
         seen, titles, films, ranked = set(), set(), set(), []

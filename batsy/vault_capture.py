@@ -306,6 +306,22 @@ def model_picked(item: dict) -> None:
 
 
 @_bg
+def learning(where: str, text: str) -> None:
+    """Something you're learning, under the area it belongs to ("3D printing learning" -> 3D Printing, a Learning
+    section) or in Areas/Learning, with a line in today's timeline."""
+    from rapidfuzz import fuzz, process
+
+    areas = {p.stem: p for p in (vault.ROOT / "03 Areas").glob("*.md")}
+    topic = re.sub(r"\b(?:learning|learnings|notes?|section|page|the|my)\b", " ", where, flags=re.I).strip() or "Learning"
+    hit = process.extractOne(topic, list(areas), scorer=fuzz.WRatio) if areas else None
+    p = areas[hit[0]] if hit and hit[1] >= 80 else vault.path("areas", "Learning")
+    vault.create(p, vault.frontmatter(type="area", tags=["area", "learning"]) + f"# {p.stem}\n\n## Learning\n{vault.block('learning')}\n")
+    day = vault.daily_name(vault.today())
+    vault.add_to_block(p, "learning", f"- [[{day}]] {_clip(text, 600)}", "Learning")
+    _timeline(f"📚 Learned ({vault.link(p.stem)}): {_clip(text, 120)}")
+
+
+@_bg
 def shopping(query: str, summary: str, report: str = "") -> None:
     p = vault.path("shopping", query.capitalize())
     head = vault.frontmatter(type="shopping", query=query, date=dt.date.today().isoformat(), tags=["shopping"])

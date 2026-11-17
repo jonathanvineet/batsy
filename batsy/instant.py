@@ -766,12 +766,13 @@ def _remember(app, m, text):
     what = (raw.group(1).strip().rstrip(".") if raw else what)
     from batsy.memory_store import get_store
 
-    what = _clean_note(what)
+    what, dest = _destination(_clean_note(what))
     fid = get_store().add_fact(f"Jonathan asked me to remember ({dt.date.today():%d %b %Y}): {what}")
     if len(what.split()) > 14 or re.search(r"\b(?:i mean|what is it|no wait|sorry|actually|say not)\b", what, re.I):
-        threading.Thread(target=_condense_fact, args=(app, fid, what), daemon=True, name="tidy-memory").start()
-        return "Got it, I'll remember that."  # (said back once it's been tidied into one clean sentence)
+        threading.Thread(target=_condense_fact, args=(app, fid, what, dest), daemon=True, name="tidy-memory").start()
+        return "Got it, I'll remember that" + (" and put it in your brain." if dest else ".")
     _maybe_task(what)
+    _to_brain(what, dest)
     return f"Got it. I'll remember: {_yours(what) if what[:1].islower() else what}."
 
 
@@ -786,7 +787,35 @@ def _clean_note(text: str) -> str:
     return t[:1].upper() + t[1:] if t else text
 
 
-def _condense_fact(app, fid: str, what: str) -> None:
+DEST = re.compile(r"[,.]?\s*(?:and )?(?:please )?(?:add|put|save|write|log|note) (?:it|this|that|them)? ?(?:to|in|into|under|on) "
+                  r"(?:the |my )?(?P<where>.*?)(?:\s+(?:in|on|to|into) (?:the |my )?(?:obsidian|brain|second brain|notes|"
+                  r"vault|journal)\b[\w ]{0,12})?[.!]?$", re.I)
+LEARNING = re.compile(r"\b(?:i(?:'m| am) (?:learning|studying)|i learn(?:ed|t)|i(?:'ve| have) been (?:learning|studying)|"
+                      r"studying|learning)\b", re.I)
+
+
+def _destination(what: str) -> tuple[str, str | None]:
+    """'… Add it to 3D printing learning in the Obsidian brain.' -> (the note, '3D printing learning').
+    Something you're learning, with no place named -> 'Learning'."""
+    m = DEST.search(what)
+    if m and (m.group("where") or "").strip():
+        rest = what[:m.start()].strip(" ,.")
+        rest = re.sub(r"[,.]?\s*(?:remember (?:this|that|it)|and remember (?:this|that|it))[,.]?\s*$", "", rest, flags=re.I)
+        return rest or what, m.group("where").strip()
+    return what, ("Learning" if LEARNING.search(what) else None)
+
+
+def _to_brain(what: str, dest: str | None) -> None:
+    if dest:
+        try:
+            from batsy import vault_capture
+
+            vault_capture.learning(dest, what)
+        except Exception:
+            log.exception("brain: learning note")
+
+
+def _condense_fact(app, fid: str, what: str, dest: str | None = None) -> None:
     """A long, self-correcting note -> one clear sentence (free local model), replacing the raw one."""
     from batsy import vault_daily
     from batsy.memory_store import get_store
@@ -795,18 +824,21 @@ def _condense_fact(app, fid: str, what: str) -> None:
         vault_daily._cfg = vault_daily._cfg or app.cfg
         out = vault_daily.local_model(
             "Jonathan dictated this note to his assistant Batsy (speech-to-text, rambling, with false starts):\n"
-            f"\"{what}\"\n\nRewrite it as ONE short, clear sentence of what he wants remembered, in third person "
-            "(\"Jonathan ...\"), keeping every name and detail. In his note, \"you\" means Batsy. Reply with the sentence "
-            "only.", 80)
+            f"\"{what}\"\n\nRewrite it as one or two short, clear sentences stating the facts themselves (not that he asked "
+            "to remember them), in third person (\"Jonathan ...\"), keeping every name, number and detail, with units "
+            "written normally (\"100 x 60 x 10 mm\"). In his note, \"you\" means Batsy. Reply with the text only.", 120)
         clean = out.strip().strip('"').split("\n")[0].strip()
         if 4 <= len(clean.split()) <= 45:
             st = get_store()
             st.forget_fact(fid)
             st.add_fact(f"Jonathan asked me to remember ({dt.date.today():%d %b %Y}): {clean}", fid)
             _maybe_task(clean)
-            app.announce(f"Noted: {clean}")
+            _to_brain(clean, dest)
+            app.announce(f"Noted: {clean}" + (" It's in your brain too." if dest else ""))
+            return
     except Exception:
         log.exception("tidying a memory")
+    _to_brain(what, dest)  # the model wasn't available: the note as said
 
 
 def _maybe_task(what: str) -> None:
