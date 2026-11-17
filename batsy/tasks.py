@@ -141,6 +141,11 @@ class Tasks:
         with self.lock, self.db:
             self.db.execute("INSERT INTO task_log (task_id, day, t, status, note) VALUES (?,?,?,?,?)",
                             (task_id, (day or dt.date.today()).isoformat(), time.time(), status, note))
+            row = self.db.execute("SELECT title, kind FROM tasks WHERE id = ?", (task_id,)).fetchone()
+        if row and status != "asked":
+            from batsy import vault_capture
+
+            vault_capture.task_logged(row["title"].strip().capitalize(), row["kind"], status, note)
 
     def history(self, task_id: int, limit: int = 5) -> list[sqlite3.Row]:
         with self.lock:

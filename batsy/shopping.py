@@ -526,6 +526,19 @@ tr.best td.p{{color:var(--accent)}} a{{color:var(--accent)}} small{{color:var(--
 <p class=sub>Checked {dt.datetime.now().strftime("%-d %b %Y, %-I:%M %p")}. Prices as listed, before delivery; "approx." came from a search
 listing, not the store page.</p>{''.join(rows)}</body></html>"""
     path.write_text(page)
+    try:  # a price note in the brain: the cheapest find for each thing
+        from batsy import vault_capture
+
+        best = []
+        for heading, _, offers in sections:
+            priced = [o for o in offers if o.get("price")]
+            if priced:
+                o = min(priced, key=lambda o: o["price"])
+                best.append(f"{heading}: {o['price']} at {o.get('store') or o.get('site') or '?'}")
+        if best:
+            vault_capture.shopping(title, "; ".join(best), str(path))
+    except Exception:
+        pass
     return path
 
 

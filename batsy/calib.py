@@ -166,6 +166,9 @@ def handle(app, n: str) -> str | None:
             return
         blocks = ", ".join(f"{t}" for t in r["temps"])
         app.slice_last = {"model": r["model"], "process": r["process"], "overrides": {}, "result": r}
+        from batsy import vault_capture
+
+        vault_capture.sliced(r, r["model"])
         slicer.show_3d(app)  # the tower in 3D, each temperature in its own colour
         said = (f"The tower is sliced: {len(r['temps'])} blocks, {blocks} degrees from the bottom up, about "
                 f"{slicer._say_time(r.get('time', ''))} and {round(r.get('grams') or 0)} grams.")

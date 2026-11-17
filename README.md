@@ -299,6 +299,43 @@ On the iPhone the app is a **dashboard** (one scrolling page of cards, no clock)
 - **Cached on the phone:** folder listings show at once, even with the PC asleep; thumbnails are made once per file version; files you open are kept (about 400 MB, oldest dropped first) so they reopen instantly, offline too.
 - **One-time setup:** say **"Batsy, set up the batman drive"** and type the PC's password in the terminal that opens. It lets the laptop's SSH key sign in as `batman`. Files opened on the laptop are copied to `~/Batsy/batman/`.
 
+## Batsy Brain: your Obsidian second brain
+
+`~/Batsy/Brain` is an Obsidian vault that Batsy **writes as your day happens and reads back when it answers**. It's made the first time Batsy starts, already filled from everything Batsy knew: memories, projects, every file you've received, prints, your printer setup and presets, your music taste, and daily notes for the past 30 days rebuilt from your conversations.
+
+**How it's organised:**
+
+| Folder | What's in it |
+|---|---|
+| `Home.md` | the dashboard: today, plans, projects, inbox, recent notes (live tables via Obsidian Bases) |
+| `00 Inbox` | quick notes ("note that…", the ＋ in the phone app) |
+| `01 Daily` | a note per day: **Plan**, **Summary** (written each night by the free local AI), **Timeline** (what you asked, received, printed, were reminded of), **Files**, **Prints**, **Music**, and your own **Notes**. **Weekly reviews** every Sunday night, written by Claude: wins, project progress, open loops, next week |
+| `02 Projects` | a note per project you told Batsy about: repo, folder, a log of every update |
+| `03 Areas` | 3D Printing (setup, presets, every slice and print), Music (taste profile), College, Home & Devices |
+| `04 Resources` | a card for every file received (who sent it, a link, its opening lines), every print (preview, grams, time, result), every price comparison |
+| `05 People` | who sent you what |
+| `06 Memory` | **About Jonathan**: everything Batsy remembers. **Edit it in Obsidian**: change a line to correct a memory, delete one to make Batsy forget, add one to teach it |
+
+**Batsy never overwrites your writing.** It only rewrites text between `%% batsy:… %%` and `%% /batsy %%` (hidden when reading), and adds lines inside those blocks. Everything else in every note is yours. Notes link to each other (days ↔ projects ↔ files ↔ people), so the graph view is meaningful. Folders have colours in the graph, and the accent is Batsy yellow.
+
+**Say it** (instant, no tokens):
+- "Note that the bed needs levelling" · "jot down: buy PETG" · "add to my robot notes: the driver overheats"
+- "What did I do yesterday?" · "…today / this week / on Monday" · "summarise my day"
+- "What do my notes say about PLA?" · "search my brain for supports" (the local AI answers from your notes)
+- "Open my brain" · "open today's note" · "open the robot note" (in Obsidian) · "sync my brain"
+- "Remember that…" still goes to memory, which now also shows up in About Jonathan
+
+**Batsy uses it:** questions that match your notes get a short "[From your notes]" snippet as context. Both AIs have tools to search, read and add to the brain, and Claude Code knows the vault is there.
+
+**Phone app:** a **Brain** widget shows today (summary, or the latest moments), your plan and the inbox count, with a box to jot a note. Tap it or **Open ›** to read any note, follow its links and search the whole brain.
+
+**Sync to the iPhone and Mac (free):** Batsy commits the vault to Git every 10 minutes, so you get the full history, and pushes it to a private GitHub repo.
+1. On github.com, create an **empty private repository named `brain`** (no README).
+2. Batsy pushes to it within 10 minutes (or say "sync my brain").
+3. On the iPhone/Mac: install **Obsidian**, add the community plugin **Obsidian Git**, and clone `https://github.com/jonathanvineet/brain` (a GitHub personal access token as the password). Edits made there are pulled back to the laptop.
+
+`batsy vault seed | search WORDS | daily [DATE] | weekly [DATE] | sync | open` · settings under `[vault]` (`path`, `capture = "all" | "important" | "off"`, `git`, `git_remote`, `git_every_min`).
+
 ## Reminders (no tokens)
 
 - "Remind me in 20 minutes to take the print off the bed" · "remind me at 5 pm to call mom" · "remind me tomorrow at 9 to submit the DBMS assignment" · "remind me on Friday at 4:30 to push the code" · "remind me tonight to charge the batteries" · "remind me at half past five to eat" · "set a reminder for 7 to go to the gym"
@@ -399,6 +436,7 @@ Batsy controls the Spotify app on your iPad through Spotify Connect, using the S
 | `~/.local/share/batsy/received.db` | every file received: who, when, where its copies are |
 | `~/.local/share/batsy/music_moods.json` · `music_profile.json` | song moods and your taste profile |
 | `~/.local/share/batsy/push_subs.json` · `vapid.pem` | phones with notifications on, and the key that signs them |
+| `~/Batsy/Brain/` | your Obsidian brain (a Git repo) |
 | `~/.local/share/batsy/cloud_thumbs/` | previews of Batman drive files |
 | `~/Batsy/batman/` | Batman drive files you opened on the laptop |
 

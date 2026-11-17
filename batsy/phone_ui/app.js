@@ -633,11 +633,14 @@ async function viewHere(r) {
   } else body.innerHTML = `<iframe src="${url}" title="${esc(r.name)}"></iframe>`;  // PDFs, documents: the phone's own viewer (already downloaded)
 }
 function closeViewer() {
+  noteStack = []; $('#viewer').classList.remove('notes'); $('#viewer-search').hidden = true; $('#viewer-share').hidden = false;
   const v = $('#viewer');
   v.classList.remove('on');
   setTimeout(() => { v.hidden = true; $('#viewer-load').hidden = true; $('#viewer-body').innerHTML = ''; if (v.dataset.url) URL.revokeObjectURL(v.dataset.url); }, 280);
 }
-$('#viewer-close').addEventListener('click', closeViewer);
+$('#viewer-close').addEventListener('click', () => {
+  if (noteStack.length > 1) { noteStack.pop(); openNote(noteStack.pop()); } else closeViewer();
+});
 $('#viewer-share').addEventListener('click', async () => {
   const f = $('#viewer').file;
   try {
@@ -814,7 +817,7 @@ async function keepFile(key, blob) {
 
 // --- iPhone dashboard: long-press a widget to move, hide and add widgets (saved on this phone) -------------------
 const WIDGETS = [  // key, element, name; this order is the default
-  ['printer', '#pw', '3D printer'], ['slice', '#sw', 'Sliced'], ['home', '.home-w', 'Home'],
+  ['printer', '#pw', '3D printer'], ['slice', '#sw', 'Sliced'], ['home', '.home-w', 'Home'], ['brain', '#brain-w', 'Brain'],
   ['drive', '#cloud-w', 'Batman drive'], ['files', '.files-w', 'Received files'], ['computers', '#machines-w', 'Laptop & PC'],
   ['music', '#mw', 'Music'], ['claude', '.claude-w', 'Claude usage'], ['batsy', '#batsy-w', 'Batsy']];
 const wEl = k => $(WIDGETS.find(w => w[0] === k)[1]);
@@ -822,7 +825,11 @@ let layout = store.get('dashLayout', null);
 function cleanLayout(l) {
   const keys = WIDGETS.map(w => w[0]);
   const order = (l && l.order || []).filter(k => keys.includes(k));
-  keys.forEach(k => { if (!order.includes(k)) order.push(k); });  // widgets added in later versions
+  keys.forEach((k, i) => {  // widgets added in later versions: in their default place
+    if (order.includes(k)) return;
+    const before = keys.slice(0, i).reverse().find(x => order.includes(x));
+    order.splice(before ? order.indexOf(before) + 1 : 0, 0, k);
+  });
   return {order, hidden: (l && l.hidden || []).filter(k => keys.includes(k))};
 }
 function applyLayout() {
@@ -1018,6 +1025,66 @@ $('#sbedit').addEventListener('pointermove', e => {
   sbDraw();
 }));
 
+// --- the brain (Obsidian vault): today at a glance, a quick note, and every note readable with links --------------
+async function loadBrain() {
+  let b;
+  try { b = await api('/api/brain'); } catch { return; }
+  $('#br-inbox').textContent = b.inbox ? `${b.inbox} in inbox` : '';
+  const plan = b.plan.length ? `<ul class="br-plan">${b.plan.map(p => `<li class="${p.done ? 'done' : ''}">${p.done ? '☑' : '☐'} ${p.text}</li>`).join('')}</ul>` : '';
+  const body = b.summary ? `<div class="br-sum">${b.summary}</div>`
+    : b.count ? `<small>${b.day} · ${b.count} moment${b.count === 1 ? '' : 's'} so far</small><ul class="br-latest">${b.latest.map(x => `<li>${x}</li>`).join('')}</ul>`
+    : `<small>${b.day} · nothing yet</small>`;
+  $('#br-today').innerHTML = plan + body + (b.yesterday && !b.summary ? `<details class="br-y"><summary>Yesterday</summary>${b.yesterday}</details>` : '');
+  $('#br-today').dataset.today = b.today;
+}
+$('#br-form').addEventListener('submit', async e => {
+  e.preventDefault();
+  const text = $('#br-in').value.trim();
+  if (!text) return;
+  $('#br-in').value = ''; $('#br-in').blur();
+  try { toast((await api('/api/brain', {text})).say); setTimeout(loadBrain, 800); } catch (err) { toast(err.message); $('#br-in').value = text; }
+});
+$('#br-open').addEventListener('click', () => openNote('Home'));
+$('#br-today').addEventListener('click', e => {
+  const a = e.target.closest('[data-note]');
+  openNote(a ? a.dataset.note : $('#br-today').dataset.today || 'Home');
+});
+
+let noteStack = [];
+async function openNote(name) {
+  const v = $('#viewer'), body = $('#viewer-body');
+  v.classList.add('notes'); $('#viewer-share').hidden = true; $('#viewer-search').hidden = false;
+  if (v.hidden) { v.hidden = false; requestAnimationFrame(() => v.classList.add('on')); }
+  $('#viewer-name').textContent = name; $('#viewer-close').textContent = noteStack.length ? '‹' : '✕';
+  let n;
+  try { n = await api('/api/brain/note?n=' + encodeURIComponent(name)); } catch (err) { return toast(err.message); }
+  if (n.error) { toast(`No note called ${name} yet.`); return; }
+  noteStack.push(n.title);
+  $('#viewer-name').textContent = n.title; $('#viewer-close').textContent = noteStack.length > 1 ? '‹' : '✕';
+  body.innerHTML = `<article class="note">${n.html}</article>`;
+  body.scrollTop = 0;
+}
+$('#viewer-body').addEventListener('click', e => {
+  const a = e.target.closest('a[data-note]');
+  if (a) { e.preventDefault(); openNote(a.dataset.note); return; }
+  const hit = e.target.closest('[data-hit]');
+  if (hit) openNote(hit.dataset.hit);
+});
+let brainT;
+$('#viewer-search').addEventListener('input', e => {
+  clearTimeout(brainT);
+  const q = e.target.value.trim();
+  if (!q) return;
+  brainT = setTimeout(async () => {
+    const r = await api('/api/brain/search?q=' + encodeURIComponent(q)).catch(() => ({hits: []}));
+    if ($('#viewer-search').value.trim() !== q) return;
+    $('#viewer-name').textContent = `Search: ${q}`;
+    $('#viewer-body').innerHTML = `<div class="note hits">${r.hits.map(h => `<button class="hit" data-hit="${esc(h.path)}">
+      <b>${esc(h.title)}</b><small>${esc(h.path.split('/').slice(0, -1).join(' › '))}</small><p>${esc(h.snippet)}</p></button>`).join('')
+      || '<p class="empty">Nothing in your notes.</p>'}</div>`;
+  }, 300);
+});
+
 // --- refresh: every 3 s while the app is open --------------------------------------------------------------
 let busy = false;
 async function refresh() {
@@ -1031,8 +1098,8 @@ async function refresh() {
     if (String(e.message).startsWith('Not paired')) toast(e.message);
   } finally { busy = false; }
 }
-refresh(); loadLight(); loadFiles(); loadSlice(); loadCloudWidget();
-setInterval(() => { if (!document.hidden) loadCloudWidget(); }, 60000);
+refresh(); loadLight(); loadFiles(); loadSlice(); loadCloudWidget(); loadBrain();
+setInterval(() => { if (!document.hidden) { loadCloudWidget(); loadBrain(); } }, 60000);
 setInterval(refresh, 3000);
 setInterval(() => { if (!document.hidden) { loadLight(); loadFiles(); loadSlice(); } }, 20000);
-document.addEventListener('visibilitychange', () => { if (!document.hidden) { refresh(); loadLight(); loadFiles(); loadSlice(); loadCloudWidget(); } });
+document.addEventListener('visibilitychange', () => { if (!document.hidden) { refresh(); loadLight(); loadFiles(); loadSlice(); loadCloudWidget(); loadBrain(); } });

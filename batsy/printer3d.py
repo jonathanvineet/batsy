@@ -165,6 +165,9 @@ class Printer:
                 self.state.update(printing=False, started=None, job=None)
             self.state["printing"] = False if not self.state["paused"] else self.state["printing"]
         if "Done printing file" in line:
+            from batsy import vault_capture
+
+            vault_capture.print_ended(self.state.get("job") or "print", "done")
             self.state.update(printing=False, paused=False, progress=100, started=None, finished_at=time.time())
             self._say(f"The print is done: {self.state.get('job') or 'your model'}. Let the bed cool before taking it off.")
         if line.startswith("Error") or "!!" in line:
@@ -305,8 +308,16 @@ class Printer:
             hist = json.loads(hist_f.read_text())
         except (OSError, ValueError):
             hist = []
-        hist = [h for h in hist if h.get("gcode") != str(keep)] + [{"job": job, "gcode": str(keep), "t": time.time()}]
+        started = time.time()
+        hist = [h for h in hist if h.get("gcode") != str(keep)] + [{"job": job, "gcode": str(keep), "t": started}]
         hist_f.write_text(json.dumps(hist[-100:], indent=1))
+        try:  # a note for this print in the brain (with the slicer's preview, grams and time)
+            from batsy import vault_capture
+
+            self._load_times(str(keep))
+            vault_capture.print_started(job, str(gcode), dict(self.state.get("info") or {}), started)
+        except Exception:
+            log.exception("brain: print note")
         port = find_port() or "/dev/ttyUSB0"
         self.hand_over = True  # the poll loop lets go of the port
         with self.lock:
@@ -378,6 +389,10 @@ class Printer:
         self.announced_end = st.get("started")
         self.hand_over = False
         self.state.update(printing=False, paused=False)
+        if state in ("done", "failed", "cancelled"):
+            from batsy import vault_capture
+
+            vault_capture.print_ended(st.get("job") or "print", state, error=st.get("error") or "")
         if state == "done":
             self.state.update(progress=100, finished_at=time.time())
             self._say(f"The print is done: {st.get('job')}. Let the bed cool before taking it off.")

@@ -57,6 +57,12 @@ def _loop(ctx) -> None:
                 if late > 300 and item.get("what"):  # the laptop was asleep or off when it was due
                     message += time.strftime(" It was due at %-I:%M %p.", time.localtime(item["next_run"]))
                 ctx.announce(message)
+                try:
+                    from batsy import vault_capture
+
+                    vault_capture.reminder_fired(message)
+                except Exception:
+                    pass
                 try:  # on your phone too
                     from batsy import push
 
@@ -123,6 +129,13 @@ def add_reminder(due: float, what: str | None, message: str | None = None) -> st
         _items[mid] = {"kind": "timer", "message": message or (f"Reminder: {what}." if what else "Your timer is done."),
                        "what": what or "", "next_run": due, "created": time.time()}
     _save()
+    if what:
+        try:
+            from batsy import vault_capture
+
+            vault_capture.reminder_set(what, due)
+        except Exception:
+            pass
     return mid
 
 

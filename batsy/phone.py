@@ -22,6 +22,7 @@ Two ways in, the app tries both:
 - Tailscale: anywhere else, http://<laptop's Tailscale name>:8765.
 Every request needs the token from pairing; nothing is served to anyone else.
 """
+import datetime as dt
 import json
 import logging
 import os
@@ -501,6 +502,44 @@ class Hub:
         log.info("phone at %s: %s", ip, res)
         return res
 
+    # --- the brain (Obsidian vault) ----------------------------------------------------------------------------
+    def brain(self) -> dict:
+        """Today at a glance: the summary (or the latest of the timeline), the plan, the inbox count."""
+        from batsy import vault
+
+        d = vault.today()
+        p = vault.daily_path(d)
+        summary = (vault.get_block(p, "summary") or "").strip()
+        if summary.startswith("_"):
+            summary = ""
+        y = vault.daily_path(d - dt.timedelta(days=1))
+        ysum = (vault.get_block(y, "summary") or "").strip()
+        timeline = [x for x in (vault.get_block(p, "timeline") or "").splitlines() if x.strip()]
+        plan = [x for x in (vault.get_block(p, "plan") or "").splitlines() if x.strip()]
+        return {"date": d.isoformat(), "day": f"{d:%A %-d %B}", "summary": _md(summary) if summary else "",
+                "yesterday": _md(ysum) if ysum and not ysum.startswith("_") else "",
+                "latest": [_inline(re.sub(r"^- ", "", x)) for x in timeline[-4:]][::-1], "count": len(timeline),
+                "plan": [{"done": "[x]" in x[:6].lower(), "text": _inline(re.sub(r"^- \[.\] ", "", x))} for x in plan],
+                "inbox": len(list(vault.path("inbox").glob("*.md"))), "today": vault.daily_name(d)}
+
+    def brain_note(self, name: str) -> dict:
+        from batsy import vault, vault_index
+
+        hit = vault_index.note_text(name)
+        if not hit:
+            return {"error": "no such note"}
+        p, text = hit
+        body = re.sub(r"^---\n.*?\n---\n", "", text, flags=re.S)
+        return {"title": p.stem, "path": p.relative_to(vault.ROOT).as_posix(), "html": _md(body, self.thumb_key()),
+                "props": vault.props(p)}
+
+    def brain_search(self, q: str) -> dict:
+        from batsy import vault_index
+
+        vault_index.reindex()
+        return {"hits": [{"title": h["title"], "path": h["path"], "snippet": h["snippet"]}
+                         for h in vault_index.search(q, 12)]}
+
     def thumb_key(self) -> str:
         """Thumbnails go in <img> tags (no token header): they carry a key derived from the token instead."""
         import hmac
@@ -579,6 +618,33 @@ class Hub:
             return {"ok": True, "url": f"/api/files/raw?t={t}", "name": Path(path).name}
         self.app.open_result(path)
         return {"ok": True, "say": f"Opened {Path(path).name} on the laptop."}
+
+
+def _inline(md: str) -> str:
+    """One line of Markdown as HTML (wikilinks become links the app follows)."""
+    import html as h
+
+    s = h.escape(md)
+    s = re.sub(r"\[\[([^\]|]+)\|([^\]]+)\]\]", r'<a data-note="\1">\2</a>', s)
+    s = re.sub(r"\[\[([^\]]+)\]\]", r'<a data-note="\1">\1</a>', s)
+    s = re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", s)
+    return s
+
+
+def _md(text: str, key: str = "") -> str:
+    """A note as HTML for the phone: Batsy's markers hidden, [[links]] followable, images from the vault served."""
+    from urllib.parse import quote
+
+    import markdown
+
+    text = re.sub(r"%% /?batsy(?::[\w-]+)? %%\n?", "", text)
+    text = re.sub(r"\s*\^f-\w+", "", text)
+    text = re.sub(r"!\[\[([^\]|]+)(?:\|\d+)?\]\]", lambda m: f"![](/api/brain/file?p={quote(m.group(1))}&k={key})", text)
+    text = re.sub(r"!\[\[([^\]]+)\.base\]\]", "", text)
+    text = re.sub(r"\[\[([^\]|]+)\|([^\]]+)\]\]", r'<a data-note="\1">\2</a>', text)
+    text = re.sub(r"\[\[([^\]]+)\]\]", r'<a data-note="\1">\1</a>', text)
+    text = re.sub(r"^(\s*)- \[( |x)\] ", lambda m: m.group(1) + "- " + ("☑ " if m.group(2) == "x" else "☐ "), text, flags=re.M)
+    return markdown.markdown(text, extensions=["tables", "sane_lists"])
 
 
 def _home_nets() -> list:
@@ -715,6 +781,17 @@ def _handler(hub: Hub):
                     self.end_headers()
                     self.wfile.write(jpg)
                     return
+            if self.path.startswith("/api/brain/file"):  # a picture in a note (print previews): <img>, so by key
+                from urllib.parse import parse_qs, urlparse
+                import mimetypes
+
+                from batsy import vault
+
+                q = {k: v[0] for k, v in parse_qs(urlparse(self.path).query).items()}
+                f = vault.ROOT / "_attachments" / Path(q.get("p", "")).name
+                if not secrets.compare_digest(q.get("k", ""), hub.thumb_key()) or not f.is_file():
+                    return self._send(404, {"error": "no such file"})
+                return self._send(200, body=f.read_bytes(), ctype=mimetypes.guess_type(f.name)[0] or "image/png")
             if self.path.startswith("/api/files/raw"):  # a received file, opened on the phone: by a 5-minute ticket
                 from urllib.parse import parse_qs, urlparse
                 import mimetypes
@@ -732,6 +809,19 @@ def _handler(hub: Hub):
                     return self._send(200, hub.status())
                 except Exception as e:
                     log.exception("phone status")
+                    return self._send(500, {"error": str(e)})
+            if self.path.startswith("/api/brain"):
+                from urllib.parse import parse_qs, urlparse
+
+                q = {k: v[0] for k, v in parse_qs(urlparse(self.path).query).items()}
+                try:
+                    if self.path.startswith("/api/brain/note"):
+                        return self._send(200, hub.brain_note(q.get("n", "Home")))
+                    if self.path.startswith("/api/brain/search"):
+                        return self._send(200, hub.brain_search(q.get("q", "")))
+                    return self._send(200, hub.brain())
+                except Exception as e:
+                    log.exception("phone brain")
                     return self._send(500, {"error": str(e)})
             if self.path.startswith("/api/cloud"):
                 from urllib.parse import parse_qs, urlparse
@@ -815,6 +905,14 @@ def _handler(hub: Hub):
                     return self._send(200, hub.printer_action(body))
                 if self.path == "/api/files":
                     return self._send(200, hub.file_action(body))
+                if self.path == "/api/brain":  # a note from the phone: the brain's inbox
+                    text = str(body.get("text", "")).strip()
+                    if not text:
+                        return self._send(400, {"ok": False, "say": "Nothing to note."})
+                    from batsy import vault_capture
+
+                    vault_capture.note(text, "phone")
+                    return self._send(200, {"ok": True, "say": "Noted in your brain."})
                 if self.path == "/api/cloud":
                     act = body.get("action")
                     if act == "open":

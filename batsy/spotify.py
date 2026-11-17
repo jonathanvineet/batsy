@@ -545,6 +545,13 @@ class Spotify:
         else:
             self.radio = None  # an album / playlist / artist: Spotify plays the whole thing itself
         self._req("PUT", "/me/player/play", {"device_id": target["id"]}, body)
+        try:
+            from batsy import vault_capture
+
+            title, _, artist = cand[2].rpartition(" by ")
+            vault_capture.song(title or cand[2], artist if title else "")
+        except Exception:
+            pass
         if self._playing_on(target, 1.2):
             return f"Playing {cand[2]}."
         # Spotify accepted it, but the device didn't start (asleep, app in the background): hand it over explicitly

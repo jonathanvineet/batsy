@@ -166,6 +166,15 @@ DEFAULTS = {
     "safety": {
         "confirm_dangerous": True,
     },
+    # Batsy Brain: the Obsidian vault Batsy writes and reads (vault.py)
+    "vault": {
+        "enabled": True,
+        "path": "~/Batsy/Brain",
+        "capture": "all",          # "all" (timeline of what you asked, summarised), "important", or "off"
+        "git": True,               # commit the vault (history) and push it to git_remote
+        "git_remote": "https://github.com/jonathanvineet/brain.git",
+        "git_every_min": 10,
+    },
     "monitor": {
         "health_interval": 60,
         "battery_low_percent": 15,

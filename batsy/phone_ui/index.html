@@ -40,6 +40,12 @@
           <button class="t" data-act="stop"><svg class="i f" viewBox="0 0 24 24"><path d="M6 6h12v12H6z"/></svg><b>Stop</b><small>Batsy</small></button>
         </div>
       </article>
+      <article class="w brain-w" id="brain-w">
+        <div class="cw-head"><h3>Brain</h3><span class="br-chip" id="br-inbox"></span><button class="cw-all" id="br-open">Open ›</button></div>
+        <form class="br-form" id="br-form"><input id="br-in" placeholder="Note something…" autocomplete="off" enterkeyhint="done">
+          <button aria-label="Save note">＋</button></form>
+        <div class="br-today" id="br-today"></div>
+      </article>
     </div>
 
     <div class="stack" id="right">
@@ -178,6 +184,7 @@
 </div>
 <div class="viewer" id="viewer" hidden>
   <header><button id="viewer-close" aria-label="Close">✕</button><b id="viewer-name"></b><button id="viewer-share">Share</button></header>
+  <input class="cl-search" id="viewer-search" type="search" placeholder="Search your brain" autocomplete="off" hidden>
   <div class="viewer-body" id="viewer-body"></div>
   <div class="viewer-load" id="viewer-load" hidden>
     <svg class="fillbat" viewBox="0 4 24 14" aria-hidden="true">

@@ -944,6 +944,9 @@ class ProjectTalk:
         title = title_from(about)
         tid = self.store.add(title, about, sched)
         p = next((x for x in self.store.all() if x["id"] == tid), {"id": tid, "title": title, "about": about})
+        from batsy import vault_capture
+
+        vault_capture.project_registered(title.strip().capitalize(), about)  # its note in the brain
         check = f" and check in {describe(sched)}" if sched else ""
         self._say(f"Got it, I'll remember your {title} project{check}.")  # said now: finding it can take a moment
         self._status("Looking for it on GitHub and the laptop")
@@ -951,6 +954,11 @@ class ProjectTalk:
         if res["best"] and res["confident"]:
             self.store.link(tid, res["best"])
             p.update(repo=res["best"].get("repo"), path=res["best"].get("path"), url=res["best"].get("url"))
+            from batsy import vault, vault_capture
+
+            pn = vault_capture.project_path(title.strip().capitalize())
+            vault.submit(lambda: pn.exists() and vault.set_props(pn, repo=p.get("url") or p.get("repo") or "",
+                                                                 folder=p.get("path") or ""))
             self._remember(p)
             self._say(f"I think it's {spoken(res['best'])}. Ask me for an update on it any time.")
             self._card(f"Project: {title}", "\n".join(x for x in (about, label(res["best"])) if x))

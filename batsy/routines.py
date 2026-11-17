@@ -98,6 +98,9 @@ class Routines:
         have = f" You already have: {'; '.join(i['text'].rstrip('.!') for i in already)}." if already else ""
         self.app._reply(f"Good night!{have} Anything you have on {day_name(target)}?")
         self.capture = {"date": target, "until": time.time() + 120, "count": 0}
+        from batsy import vault_daily
+
+        vault_daily.good_night()  # today's summary in the brain, ready for the morning
         from batsy import home
 
         home.off_after_conversation(self.app)  # lights off once this whole good-night talk is over

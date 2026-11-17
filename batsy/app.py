@@ -155,6 +155,13 @@ class Batsy:
             threading.Thread(target=self._saver_loop, daemon=True, name="screensaver").start()
         self.last_raw_text = ""
         monitor.start_background(self.ctx)
+        self._said: list[str] | None = None  # replies spoken during a local command (for the brain's timeline)
+        try:
+            from batsy import vault
+
+            vault.start(self)  # Batsy Brain: the Obsidian vault in ~/Batsy/Brain
+        except Exception:
+            log.exception("brain didn't start")
 
     def _host_3d(self) -> bool:
         """Start the 3D viewer inside the overlay; False if this overlay can't (then it opens its own window)."""
@@ -534,6 +541,8 @@ class Batsy:
     def _reply(self, text: str) -> None:
         """Speak and caption a locally generated reply."""
         self.last_said = text
+        if self._said is not None:
+            self._said.append(text)
         self.speaker.say(text)
         self.overlay.say(text)
 
@@ -612,6 +621,9 @@ class Batsy:
                 say(sentence)
             self.learner.record(text, n, "cache", time.time() - t0, known)
             self.brain.memory.add_exchange(source, text, known, ["answered from memory"])
+            from batsy import vault_capture
+
+            vault_capture.exchange(text, known, "cache", source)
             return known
         with self.turn_lock:
             self.confirm_handler = confirm
@@ -624,6 +636,10 @@ class Batsy:
             route = getattr(self.brain, "route", "full")
             secs = time.time() - t0
             self.learner.record(text, n, route, secs, reply)
+            if not abort.is_set():
+                from batsy import vault_capture
+
+                vault_capture.exchange(text, reply, route, source)
             if route in ("quick", "full", "claude") and secs > 6 and not abort.is_set():
                 self.automator.learn_soon(text, n)  # slow once is enough: have Claude make it instant
             plain = not [a for a in getattr(self.brain, "last_actions", []) if a != "answered by Claude"]
@@ -671,13 +687,18 @@ class Batsy:
         t0, self._route = time.time(), "command"
         self.speaker.unhush()  # a new request: Batsy may speak again ("stop" itself hushes again at once)
         self.local_busy += 1
+        self._said = []
         try:
             handled = self._local_command(text)
         finally:
             self.local_busy -= 1
+            said, self._said = self._said, None
         if handled:
             self.last_turn = time.time()
             self.learner.record(text, _norm(text), self._route, time.time() - t0)
+            from batsy import vault_capture
+
+            vault_capture.exchange(text, " ".join(said or []), self._route)
         return handled
 
     def _local_command(self, text: str) -> bool:
@@ -689,6 +710,13 @@ class Batsy:
             self.kill(f"said {n!r}")
             return True
         if self._self_command(n):
+            return True
+        from batsy import vault_talk
+
+        said = vault_talk.handle(self, n, text)  # the brain: "note that…", "what did I do yesterday", "open my brain"
+        if said:
+            self._route = "instant"
+            self._reply(said)
             return True
         from batsy import showcase
 

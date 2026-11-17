@@ -17,6 +17,9 @@ dependencies = [
   "pytesseract>=0.3",
   "python-docx>=1.1",
   "curl_cffi>=0.7",  # shopping: store pages that turn away anything that isn't a browser
+  "rapidfuzz>=3.0",  # fuzzy names: received files, brain notes
+  "pywebpush>=2.0",  # push notifications to the phone app
+  "markdown>=3.5",  # the brain's notes, rendered in the phone app
 ]
 
 [project.optional-dependencies]

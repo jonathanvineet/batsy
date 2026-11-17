@@ -128,11 +128,14 @@ class MemoryStore:
         fid = fid or uuid.uuid4().hex[:5]
         with self.lock, self.db:
             self.db.execute("INSERT OR IGNORE INTO facts (id, t, fact) VALUES (?,?,?)", (fid, time.time(), fact))
+        _changed()
         return fid
 
     def forget_fact(self, fid: str) -> bool:
         with self.lock, self.db:
-            return self.db.execute("DELETE FROM facts WHERE id = ?", (fid,)).rowcount > 0
+            gone = self.db.execute("DELETE FROM facts WHERE id = ?", (fid,)).rowcount > 0
+        _changed()
+        return gone
 
     def all_facts(self) -> list[sqlite3.Row]:
         with self.lock:
@@ -181,7 +184,17 @@ class MemoryStore:
     # --- agenda (plans per day, filled by the good-night routine or the agenda tool) --------------
     def add_agenda(self, day: str, text: str) -> int:
         with self.lock, self.db:
-            return self.db.execute("INSERT INTO agenda (day, text, t) VALUES (?,?,?)", (day, text, time.time())).lastrowid
+            rid = self.db.execute("INSERT INTO agenda (day, text, t) VALUES (?,?,?)", (day, text, time.time())).lastrowid
+        try:  # the day's note in the brain: a checkbox under Plan
+            import datetime as dt
+
+            from batsy import vault, vault_capture
+
+            if vault._q is not None:
+                vault_capture.plan(dt.date.fromisoformat(day), text)
+        except Exception:
+            pass
+        return rid
 
     def agenda_for(self, day: str) -> list[sqlite3.Row]:
         with self.lock:
@@ -216,6 +229,15 @@ class MemoryStore:
             parts.append("[From documents you've read]\n" + "\n".join(
                 f"{d['name']} p.{d['page']}: {_clip(d['text'], 400)}" for d in docs))
 
+        try:  # Jonathan's notes (the Obsidian brain), when they really match
+            from batsy import vault, vault_index
+
+            notes = vault_index.context_block(text) if vault._q is not None else ""
+        except Exception:
+            notes = ""
+        if notes:
+            parts.append(notes)
+
         recent = self.recent(m["recent_exchanges"], m["recent_minutes"] * 60)
         oldest = recent[0]["id"] if recent else None
         older = self.search_exchanges(text, m["related_exchanges"], oldest)
@@ -240,6 +262,17 @@ class MemoryStore:
 
 
 _store: MemoryStore | None = None
+
+
+def _changed() -> None:
+    """Facts changed: the brain's About Jonathan note follows (on the brain's writer thread)."""
+    try:
+        from batsy import vault, vault_capture
+
+        if vault._q is not None:
+            vault_capture.fact_changed()
+    except Exception:
+        pass
 
 
 def get_store() -> MemoryStore:

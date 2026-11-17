@@ -54,6 +54,10 @@ LOCAL_TOOLS = {
                {"action": {"type": "string", "enum": ["add", "list"]}, "date": {"type": "string"},
                 "end_date": {"type": "string"}, "text": {"type": "string"}}, ["action"]),
     "remember": ("Save a lasting fact about the user.", {"fact": {"type": "string"}}, ["fact"]),
+    "notes_search": ("Search the user's notes (Obsidian brain: days, projects, files, prints) for what they wrote, did or "
+                     "planned.", {"query": {"type": "string"}}, ["query"]),
+    "notes_read": ("Read one of the user's notes by title (a date like 2026-11-16, a project, a person).",
+                   {"title": {"type": "string"}}, ["title"]),
     "camera": ("Open or close the live camera window.",
                {"action": {"type": "string", "enum": ["open", "close"]}}, ["action"]),
     "look": ("See the camera (what the user is holding/showing) or the screen. Claude looks and answers.",
@@ -100,7 +104,8 @@ NEEDS_TOOLS = re.compile(  # clear actions only: anything else tries the fast pa
     r"\b(open|close|launch|play|pause|resume|skip|spotify|timer|remind|reminder|alarm|remember|forget|cpu|ram|"
     r"battery|temperature|disk|storage|wifi|volume|brightness|camera|install|download|agenda|schedule|calendar|"
     r"weather|news|price|score|search|look up|google|who won|git|pull|push|commit|repo|update|upgrade|restart|"
-    r"reboot|yourself|folder|file|terminal|command|script|run|code|arduino|sketch|upload)\b")
+    r"reboot|yourself|folder|file|terminal|command|script|run|code|arduino|sketch|upload|notes?|brain|journal|"
+    r"wrote|written)\b")
 # The fast path has no tools, so it must never get a command: it would only pretend ("Done.").
 COMMAND = re.compile(r"^(?:(?:hey|ok|okay|please|now|so|and|can you|could you|would you|will you|go and|just)\s+)*"
                      r"(do|run|open|close|start|stop|restart|update|upgrade|install|pull|push|commit|create|make|write|"
@@ -591,6 +596,9 @@ for ("what is this?" -> "That's a red banana."). No markdown or lists in the spo
 Only when they ask to see something, or for steps/lists/code, add a screen marker (not spoken): [[show: exact \
 name]] for a picture, [[pull: exact name]] for a person/place/thing with its facts, [[card: Title | line; line]] \
 for steps, lists, numbers or code summaries. Put any code or files under {workspace} and just say where.
+Their notes are an Obsidian vault at {home}/Batsy/Brain (daily notes, projects, files, prints, people, memory): \
+search and read it when the question is about their own work or plans; when you add to it, keep the frontmatter and \
+never edit inside %% batsy:… %% blocks (Batsy owns those).
 {context}
 User: {request}"""
 

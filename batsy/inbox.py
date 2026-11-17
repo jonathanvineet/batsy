@@ -293,9 +293,13 @@ class Inbox:
         from batsy import docs
 
         log.info("arrived: %s", ", ".join(p.name for p in files))
+        from batsy import vault_capture
+
         for p in files:  # remembered for good: "who sent the last file?", "open the audit report"
-            received.record(p, self.sender_of(p) or self.mine,
-                            "taildrop" if str(p) in self._taildropped else "upload page")
+            via = "taildrop" if str(p) in self._taildropped else "upload page"
+            received.record(p, self.sender_of(p) or self.mine, via)
+            vault_capture.file_received(str(p), self.sender_of(p) or self.mine, via, received.kind_of(p.name),
+                                        p.stat().st_size if p.exists() else 0)  # a card in the brain
         from batsy import slicer
 
         slicer.on_arrival(self.app, files)  # printer presets -> your printer; 3D models -> sliced in the background
@@ -372,6 +376,20 @@ class Inbox:
             docs.learn(path)
         except Exception as e:
             log.info("couldn't read %s: %s", path.name, e)
+            return
+        try:  # the file's card in the brain gets its opening lines
+            from batsy import vault_capture
+            from batsy.memory_store import get_store
+
+            st = get_store()
+            with st.lock:
+                rows = st.db.execute("SELECT text FROM doc_chunks WHERE path = ? ORDER BY page, id LIMIT 2",
+                                     (str(path),)).fetchall()
+            text = " ".join(r["text"] for r in rows).strip()
+            if text:
+                vault_capture.file_summary(str(path), "**Starts:** " + text[:900])
+        except Exception:
+            log.exception("brain: file summary")
 
     def _wait_quiet(self, limit: float = 120) -> None:
         """Don't talk over a conversation: wait until Batsy is idle (at most `limit` seconds)."""
@@ -591,6 +609,9 @@ class Inbox:
             if cleanup:
                 shutil.rmtree(cleanup, ignore_errors=True)
         if code == 0:
+            from batsy import vault_capture
+
+            vault_capture.file_sent(send.name, say)
             where = " It's in Downloads." if "mac" in say.lower() else ""
             self.app._reply(f"Sent {send.name} to {say}.{where}")
             self.app.last_file = path

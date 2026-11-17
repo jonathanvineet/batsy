@@ -753,13 +753,13 @@ def _spell(app, m, text):
 
 
 # --- "remember that ..." -> long-term memory, every time (it used to go to the AI, which could lose it) ------------
-@handles(r"(?:[a-z]+ )?(?:please )?(?:remember|note down|make a note|don'?t forget|keep in mind|take a note)"
+@handles(r"(?:[a-z]+ )?(?:please )?(?:remember|don'?t forget|keep in mind)"
          r"(?: that| to| this| of)?:? (.+)")
 def _remember(app, m, text):
     what = m.group(1).strip()
     if len(what.split()) < 2 or re.match(r"(?:my voice|what|when|where|who|me)\b", what):
         return None  # "remember my voice", "remember what I said": not a note
-    raw = re.search(r"(?i)\b(?:remember|note down|make a note|don'?t forget|keep in mind|take a note)(?: that| to| this| of)?:?\s+(.+)", text)
+    raw = re.search(r"(?i)\b(?:remember|don'?t forget|keep in mind)(?: that| to| this| of)?:?\s+(.+)", text)
     what = (raw.group(1).strip().rstrip(".") if raw else what)
     from batsy.memory_store import get_store
 

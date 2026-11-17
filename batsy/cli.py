@@ -245,6 +245,36 @@ def cmd_skills(cfg, args) -> None:
             print(f"    “{t}”")
 
 
+def cmd_vault(cfg, args) -> None:
+    """The brain (Obsidian vault): seed it, search it, summarise a day, sync it."""
+    import datetime as dt
+
+    from batsy import vault, vault_daily, vault_index, vault_seed
+
+    vault.configure(cfg)
+    vault_daily._cfg = cfg
+    what = args.action
+    if what == "seed":
+        print(vault_seed.seed(cfg))
+    elif what == "search":
+        vault_index.reindex()
+        for h in vault_index.search(" ".join(args.text), 8):
+            print(f"{h['path']}\n    {h['snippet']}")
+    elif what == "daily":
+        day = dt.date.fromisoformat(args.text[0]) if args.text else vault.today()
+        vault_daily.end_of_day(day)
+        print(vault.read(vault.daily_path(day)))
+    elif what == "weekly":
+        day = dt.date.fromisoformat(args.text[0]) if args.text else vault.today()
+        vault_daily.weekly(day)
+    elif what == "sync":
+        print(vault.sync())
+    elif what == "open":
+        vault.open_note()
+    else:
+        print(f"Brain: {vault.ROOT}  ({sum(1 for _ in vault.ROOT.rglob('*.md'))} notes)")
+
+
 def cmd_projects(cfg, args) -> None:
     from batsy import projects
 
@@ -428,6 +458,10 @@ def main() -> None:
     p.add_argument("--scan", action="store_true", help="rebuild the index of your GitHub repos and project folders")
     p.add_argument("--find", metavar="TEXT", help="which project a description matches")
     p.add_argument("--update", metavar="NAME", help="what's happened on a project this week")
+    p = sub.add_parser("vault", help="your brain (Obsidian vault): seed | search WORDS | daily [DATE] | weekly [DATE] | "
+                                     "sync | open")
+    p.add_argument("action", nargs="?", default="info")
+    p.add_argument("text", nargs="*")
     args = parser.parse_args()
 
     cfg = Config.load()
@@ -435,4 +469,4 @@ def main() -> None:
     {"run": cmd_run, None: cmd_run, "chat": cmd_chat, "ask": cmd_ask,
      "doctor": cmd_doctor, "reset": cmd_reset, "usage": cmd_usage,
      "spotify-login": cmd_spotify_login, "vocab": cmd_vocab, "skills": cmd_skills,
-     "projects": cmd_projects, "stop": cmd_stop, "listen": cmd_listen, "type": cmd_type}[args.cmd](cfg, args)
+     "projects": cmd_projects, "vault": cmd_vault, "stop": cmd_stop, "listen": cmd_listen, "type": cmd_type}[args.cmd](cfg, args)

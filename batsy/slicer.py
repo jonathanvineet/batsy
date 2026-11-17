@@ -530,6 +530,9 @@ def handle(app, n: str) -> str | None:
             all_o = {**((last or {}).get("overrides", {}) if relative else {}), **o}
             r = slice_model(model, base_name, all_o, label if all_o else "")
             app.slice_last = {"model": str(model), "process": base_name, "overrides": all_o, "result": r}
+            from batsy import vault_capture
+
+            vault_capture.sliced(r, str(model))
             show_3d(app)  # the slicing in 3D: turn it around, scrub through the layers
             app.announce(describe(model, r))
         except Exception as e:
@@ -593,6 +596,9 @@ def on_arrival(app, files: list[Path]) -> None:
             try:
                 r = slice_model(model)
                 app.slice_last = {"model": str(model), "process": r["process"], "overrides": {}, "result": r}
+                from batsy import vault_capture
+
+                vault_capture.sliced(r, str(model))
                 app.announce(describe(model, r))
             except Exception as e:
                 log.warning("auto-slice %s: %s", model.name, e)
