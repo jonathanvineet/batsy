@@ -27,7 +27,15 @@ log = logging.getLogger("batsy.printsearch")
 UA = {"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) Batsy", "Accept": "application/json"}
 OUT = WORKSPACE / "models"
 PRE = r"^(?:(?:can you|could you|please|hey|ok|okay|batsy)\s+)*"
+PRINT_TAIL = r"(?: (?:to (?:3d )?print|i can (?:3d )?print|for (?:3d )?printing|for (?:my|the) (?:3d )?printer))"
 FIND = [
+    # "show me some batman mask designs to print", "give me batman 3d models", "any planter stls"
+    re.compile(PRE + r"(?:find|search(?: for)?|look for|get|give|show|fetch|pull up|any|got any|are there any)(?: me| us)?"
+                     r"(?: a| an| some| any| the| cool| nice| good)* (?P<q>.+?) (?:3d models?|models?|designs?|stls?|3mfs?|"
+                     r"printables?)" + PRINT_TAIL + r"?$"),
+    # "show me a batman mask to print", "give me something cool to print"
+    re.compile(PRE + r"(?:find|search(?: for)?|look for|get|give|show|fetch|pull up)(?: me| us)?(?: a| an| some| any)? "
+                     r"(?P<q>.+?)" + PRINT_TAIL + r"$"),
     re.compile(PRE + r"(?:find|search(?: for)?|look for|get|show) (?:me )?(?:a |an |some )?(?:3d |printable )?"
                      r"(?:models?|stls?|prints?|files?|designs?) (?:of|for) (?:a |an |some )?(?P<q>.+)$"),
     re.compile(PRE + r"(?:find|search(?: for)?|look for|get) (?:me )?(?:a |an |some )?(?P<q>.+?) "
@@ -281,6 +289,7 @@ def handle(app, n: str) -> str | None:
     if not q:
         return None
     q = re.sub(r"^(?:a|an|some|the)\s+", "", q).strip()
+    q = re.sub(r"\s+", " ", re.sub(r"\b(?:uh+|um+|erm|uhm|hmm+|like|you know)\b", " ", q)).strip()  # "batman uh mask"
 
     def go():
         try:
@@ -313,11 +322,15 @@ def measure(path: Path) -> dict:
     """Size (mm), triangles, solid volume, and whether it fits the bed (turned flat if need be)."""
     import trimesh
 
+    from batsy import printweight
+
     m = trimesh.load(str(path), force="mesh")
     x, y, z = (float(v) for v in m.extents)
     fits = z <= BED[2] and ((x <= BED[0] and y <= BED[1]) or (y <= BED[0] and x <= BED[1]))
+    est = printweight.estimate(m)  # grams to print: walls + 15% infill (the slicer gives the exact figure later)
     return {"name": path.name, "x": round(x, 1), "y": round(y, 1), "z": round(z, 1), "tris": int(len(m.faces)),
-            "cm3": round(abs(float(m.volume)) / 1000, 1) if m.is_volume else None, "fits": fits}
+            "cm3": round(est["volume_cm3"], 1) if est["volume_cm3"] else None, "fits": fits,
+            "grams": est["print_g"], "grams_how": est["how"]}
 
 
 def outline(path: Path, info: dict, title: str) -> Path:
@@ -357,7 +370,8 @@ def outline(path: Path, info: dict, title: str) -> Path:
     side.text(0, .86, title if len(title) < 34 else title[:33] + "…", color="#ffc20e", fontsize=17, fontweight="bold")
     rows = [("Size", f"{info['x']:g} × {info['y']:g} × {info['z']:g} mm"),
             ("Bed", "fits ✓" if info["fits"] else "too big ✗  (220 × 220 × 300)"),
-            ("Solid volume", f"{info['cm3']} cm³" if info["cm3"] else "not a closed shape"),
+            ("Weight to print", f"≈ {info['grams']:g} g of PLA" + (" (rough)" if info.get("grams_how") == "approx" else "")
+             if info.get("grams") else "–"),
             ("Parts", str(info.get("parts", 1))), ("Detail", f"{info['tris']:,} triangles")]
     for i, (k, v) in enumerate(rows):
         side.text(0, .72 - i * .1, k, color="#8d95a5", fontsize=12)
@@ -440,6 +454,8 @@ def pick(app, item: dict) -> str:
             size = f"{info['x']:g} by {info['y']:g} by {info['z']:g} millimetres"
             fit = "It fits your bed." if info["fits"] else "It's too big for your bed as it is."
             more = f" It comes in {len(parts)} parts." if len(parts) > 1 else ""
+            if info.get("grams"):
+                more += f" It'll take about {round(info['grams'])} grams of filament."
             yes = app.ask_from_background(f"{item['name']} is {size}.{more} {fit} Want me to slice it?")
             app.model_preview["state"] = "slicing" if yes else "skipped"
             if not yes:

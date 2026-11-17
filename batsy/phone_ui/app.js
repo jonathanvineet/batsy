@@ -217,7 +217,10 @@ function takeEvents(events) {
   const fresh = events.filter(e => e.id > seen);
   if (!fresh.length) return;
   store.set('evSeen', newest);
-  toQueue.push(...fresh.slice(-3));
+  fresh.filter(e => e.kind === 'warn').forEach(e => toast(e.text));  // heads-ups (running hot): a small note, not the screen
+  const big = fresh.filter(e => e.kind !== 'warn');
+  if (!big.length) return;
+  toQueue.push(...big.slice(-3));
   if (!toBusy) nextTakeover();
 }
 async function nextTakeover() {
@@ -328,7 +331,7 @@ function takePreviewNow(p, i) {
   $('#mpv-name').textContent = p.name;
   $('#mpv-rows').innerHTML = [
     ['Size', `${i.x} × ${i.y} × ${i.z} mm`], ['Bed', i.fits ? 'fits ✓' : 'too big ✗'],
-    ['Volume', i.cm3 ? `${i.cm3} cm³` : '–'], ['Parts', i.parts || 1]]
+    ['Weight', i.grams ? `≈ ${Math.round(i.grams)} g` + (i.grams_how === 'approx' ? ' (rough)' : '') : '–'], ['Parts', i.parts || 1]]
     .map(([k, v]) => `<div><small>${k}</small><b class="${k === 'Bed' ? (i.fits ? 'ok' : 'bad') : ''}">${esc(String(v))}</b></div>`).join('');
   box.hidden = false; requestAnimationFrame(() => box.classList.add('on'));
 }

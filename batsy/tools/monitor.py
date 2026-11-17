@@ -91,14 +91,19 @@ def _loop(ctx) -> None:
 class _Health:
     """Built-in alerts: low battery, overheating, disk filling up. Each alert fires once until it clears."""
 
-    def __init__(self, ctx):
-        self.ctx, self.active = ctx, set()
+    REPEAT_S = 1800  # the same alert at most every 30 minutes, however often it flickers on and off
 
-    def _flag(self, key: str, condition: bool, message: str) -> None:
+    def __init__(self, ctx):
+        self.ctx, self.active, self.said_at = ctx, set(), {}
+
+    def _flag(self, key: str, condition: bool, message: str, cleared: bool | None = None) -> None:
+        """Say it when it starts; re-arm only when `cleared` (default: not condition), and not within 30 min."""
         if condition and key not in self.active:
             self.active.add(key)
-            self.ctx.announce(message)
-        elif not condition:
+            if time.time() - self.said_at.get(key, 0) > self.REPEAT_S:
+                self.said_at[key] = time.time()
+                self.ctx.announce(message)
+        elif (not condition) if cleared is None else cleared:
             self.active.discard(key)
 
     def run(self) -> None:
@@ -113,7 +118,8 @@ class _Health:
                 temps = psutil.sensors_temperatures() if hasattr(psutil, "sensors_temperatures") else {}
                 hottest = max((e.current for es in (temps or {}).values() for e in es), default=0)
                 limit = cfg.get("monitor.cpu_temp_high_c")
-                self._flag("temp", hottest >= limit, f"Warning, the laptop is running hot at {hottest:.0f} degrees.")
+                self._flag("temp", hottest >= limit, f"Warning, the laptop is running hot at {hottest:.0f} degrees.",
+                           cleared=hottest < limit - 8)  # hovering around the limit isn't a new warning each time
                 free_gb = psutil.disk_usage("/").free / 1e9
                 self._flag("disk", free_gb < cfg.get("monitor.disk_free_low_gb"),
                            f"Disk space is low, only {free_gb:.1f} gigabytes free.")

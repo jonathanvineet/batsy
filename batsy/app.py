@@ -167,6 +167,8 @@ class Batsy:
         discover.start(self)  # the weekly Batsy Discovery playlist
         self.phone_ears_until = 0.0  # the phone is listening for "Batsy" instead of this laptop's mic, until then
         self.events: list[dict] = []  # announcements, for the phone's full-screen alerts (the last 20)
+        self.music_on = False  # Spotify is playing (in the room): the wake word has to be clearer
+        threading.Thread(target=self._music_watch, daemon=True, name="music-watch").start()
 
     def _host_3d(self) -> bool:
         """Start the 3D viewer inside the overlay; False if this overlay can't (then it opens its own window)."""
@@ -556,6 +558,21 @@ class Batsy:
         self.overlay.say(text)
 
     # --- shared plumbing --------------------------------------------------
+    def _music_watch(self) -> None:
+        """Every 30 s: is music playing? Lyrics and film dialogue were waking Batsy dozens of times an hour."""
+        from batsy.tools import music
+
+        while True:
+            try:
+                sp = music.get_spotify(self.cfg)
+                was, self.music_on = self.music_on, bool(sp.ready() and (sp._req("GET", "/me/player") or {}).get("is_playing"))
+                if was != self.music_on:
+                    log.info("music %s: the wake word %s", "playing" if self.music_on else "stopped",
+                             "needs a finished phrase" if self.music_on else "is back to normal")
+            except Exception:
+                self.music_on = False
+            time.sleep(30)
+
     def phone_event(self, text: str, question: bool = False) -> None:
         """Something Batsy announced or asked: the Android app shows it full screen for a few seconds."""
         low = text.lower()
@@ -737,8 +754,12 @@ class Batsy:
             self.last_turn = time.time()
             self.learner.record(text, _norm(text), self._route, time.time() - t0)
             from batsy import vault_capture
+            from batsy.memory_store import get_store
 
-            vault_capture.exchange(text, " ".join(said or []), self._route)
+            reply = " ".join(said or [])
+            vault_capture.exchange(text, reply, self._route)
+            if reply:  # in the conversation history too, so a follow-up ("it's in my GitHub") knows what "it" is
+                get_store().add_exchange("voice", text, reply, [f"handled instantly ({self._route})"])
         return handled
 
     def _local_command(self, text: str) -> bool:
@@ -1072,7 +1093,8 @@ class Batsy:
                     self.overlay.heard(text)
                 else:
                     frame = self.ears.read(0.5)
-                    if frame is None or time.time() < self.phone_ears_until or not self.ears.wake_hit(frame):
+                    if frame is None or time.time() < self.phone_ears_until or \
+                            not self.ears.wake_hit(frame, strict=self.music_on):  # music on: no half-heard "Batsy"s
                         continue  # (while the phone is Batsy's ears, the laptop's mic doesn't wake it)
                     text = self._listen_after_wake(strip_wake_word)
                     if text is None:
@@ -1318,6 +1340,8 @@ class Batsy:
                 return None
         self.speaker.stop()
         self.speaker.chime()
+        if hasattr(self.brain, "warm_soon"):
+            self.brain.warm_soon()  # a real "Batsy": the model loads while you talk (it's unloaded when idle)
         started = time.time()
         audio = self._record(5, preroll, fresh=True, min_speech=1.0)  # don't stop at the pause after "Batsy"
         if getattr(self, "conversation_ended", 0) > started:  # stopped while recording: drop it

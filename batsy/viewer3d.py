@@ -140,11 +140,17 @@ class Scene:
                "triangles": int(len(mm.faces)), "watertight": bool(mm.is_watertight),
                "surface_area_cm2": round(float(mm.area) / 100, 2), "parts": int(len(mm.split(only_watertight=False)))
                if len(mm.faces) < 400_000 else None}
+        from batsy import printweight
+
+        est = printweight.estimate(mm, material)  # walls + infill, as it would print (works with gaps in the mesh too)
+        out.update(material=material, print_g=est["print_g"], solid_g=est["solid_g"], weight_how=est["how"],
+                   weight_said=printweight.said(est))
+        if est["volume_cm3"] is not None:
+            out["volume_cm3"] = est["volume_cm3"]
         if mm.is_watertight:
-            vol_cm3 = abs(float(mm.volume)) / 1000
             dens = DENSITY.get(material.lower(), 1.24)
-            out.update(volume_cm3=round(vol_cm3, 2), center_of_mass=[round(float(v), 2) for v in mm.center_mass],
-                       material=material, mass_g=round(vol_cm3 * dens * infill, 1))
+            out.update(center_of_mass=[round(float(v), 2) for v in mm.center_mass],
+                       mass_g=round(abs(float(mm.volume)) / 1000 * dens * infill, 1))
         return out
 
     def _targets(self, cmd: dict) -> list[Model]:

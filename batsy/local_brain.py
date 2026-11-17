@@ -35,6 +35,9 @@ picture, or [[pull: exact name]] to put a person, place or thing on screen with 
 write [[card: Title | line one; line two]]. Markers are not spoken.
 If a request needs real expertise, careful reasoning, code, or you are not sure of the facts, call ask_claude \
 with the full request instead of answering yourself.
+Never invent past events, problems or details that aren't in the conversation or the things you remember. Don't \
+bring up remembered things unless the user asks about them. If the request makes no sense (likely misheard), just \
+say "Sorry, what was that?" and nothing else.
 Earlier conversation and things you remember come before [Now ...] in the message."""
 
 # Compact tool set for the small model: (description, properties, required). Executed by the normal registry.
@@ -72,7 +75,10 @@ COMPLEX = re.compile(
     r"\b(write|code|coding|program|script|sketch|debug|function|algorithm|compile error|error message|"
     r"explain (why|how|the difference)|step by step|compare|difference between|pros and cons|analy[sz]e|"
     r"summari[sz]e|essay|email|letter|report|cover letter|resume|plan (a|my|the)|itinerary|design|calculate|"
-    r"solve|prove|derive|translate|strategy|optimi[sz]e|review my|in detail|detailed|research)\b")
+    r"solve|prove|derive|translate|strategy|optimi[sz]e|review my|in detail|detailed|research)\b"
+    # your own code and projects: Claude can actually look (the small model would guess)
+    r"|\b(?:my|in my|on my|from my) (?:github|git ?hub|repo|repos|repository|repositories|codebase)\b"
+    r"|\b(?:see|check|find out|look up|look into) what (?:is |are )?\w+")
 
 
 # Questions about what the camera or screen shows: the small model can't see, so Claude looks at one frame.
@@ -215,6 +221,29 @@ class LocalBrain:
         except Exception as e:
             log.warning("local model warm-up failed: %s", e)
 
+    def loaded(self) -> bool:
+        """Is the model in memory right now? (It's unloaded after a quiet spell, to free 2.6 GB.)"""
+        try:
+            url = self.cfg.get("local.url").rstrip("/") + "/api/ps"
+            with urllib.request.urlopen(url, timeout=2) as r:
+                return any(m.get("name", "").startswith(self.model) or m.get("model", "").startswith(self.model)
+                           for m in json.loads(r.read()).get("models", []))
+        except Exception:
+            return True  # can't tell: don't hold anything up
+
+    def warm_soon(self) -> None:
+        """You said "Batsy" (or pressed the mic): start loading the model now, while your words are transcribed."""
+        if getattr(self, "_warming", False) or self.loaded():
+            return
+        self._warming = True
+
+        def go():
+            try:
+                self._warm_up()
+            finally:
+                self._warming = False
+        threading.Thread(target=go, daemon=True, name="warm-soon").start()
+
     def _post(self, body: dict):
         req = urllib.request.Request(self.url, data=json.dumps(body).encode(),
                                      headers={"Content-Type": "application/json"})
@@ -326,7 +355,8 @@ class LocalBrain:
 
     def _ask(self, text, source, say, abort, on_tool) -> str:
         m = self.cfg.get("local")
-        context = self.memory.build_context(text, self.cfg, recent=m["recent_exchanges"], related=m["related_exchanges"])
+        context = self.memory.build_context(text, self.cfg, recent=m["recent_exchanges"], related=m["related_exchanges"],
+                                            all_facts=False)  # only memories that match: the rest it would ramble about
         stamp = time.strftime("%a %d %b %Y %H:%M")
         prompt = (f"{context}\n\n" if context else "") + f"[Now {stamp}] {text}"
         messages = [{"role": "system", "content": self.system}, {"role": "user", "content": prompt}]
@@ -427,6 +457,9 @@ class LocalBrain:
             self._claude(text, context, emit, on_marker, on_tool, actions)
             return self._finish(source, text, spoken, actions, abort)
 
+        if not self.loaded():  # it has to load first (several seconds): say so rather than go quiet
+            emit("One moment.")
+            self.warm_soon()
         if len(text.split()) <= 14 and not NEEDS_TOOLS.search(text.lower()) and not COMMAND.match(text.lower()):
             self.route = "quick"
             if self._quick(text, emit, on_marker, abort):

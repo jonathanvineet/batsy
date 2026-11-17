@@ -396,6 +396,8 @@ class Hub:
 
         if mode == "ears":
             self.app.phone_ears_until = time.time() + 60  # the phone is listening: the laptop's mic stands down
+        elif raw and hasattr(self.app.brain, "warm_soon"):
+            self.app.brain.warm_soon()  # held the mic: the model loads while this is transcribed
         with tempfile.NamedTemporaryFile(suffix=".audio") as f:
             f.write(raw)
             f.flush()

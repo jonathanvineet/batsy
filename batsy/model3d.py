@@ -273,11 +273,10 @@ def speakable(cmd: dict, reply: dict) -> str:
     fill = {
         "size": _fmt_size(size) if size else "",
         "axis_size": f"{size['xyz'.index(cmd.get('axis', 'z'))]:.1f} millimetres" if size else "",
-        "mass": (f"About {stats['mass_g']} grams in {stats['material'].upper()} at full infill, "
-                 f"{stats['volume_cm3']} cubic centimetres." if stats.get("mass_g") is not None else
-                 "I can't weigh it: the mesh isn't watertight."),
-        "volume": (f"{stats['volume_cm3']} cubic centimetres." if stats.get("volume_cm3") is not None else
-                   "The mesh isn't watertight, so the volume isn't reliable."),
+        "mass": stats.get("weight_said") or "I couldn't estimate its weight.",
+        "volume": (f"{stats['volume_cm3']} cubic centimetres" + (", roughly: the mesh has gaps." if
+                   stats.get("weight_how") == "approx" else ".") if stats.get("volume_cm3") is not None else
+                   "I couldn't measure its volume."),
         "watertight": ("Yes, it's watertight and should slice fine." if stats.get("watertight") else
                        "No, the mesh has holes or open edges. It may need repair before printing."),
         "section": (f"The cut is {reply['section_extents_mm'][0]:.1f} by {reply['section_extents_mm'][1]:.1f} mm."

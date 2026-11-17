@@ -210,7 +210,8 @@ class MemoryStore:
             return self.db.execute("DELETE FROM agenda WHERE id = ?", (item_id,)).rowcount > 0
 
     # --- the context block sent with each request -------------------------
-    def build_context(self, text: str, cfg, recent: int | None = None, related: int | None = None) -> str:
+    def build_context(self, text: str, cfg, recent: int | None = None, related: int | None = None,
+                      all_facts: bool = True) -> str:
         m = dict(cfg.get("memory"))
         if recent is not None:
             m["recent_exchanges"] = recent
@@ -219,8 +220,8 @@ class MemoryStore:
         parts = []
 
         facts = self.all_facts()
-        if len(facts) > m["all_facts_below"]:
-            facts = self.search_facts(text, m["max_facts"])
+        if len(facts) > m["all_facts_below"] or not all_facts:
+            facts = self.search_facts(text, m["max_facts"] if all_facts else 4)
         if facts:
             parts.append("[Things you remember]\n" + "\n".join(f"- ({f['id']}) {f['fact']}" for f in facts))
 

@@ -6,9 +6,11 @@ handle it. Patterns match the normalised text (lowercase, no punctuation; see ap
 """
 import datetime as dt
 import json
+import logging
 import random
 import re
 import socket
+import threading
 import time
 import urllib.parse
 import urllib.request
@@ -16,6 +18,7 @@ from zoneinfo import ZoneInfo, available_timezones
 
 import psutil
 
+log = logging.getLogger("batsy.instant")
 POLITE = r"(?:(?:hey|ok|okay|so|um|uh|and|batsy|please|can you|could you|would you|will you|tell me|do you know)\s+)*"
 HANDLERS: list[tuple[re.Pattern, callable]] = []
 
@@ -763,8 +766,58 @@ def _remember(app, m, text):
     what = (raw.group(1).strip().rstrip(".") if raw else what)
     from batsy.memory_store import get_store
 
-    get_store().add_fact(f"Jonathan asked me to remember ({dt.date.today():%d %b %Y}): {what}")
+    what = _clean_note(what)
+    fid = get_store().add_fact(f"Jonathan asked me to remember ({dt.date.today():%d %b %Y}): {what}")
+    if len(what.split()) > 14 or re.search(r"\b(?:i mean|what is it|no wait|sorry|actually|say not)\b", what, re.I):
+        threading.Thread(target=_condense_fact, args=(app, fid, what), daemon=True, name="tidy-memory").start()
+        return "Got it, I'll remember that."  # (said back once it's been tidied into one clean sentence)
+    _maybe_task(what)
     return f"Got it. I'll remember: {_yours(what) if what[:1].islower() else what}."
+
+
+FILLERS = re.compile(r"\b(?:uh+|um+|erm|uhm|hmm+|you know)\b[,.]?\s*", re.I)
+
+
+def _clean_note(text: str) -> str:
+    """Spoken notes without the 'uh's, doubled words and stray punctuation."""
+    t = FILLERS.sub("", text)
+    t = re.sub(r"\b(\w+)( \1\b)+", r"\1", t, flags=re.I)  # "the the" -> "the"
+    t = re.sub(r"\s+([,.?!])", r"\1", re.sub(r"\s{2,}", " ", t)).strip(" ,.")
+    return t[:1].upper() + t[1:] if t else text
+
+
+def _condense_fact(app, fid: str, what: str) -> None:
+    """A long, self-correcting note -> one clear sentence (free local model), replacing the raw one."""
+    from batsy import vault_daily
+    from batsy.memory_store import get_store
+
+    try:
+        vault_daily._cfg = vault_daily._cfg or app.cfg
+        out = vault_daily.local_model(
+            "Jonathan dictated this note to his assistant Batsy (speech-to-text, rambling, with false starts):\n"
+            f"\"{what}\"\n\nRewrite it as ONE short, clear sentence of what he wants remembered, in third person "
+            "(\"Jonathan ...\"), keeping every name and detail. In his note, \"you\" means Batsy. Reply with the sentence "
+            "only.", 80)
+        clean = out.strip().strip('"').split("\n")[0].strip()
+        if 4 <= len(clean.split()) <= 45:
+            st = get_store()
+            st.forget_fact(fid)
+            st.add_fact(f"Jonathan asked me to remember ({dt.date.today():%d %b %Y}): {clean}", fid)
+            _maybe_task(clean)
+            app.announce(f"Noted: {clean}")
+    except Exception:
+        log.exception("tidying a memory")
+
+
+def _maybe_task(what: str) -> None:
+    """'I have to / need to / should …': also a task in the brain's inbox, to tick off."""
+    if re.search(r"\b(?:have to|need to|has to|needs to|must|should|got to|gotta|todo|to do)\b", what, re.I):
+        try:
+            from batsy import vault_capture
+
+            vault_capture.note(f"To do: {what}", "memory")
+        except Exception:
+            pass
 
 
 @handles(r"what (?:did|have) i (?:ask|asked|tell|told) you to remember", r"what do you remember(?: for me)?",
