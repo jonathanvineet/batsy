@@ -423,6 +423,11 @@ class Hub:
                 self.armed = 0
             else:
                 return {"ok": True, "ignored": True, "heard": text}
+        if mode != "ears":  # hold-to-talk: people still say "Batsy, …" first
+            found, rest = strip_wake_word(re.sub(r"^(?:uh+|um+|hey|ok|okay)[ ,]+", "", text, flags=re.I),
+                                          self.cfg.get("voice.wake_words"))
+            if found and rest.strip(" ,.?!"):
+                text = rest.strip(" ,")
         self.app.speaker.unhush()
         r = self.batsy_action({"action": "ask", "text": text, "speak": True})
         return {"ok": True, "heard": text, "say": r.get("say", "")}
@@ -927,7 +932,24 @@ def _handler(hub: Hub):
             if self.path.startswith("/api/slice"):
                 last = hub.last_slice()
                 if self.path.startswith("/api/slice/paths"):
-                    return self._send(200, body=Path(last["paths"]).read_bytes()) if last else self._send(404, {})
+                    if not last:
+                        return self._send(404, {})
+                    raw = Path(last["paths"]).read_bytes()
+                    if "gzip" not in (self.headers.get("Accept-Encoding") or ""):
+                        return self._send(200, body=raw)
+                    import gzip  # a big slice is 5-15 MB of toolpaths: a third of that over Tailscale
+
+                    z = gzip.compress(raw, 5)
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/json")
+                    self.send_header("Content-Encoding", "gzip")
+                    self.send_header("Content-Length", str(len(z)))
+                    self.send_header("X-Raw-Length", str(len(raw)))  # for the progress bar (the browser unzips)
+                    self.send_header("Access-Control-Expose-Headers", "X-Raw-Length")
+                    self.send_header("Cache-Control", "no-store")
+                    self.end_headers()
+                    self.wfile.write(z)
+                    return
                 if self.path.startswith("/api/slice/preview"):
                     ok = last and Path(last["preview"]).exists()
                     return self._send(200, body=Path(last["preview"]).read_bytes(), ctype="image/png") if ok \

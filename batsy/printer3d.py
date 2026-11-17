@@ -872,8 +872,13 @@ def _again(app, pr: Printer, what: str) -> str:
 def _print(app, pr: Printer, what: str, proc: str | None) -> str | None:
     from batsy import slicer
 
-    model = slicer._named_model(what) if what not in ("it", "this", "that", "the model") else None
-    model = model or slicer._target(app, None if what in ("it", "this", "that", "the model") else what)
+    it = what in ("it", "this", "that", "the model", "them", "these", "those")
+    last = getattr(app, "slice_last", None) or {}
+    if it and last.get("result", {}).get("gcode") and Path(last["result"]["gcode"]).exists() and not proc:
+        model = Path(last["model"])  # "print it": what was sliced last (e.g. the five-dice plate), as sliced
+    else:
+        model = slicer._named_model(what) if not it else None
+        model = model or slicer._target(app, None if it else what)
     if model is None:
         return None  # not a model Batsy has: maybe "print this document" (paper printer), not ours
     if not pr.state["connected"]:

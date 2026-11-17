@@ -73,6 +73,33 @@ def _norm(text: str) -> str:
 
 
 class Batsy:
+    @property
+    def slice_last(self) -> dict | None:
+        """The newest slice, from here or from the print expert's `batsy print slice` (a separate process)."""
+        from batsy import printagent
+
+        mine, shared = getattr(self, "_slice_last", None), printagent.recall()
+        if shared and (not mine or shared.get("t", 0) > mine.get("t", 0)):
+            return {"model": shared["model"], "process": shared["process"], "overrides": shared.get("overrides") or {},
+                    "result": shared.get("result") or {}, "t": shared["t"]}
+        return mine
+
+    @slice_last.setter
+    def slice_last(self, d: dict | None) -> None:
+        from batsy import printagent
+
+        self._slice_last = {**d, "t": time.time()} if d else None
+        if d:
+            self.print_talk_t = time.time()  # "16 hours is too much": a reaction to this slice, for the print expert
+        if d:
+            try:
+                r = d.get("result") or {}
+                from batsy import slicer
+
+                printagent.remember({**d, "hours": round(slicer.hours(r.get("time", "")), 2)})
+            except Exception:
+                log.exception("sharing the last slice")
+
     def __init__(self, cfg, voice: bool = True, speak: bool = True):
         self.cfg = cfg
         self.voice = voice
@@ -136,6 +163,7 @@ class Batsy:
         self.last_skill: dict | None = None  # the skill that just ran, awaiting feedback
         if hasattr(self.brain, "skills"):
             self.brain.skills = self.skills
+        self.brain.app = self  # (the print expert keeps track of a print conversation on the app)
         threading.Thread(target=apps.INDEX.refresh, daemon=True, name="app-index").start()
         model3d.VIEWER.on_event = self._viewer_event
         if self.overlay.enabled:  # the 3D viewer lives inside the overlay: one process, controlled by voice
@@ -343,6 +371,15 @@ class Batsy:
         """The screen closed. You closing it (Esc, click) means you're done: the request is cancelled too, or it
         would reopen the screen and start talking when its answer arrived. Timing out after an answer is not that."""
         self.overlay_dismissed = True
+        from batsy import claude_code
+
+        if user and claude_code.busy():
+            # Esc / Space / a click while Claude is working (often just a keystroke meant for another window: the
+            # screen has the focus): hide it, but let the work finish. Its answer is still said, without the screen.
+            # "~", "stop" or the Stop button cancel it.
+            log.info("screen closed while Claude works: keeping the job")
+            self.speaker.stop()
+            return
         if user:
             self.end_conversation()
             return
@@ -701,7 +738,10 @@ class Batsy:
                 vault_capture.exchange(text, reply, route, source)
             from batsy.local_brain import ONE_OFF
 
+            from batsy.local_brain import HAS_HANDLER
+
             if route in ("quick", "full", "claude") and secs > 6 and not abort.is_set() and not ONE_OFF.search(text) \
+                    and not HAS_HANDLER.search(text) \
                     and not (reply or "").lower().startswith(("sorry", "one moment")):
                 self.automator.learn_soon(text, n)  # slow once is enough: have Claude make it instant
             plain = not [a for a in getattr(self.brain, "last_actions", []) if a != "answered by Claude"]
@@ -789,6 +829,11 @@ class Batsy:
             self._route = "instant"
             self._reply(said)
             return True
+        from batsy import printagent
+
+        if printagent.wants(_norm(text), self):  # planning a print: talked through by the print expert, not by rules
+            self.print_talk_t = time.time()
+            return False
         from batsy import printsearch
 
         said = printsearch.handle(self, n)  # "find me a phone stand to print", then "the second one"

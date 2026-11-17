@@ -28,8 +28,11 @@ _last: dict = {}
 
 
 def _git(path: Path, *args, timeout: float = 60) -> tuple[int, str]:
+    import os
+
+    # your whole session's environment: the GitHub login lives in GNOME's keyring, reached over D-Bus
     r = subprocess.run(["git", "-C", str(path), *args], capture_output=True, text=True, timeout=timeout,
-                       env={"GIT_TERMINAL_PROMPT": "0", "PATH": "/usr/bin:/bin", "HOME": str(Path.home())})
+                       env={**os.environ, "GIT_TERMINAL_PROMPT": "0"})
     return r.returncode, (r.stdout + r.stderr).strip()
 
 
@@ -106,7 +109,7 @@ def run(app, path: Path, push: bool) -> None:
         n = len([l for l in _git(path, "diff", "--cached", "--name-only")[1].splitlines() if l.strip()])
         app.announce(f"Staged {n} file{'s' if n != 1 else ''} in {name}. Writing the commit message.")
         msg = message(path, app.cfg)
-        first = msg.splitlines()[0]
+        first = msg.splitlines()[0].rstrip(".")
         branch = _git(path, "rev-parse", "--abbrev-ref", "HEAD")[1] or "main"
         q = f"Commit {n} file{'s' if n != 1 else ''} as: {first}." + (f" And push to {branch}?" if push else " Okay?")
         if not app.ask_from_background(q):

@@ -83,6 +83,11 @@ COMPLEX = re.compile(
     r"|\b(?:git|pull request|rebase|amend|unstage|co-?authors?|branch|merge|revert|stash|diff)\b")
 # (commit / push / stage: Batsy's own gitops does those, never Claude)
 
+# Things Batsy already has proper commands for: never "learned" as a new skill (the learner wrote its own slicer
+# and its own force-push for these)
+HAS_HANDLER = re.compile(r"\b(?:print|prints|printer|slice|slicing|sliced|stl|3mf|bed|filament|scale|copies|dice|dies|"
+                         r"model|models|git|commit|push|stage|brain|notes?|playlist|spotify)\b", re.I)
+
 # One-off jobs and questions: never turned into "skills" (a skill that force-pushes was learned from one)
 ONE_OFF = re.compile(r"\b(?:git|commit|push|github|repo|repository|amend|co-?author|see what|what is|what's|who is|"
                      r"explain|why|how does|remember)\b", re.I)
@@ -413,6 +418,23 @@ class LocalBrain:
             self._look("webcam", text, context, emit, on_marker, on_tool, actions)
             return self._finish(source, text, spoken, actions, abort)
 
+        from batsy import printagent
+
+        if self.claude_ok and printagent.wants(norm(text), getattr(self, "app", None)):  # planning a print: the print expert
+            self.route = "print"
+            if getattr(self, "app", None) is not None:
+                self.app.print_talk_t = time.time()
+            emit("Let me think about that.")
+            self.status("Planning the print with Claude")
+            # only its final answer is spoken: while it works it narrates its own steps ("each setting needs its
+            # own --set"), which isn't for you
+            said = printagent.ask(text, context, cfg=self.cfg) or "I couldn't work that out."
+            speak_stream(lambda on_text: (on_text(said), said)[1], emit, on_marker)
+            actions.append("print planned by Claude")
+            if getattr(self, "app", None) is not None:  # it asked something: your reply goes back to it
+                self.app.print_asked_t = time.time() if (said or "").rstrip().endswith("?") else 0
+            return self._finish(source, text, spoken, actions, abort)
+
         if self.claude_ok and (model3d.VIEWER.active() and THREE_D_TALK.search(text.lower())
                                or DESIGN.search(text.lower())):
             self.route = "3d"
@@ -439,7 +461,7 @@ class LocalBrain:
             self._claude(text + CODE_NOTE.format(code_dir=CODE_DIR), context, emit, on_marker, on_tool, actions)
             return self._finish(source, text, spoken, actions, abort)
 
-        if self.claude_ok and self.skills and ACTION.match(norm(text)):
+        if self.claude_ok and self.skills and ACTION.match(norm(text)) and not HAS_HANDLER.search(text):
             # a new kind of action: Claude writes code for it once; next time it runs without any AI.
             # Read back what we heard first: a misheard word ("plot" for "Claude") must not run anything.
             if not self.registry.ctx.confirm(f"Just to check, you want me to {text.strip().rstrip('.?!')}?"):

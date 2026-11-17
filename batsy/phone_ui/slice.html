@@ -5,22 +5,51 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Slice preview</title>
 <style>
-  :root { --bg: #000; --text: #f2ede2; --muted: #8d95a5; --signal: #ffc20e; }
-  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text); font: 15px/1.3 system-ui, Roboto, sans-serif;
-    overflow: hidden; user-select: none; }
+  :root { --bg: #1d2026; --panel: rgba(24, 27, 33, .86); --line: rgba(255, 255, 255, .1); --text: #ece7db; --muted: #8d95a5;
+    --signal: #ffc20e; }
+  html, body { margin: 0; height: 100%; background: radial-gradient(ellipse at 50% 30%, #2a2e36, #15171c 75%); color: var(--text);
+    font: 14px/1.3 system-ui, Roboto, sans-serif; overflow: hidden; user-select: none; -webkit-user-select: none; }
   canvas { display: block; touch-action: none; }
-  .top { position: fixed; left: 16px; right: 16px; top: max(12px, env(safe-area-inset-top)); display: flex; gap: 12px;
-    align-items: center; pointer-events: none; }
-  .top b { font-size: 18px; flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .top span { color: var(--muted); white-space: nowrap; }
-  .close { pointer-events: auto; width: 40px; height: 40px; border-radius: 50%; border: 0; background: rgba(255, 255, 255, .12);
-    color: var(--text); font-size: 20px; }
-  .legend { position: fixed; right: 14px; top: 64px; display: flex; flex-direction: column; gap: 4px; font-weight: 700; }
-  .legend i { display: inline-block; width: 12px; height: 12px; border-radius: 3px; margin-right: 6px; vertical-align: -1px; }
-  .bottom { position: fixed; left: 16px; right: 16px; bottom: max(14px, env(safe-area-inset-bottom)); display: flex; gap: 12px;
-    align-items: center; }
-  input[type=range] { flex: 1; accent-color: var(--signal); }
-  .bottom span { color: var(--muted); min-width: 92px; text-align: right; font-variant-numeric: tabular-nums; }
+  .glass { background: var(--panel); backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px); border: 1px solid var(--line);
+    border-radius: 16px; }
+  .top { position: fixed; left: 12px; right: 12px; top: max(10px, env(safe-area-inset-top)); display: flex; gap: 8px; align-items: center;
+    pointer-events: none; }
+  .top > * { pointer-events: auto; }
+  .ttl { padding: 8px 14px; display: flex; flex-direction: column; min-width: 0; }
+  .ttl b { font-size: 16px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .chips { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 4px; }
+  .chip { font-size: 12px; padding: 3px 8px; border-radius: 999px; background: rgba(255, 255, 255, .08); color: var(--text); white-space: nowrap; }
+  .chip.y { background: rgba(255, 194, 14, .16); color: var(--signal); }
+  .btn { height: 38px; min-width: 38px; padding: 0 12px; border-radius: 12px; border: 1px solid var(--line); background: var(--panel);
+    color: var(--text); font: 600 13px/1 system-ui; backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px); }
+  .btn.on { background: var(--signal); color: #000; border-color: transparent; }
+  .sp { flex: 1; }
+  .legend { position: fixed; right: 12px; top: 78px; width: 230px; max-height: calc(100% - 210px); overflow: auto; padding: 10px;
+    transition: transform .25s ease, opacity .25s; }
+  .legend.hide { transform: translateX(110%); opacity: 0; }
+  .legend h4 { margin: 2px 4px 8px; font-size: 11px; letter-spacing: .12em; text-transform: uppercase; color: var(--muted);
+    display: flex; justify-content: space-between; }
+  .seg { display: flex; gap: 4px; margin: 0 4px 10px; }
+  .seg button { flex: 1; height: 28px; border-radius: 9px; border: 0; background: rgba(255, 255, 255, .07); color: var(--text); font: 600 12px system-ui; }
+  .seg button.on { background: rgba(255, 194, 14, .2); color: var(--signal); }
+  .feat { display: flex; align-items: center; gap: 8px; padding: 6px 4px; border-radius: 8px; cursor: pointer; }
+  .feat:active { background: rgba(255, 255, 255, .06); }
+  .feat i { width: 14px; height: 14px; border-radius: 4px; flex: none; }
+  .feat span { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .feat small { color: var(--muted); font-variant-numeric: tabular-nums; }
+  .feat.off { opacity: .35; } .feat.off i { background: transparent !important; outline: 2px solid currentColor; outline-offset: -2px; }
+  .bottom { position: fixed; left: 12px; right: 12px; bottom: max(12px, env(safe-area-inset-bottom)); padding: 10px 14px;
+    display: flex; flex-direction: column; gap: 8px; }
+  .row { display: flex; align-items: center; gap: 10px; }
+  .row label { width: 54px; color: var(--muted); font-size: 12px; }
+  .row input[type=range] { flex: 1; accent-color: var(--signal); height: 28px; }
+  .row .val { min-width: 150px; text-align: right; font-variant-numeric: tabular-nums; font-size: 13px; }
+  .row .btn { height: 30px; min-width: 30px; padding: 0 8px; border-radius: 9px; }
+  @media (max-width: 640px) { .legend { width: 200px; } .row .val { min-width: 104px; font-size: 12px; } .row label { width: 44px; } }
+  @media (max-height: 520px) {  /* a phone on its side: slimmer panels, more model */
+    .top { top: 6px; } .ttl { padding: 5px 10px; } .ttl b { font-size: 14px; } .chip { font-size: 11px; padding: 2px 7px; }
+    .bottom { padding: 6px 10px; gap: 2px; } .row input[type=range] { height: 22px; } .row .btn { height: 26px; min-width: 26px; }
+    .legend { top: 60px; max-height: calc(100% - 150px); } }
   .msg { position: fixed; inset: 0; display: grid; place-content: center; justify-items: center; gap: 14px; color: var(--muted);
     text-align: center; padding: 24px; }
   .fillbat { width: min(220px, 56vw); height: auto; overflow: visible; filter: drop-shadow(0 0 18px rgba(255, 194, 14, .25)); }
@@ -35,11 +64,25 @@
 <script type="importmap">{"imports": {"three": "/app/vendor/three.module.min.js"}}</script>
 </head>
 <body>
-<div class="top"><b id="title">Loading…</b><span id="info"></span><button class="close" id="close" aria-label="Close">✕</button></div>
-<div class="legend" id="legend"></div>
-<div class="bottom"><input type="range" id="layer" min="0" max="1000" value="1000"><span id="layer-l">all layers</span></div>
+<div class="top">
+  <button class="btn" id="close" aria-label="Close">✕</button>
+  <div class="ttl glass"><b id="title">Loading…</b><div class="chips" id="chips"></div></div>
+  <div class="sp"></div>
+  <button class="btn" id="tg-legend">Legend</button>
+</div>
+<div class="legend glass" id="legend">
+  <div class="seg" id="mode"></div>
+  <h4><span>Line type</span><span>share</span></h4>
+  <div id="feats"></div>
+</div>
+<div class="bottom glass">
+  <div class="row"><label>Layer</label><button class="btn" id="lprev">‹</button>
+    <input type="range" id="layer" min="1" max="1" value="1"><button class="btn" id="lnext">›</button>
+    <span class="val" id="layer-l"></span><button class="btn" id="single" title="Only this layer">1</button></div>
+  <div class="row"><label>Moves</label><button class="btn" id="play">▶</button>
+    <input type="range" id="move" min="0" max="1000" value="1000"><span class="val" id="move-l">whole layer</span></div>
+</div>
 <div class="msg" id="msg">
-  <!-- the bat fills with liquid as the toolpaths arrive -->
   <svg class="fillbat" viewBox="0 4 24 14" aria-hidden="true">
     <defs><clipPath id="batclip"><path d="M12,15.6c-0.4,-1.3 -1.2,-2.1 -2.4,-2.2c-0.6,-1.5 -2.1,-2.3 -3.9,-1.9c0.5,-1.2 0.2,-2.6 -0.8,-3.6C3.3,8.6 1.9,9.9 1,11.6c1.5,-0.4 2.8,0 3.6,1.1c1.3,-0.5 2.8,0 3.4,1.3c1.4,0 2.6,0.8 3,2.2l0.5,0.6l0.5,-0.6c0.4,-1.4 1.6,-2.2 3,-2.2c0.6,-1.3 2.1,-1.8 3.4,-1.3c0.8,-1.1 2.1,-1.5 3.6,-1.1c-0.9,-1.7 -2.3,-3 -4.1,-3.7c-1,1 -1.3,2.4 -0.8,3.6c-1.8,-0.4 -3.3,0.4 -3.9,1.9c-0.4,0 -0.8,0.1 -1.1,0.3l-0.2,-1.3l-0.5,0.6l-0.5,-0.6l-0.2,1.3C12.8,13.5 12.4,13.4 12,13.4z"/></clipPath></defs>
     <path d="M12,15.6c-0.4,-1.3 -1.2,-2.1 -2.4,-2.2c-0.6,-1.5 -2.1,-2.3 -3.9,-1.9c0.5,-1.2 0.2,-2.6 -0.8,-3.6C3.3,8.6 1.9,9.9 1,11.6c1.5,-0.4 2.8,0 3.6,1.1c1.3,-0.5 2.8,0 3.4,1.3c1.4,0 2.6,0.8 3,2.2l0.5,0.6l0.5,-0.6c0.4,-1.4 1.6,-2.2 3,-2.2c0.6,-1.3 2.1,-1.8 3.4,-1.3c0.8,-1.1 2.1,-1.5 3.6,-1.1c-0.9,-1.7 -2.3,-3 -4.1,-3.7c-1,1 -1.3,2.4 -0.8,3.6c-1.8,-0.4 -3.3,0.4 -3.9,1.9c-0.4,0 -0.8,0.1 -1.1,0.3l-0.2,-1.3l-0.5,0.6l-0.5,-0.6l-0.2,1.3C12.8,13.5 12.4,13.4 12,13.4z" fill="rgba(255,255,255,.10)"/>
@@ -54,9 +97,14 @@
   <small id="msg-n">connecting…</small>
 </div>
 <script type="module">
-// The sliced toolpaths in 3D: drag to turn it, pinch / scroll to zoom, the slider to scrub up through the layers.
+// The slicing, as a slicer shows it: every extrusion line at its real width, coloured by what it is (outer wall,
+// inner wall, infill, top surface, ironing...), on the 220 x 220 plate. Layer slider, a "moves" slider that plays
+// the top layer move by move (with the nozzle), tap a line type to hide it, colour by type / height / temperature.
 import * as THREE from 'three';
 import {OrbitControls} from '/app/vendor/OrbitControls.js';
+import {LineSegments2} from '/app/vendor/LineSegments2.js';
+import {LineSegmentsGeometry} from '/app/vendor/LineSegmentsGeometry.js';
+import {LineMaterial} from '/app/vendor/LineMaterial.js';
 
 const h = new URLSearchParams(location.hash.slice(1));
 if (h.get('t')) try { localStorage.setItem('token', JSON.stringify(h.get('t'))); } catch {}
@@ -64,99 +112,188 @@ let token = ''; try { token = JSON.parse(localStorage.getItem('token') || '""');
 const $ = s => document.querySelector(s);
 $('#close').onclick = () => (window.parent !== window ? parent.postMessage({closeSlice: true}, '*') : history.back());
 
-// the toolpaths, with a progress bar (a slice is a megabyte or two: a few seconds over Tailscale)
+// --- the toolpaths, with the filling bat ------------------------------------------------------------------------------
 const res = await fetch('/api/slice/paths', {headers: {Authorization: 'Bearer ' + token}});
 if (!res.ok) { $('#msg-t').textContent = res.status === 404 ? 'Nothing sliced yet.' : 'Couldn\'t load the slice.';
   $('#msg-n').textContent = ''; throw 0; }
-const total = +res.headers.get('Content-Length') || 0, mb = n => (n / 1e6).toFixed(1);
-// 0..1 -> the liquid's surface: from below the bat (empty) to above its ears (full)
+const total = +res.headers.get('X-Raw-Length') || +res.headers.get('Content-Length') || 0, mb = n => (n / 1e6).toFixed(1);  // (sent zipped)
 const fill = f => { document.getElementById('level').style.transform = `translateY(${(1 - Math.min(1, f)) * 12 - 3}px)`; };
 fill(0.04);
 const t0 = performance.now();
-let got = 0, parts = [];
-const reader = res.body.getReader();
-for (;;) {
+let got = 0; const parts = [];
+for (const reader = res.body.getReader();;) {
   const {done, value} = await reader.read();
   if (done) break;
   parts.push(value); got += value.length;
   if (total) {
     fill(got / total);
-    const secs = (performance.now() - t0) / 1000, rate = got / Math.max(secs, 0.05);
-    const left = Math.max(0, (total - got) / rate);
+    const left = Math.max(0, (total - got) / (got / Math.max((performance.now() - t0) / 1000, 0.05)));
     $('#msg-n').textContent = `${Math.round(100 * got / total)}% · ${mb(got)} of ${mb(total)} MB` + (left > 1.5 ? ` · ${Math.ceil(left)} s left` : '');
-  } else { $('#msg-n').textContent = `${mb(got)} MB`; fill(Math.min(0.9, got / 2e6)); }
+  } else { $('#msg-n').textContent = `${mb(got)} MB`; fill(Math.min(0.9, got / 6e6)); }
 }
-$('#msg-t').textContent = 'Building the 3D view';
-fill(1); $('#msg-n').textContent = '';
-await new Promise(r => requestAnimationFrame(() => setTimeout(r, 30)));  // let that show before the heavy part
+$('#msg-t').textContent = 'Building the 3D view'; fill(1); $('#msg-n').textContent = '';
+await new Promise(r => requestAnimationFrame(() => setTimeout(r, 30)));
 const buf = new Uint8Array(got); { let o = 0; for (const p of parts) { buf.set(p, o); o += p.length; } }
 const data = JSON.parse(new TextDecoder().decode(buf));
-const info = await (await fetch('/api/slice', {headers: {Authorization: 'Bearer ' + token}})).json();
-$('#msg').remove();
-$('#title').textContent = data.title || info.title || 'Slice';
-$('#info').textContent = [info.time, info.grams ? Math.round(info.grams) + ' g' : ''].filter(Boolean).join(' · ');
+const info = await (await fetch('/api/slice', {headers: {Authorization: 'Bearer ' + token}})).json().catch(() => ({}));
 
-// int16 x,y,z (scaled) per vertex, two vertices per segment, in print order (bottom layer first)
-const raw = Uint8Array.from(atob(data.pos), c => c.charCodeAt(0));
-const ints = new Int16Array(raw.buffer);
-const n = ints.length / 3;
-const pos = new Float32Array(n * 3), col = new Float32Array(n * 3);
-let zmin = Infinity, zmax = -Infinity;
-for (let i = 0; i < n; i++) { const z = ints[i * 3 + 2] / data.scale; zmin = Math.min(zmin, z); zmax = Math.max(zmax, z); }
+const bytes = b => Uint8Array.from(atob(b || ''), c => c.charCodeAt(0));
+const ints = new Int16Array(bytes(data.pos).buffer);
+const N = ints.length / 6;
+const featOf = data.feat ? bytes(data.feat) : new Uint8Array(N);
+const layerOf = data.layer ? new Uint16Array(bytes(data.layer).buffer) : new Uint16Array(N);
+const layers = data.layers && data.layers.length ? data.layers : [{z: 0, h: 0.2}];
+const L = Math.max(1, layers.length, layerOf.length ? layerOf[N - 1] + 1 : 1);
+const names = data.features || ['Extrusion'], palette = (data.colors || ['#ff7d38']).map(c => new THREE.Color(c));
 const bands = data.bands || [];
-const bandColour = i => new THREE.Color().setHSL(0.66 * (bands.length > 1 ? i / (bands.length - 1) : 0), 0.85, 0.55);
-const heat = t => new THREE.Color().setHSL(0.78 - 0.68 * t, 0.9, 0.55);  // purple at the bottom -> orange at the top
-const c = new THREE.Color();
-const zs = new Float32Array(n);
-for (let i = 0; i < n; i++) {
-  const x = ints[i * 3] / data.scale, y = ints[i * 3 + 1] / data.scale, z = ints[i * 3 + 2] / data.scale;
-  pos.set([x, z, -y], i * 3);  // the printer's Z is up: three.js's Y
-  zs[i] = z;
-  if (bands.length) { let b = 0; while (b + 1 < bands.length && z >= bands[b + 1].z) b++; c.copy(bandColour(b)); }
-  else c.copy(heat((z - zmin) / Math.max(1e-6, zmax - zmin)));
-  col.set([c.r, c.g, c.b], i * 3);
-}
-const geo = new THREE.BufferGeometry();
-geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
-geo.setAttribute('color', new THREE.BufferAttribute(col, 3));
-geo.computeBoundingBox();
-const box = geo.boundingBox, centre = box.getCenter(new THREE.Vector3()), size = box.getSize(new THREE.Vector3());
-const lines = new THREE.LineSegments(geo, new THREE.LineBasicMaterial({vertexColors: true, transparent: true, opacity: 0.95}));
-lines.position.sub(centre);
+const S = data.scale || 20;
 
-const renderer = new THREE.WebGLRenderer({antialias: true});
+// --- top bar ----------------------------------------------------------------------------------------------------------------
+$('#title').textContent = info.title || data.title || 'Slice';
+// the usual layer height (the first layer is often thicker; a few odd ones don't count)
+const hc = {}; layers.slice(1).forEach(l => { hc[l.h] = (hc[l.h] || 0) + 1; });
+const lh = Object.entries(hc).filter(([, n]) => n >= Math.max(3, L * 0.05)).map(([k]) => +k).sort((a, b) => a - b);
+$('#chips').innerHTML = [info.time && `<span class="chip y">⏱ ${info.time}</span>`, info.grams && `<span class="chip y">${Math.round(info.grams)} g</span>`,
+  info.metres && `<span class="chip">${info.metres} m</span>`, `<span class="chip">${L} layers</span>`,
+  lh.length && `<span class="chip">${lh.length === 1 ? lh[0] : Math.min(...lh) + '–' + Math.max(...lh)} mm layers</span>`]
+  .filter(Boolean).join('');
+
+// --- colour modes and the legend -------------------------------------------------------------------------------------
+const present = names.map((_, i) => i).filter(i => featOf.includes(i));
+const amount = data.amount_mm || {};
+const totalAmt = Object.values(amount).reduce((a, b) => a + b, 0) || 1;
+const hidden = new Set();
+const modes = [['type', 'Line type'], ['height', 'Height'], ...(bands.length ? [['temp', 'Temperature']] : [])];
+let mode = bands.length ? 'temp' : 'type';
+const heat = t => new THREE.Color().setHSL(0.72 - 0.68 * t, 0.85, 0.55);
+const bandColour = i => new THREE.Color().setHSL(0.66 * (bands.length > 1 ? i / (bands.length - 1) : 0), 0.85, 0.55);
+function drawLegend() {
+  $('#mode').innerHTML = modes.map(([k, t]) => `<button data-m="${k}" class="${k === mode ? 'on' : ''}">${t}</button>`).join('');
+  if (mode === 'type') {
+    $('#feats').innerHTML = present.map(i => `<div class="feat ${hidden.has(i) ? 'off' : ''}" data-f="${i}" style="color:#${palette[i].getHexString()}">
+      <i style="background:#${palette[i].getHexString()}"></i><span style="color:var(--text)">${names[i]}</span>
+      <small>${Math.round(100 * (amount[names[i]] || 0) / totalAmt)}%</small></div>`).join('');
+  } else if (mode === 'temp') {
+    $('#feats').innerHTML = bands.slice().reverse().map((b, k) => { const c = bandColour(bands.length - 1 - k).getHexString();
+      return `<div class="feat"><i style="background:#${c}"></i><span>${b.temp} °C</span><small>from ${b.z} mm</small></div>`; }).join('');
+  } else {
+    const zt = layers[layers.length - 1].z;
+    $('#feats').innerHTML = [1, .75, .5, .25, 0].map(t => `<div class="feat"><i style="background:#${heat(t).getHexString()}"></i>
+      <span>${(zt * t).toFixed(1)} mm</span></div>`).join('');
+  }
+}
+$('#mode').addEventListener('click', e => { const b = e.target.closest('[data-m]'); if (!b) return; mode = b.dataset.m; drawLegend(); rebuild(); });
+$('#feats').addEventListener('click', e => {
+  const f = e.target.closest('[data-f]'); if (!f) return;
+  const i = +f.dataset.f; hidden.has(i) ? hidden.delete(i) : hidden.add(i); drawLegend(); rebuild();
+});
+$('#tg-legend').onclick = () => $('#legend').classList.toggle('hide');
+if (innerWidth < 700 || innerHeight < 520) $('#legend').classList.add('hide');  // small screens: on tap
+
+// --- the scene: plate, lights, camera ----------------------------------------------------------------------------------
+const renderer = new THREE.WebGLRenderer({antialias: true, alpha: true});
 renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
 document.body.prepend(renderer.domElement);
 const scene = new THREE.Scene();
-scene.add(lines);
-const grid = new THREE.GridHelper(Math.max(size.x, size.z) * 1.6, 16, 0x2a2f3a, 0x1a1e27);
-grid.position.y = -size.y / 2 - 0.2;
-scene.add(grid);
-const camera = new THREE.PerspectiveCamera(40, 1, 0.1, 5000);
-const r = Math.max(size.x, size.y, size.z);
-camera.position.set(r * 1.3, r * 0.9, r * 1.5);
+// the build plate, 220 x 220 (G-code coordinates are bed coordinates): printer X -> three X, Y -> -Z, Z -> Y
+const plate = new THREE.Mesh(new THREE.PlaneGeometry(220, 220).rotateX(-Math.PI / 2).translate(110, -0.05, -110),
+  new THREE.MeshBasicMaterial({color: 0x2b2f37}));
+scene.add(plate);
+const grid = new THREE.GridHelper(220, 22, 0x3d434e, 0x353a44); grid.position.set(110, 0, -110); scene.add(grid);
+const rim = new THREE.LineSegments(new THREE.EdgesGeometry(new THREE.BoxGeometry(220, 0.01, 220)), new THREE.LineBasicMaterial({color: 0x59606c}));
+rim.position.set(110, 0, -110); scene.add(rim);
+const nozzle = new THREE.Mesh(new THREE.ConeGeometry(1.2, 3, 16).rotateX(Math.PI).translate(0, 1.5, 0),
+  new THREE.MeshBasicMaterial({color: 0xffc20e}));
+nozzle.visible = false; scene.add(nozzle);
+
+let lo = [Infinity, Infinity, Infinity], hi = [-Infinity, -Infinity, -Infinity];
+for (let i = 0; i < N * 2; i++) for (let a = 0; a < 3; a++) { const v = ints[i * 3 + a] / S; if (v < lo[a]) lo[a] = v; if (v > hi[a]) hi[a] = v; }
+const centre = new THREE.Vector3((lo[0] + hi[0]) / 2, (lo[2] + hi[2]) / 2, -(lo[1] + hi[1]) / 2);
+const span = Math.max(hi[0] - lo[0], hi[1] - lo[1], hi[2] - lo[2], 20);
+const camera = new THREE.PerspectiveCamera(38, 1, 0.5, 4000);
+camera.position.set(centre.x + span * 1.15, centre.y + span * 0.95, centre.z + span * 1.35);
 const controls = new OrbitControls(camera, renderer.domElement);
-controls.enableDamping = true;
-controls.autoRotate = true;            // turns slowly until you touch it
-controls.autoRotateSpeed = 1.2;
-controls.addEventListener('start', () => { controls.autoRotate = false; });
-function resize() { renderer.setSize(innerWidth, innerHeight); camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix(); }
-addEventListener('resize', resize); resize();
-(function loop() { requestAnimationFrame(loop); controls.update(); renderer.render(scene, camera); })();
+controls.target.copy(centre); controls.enableDamping = true;
 
-// legend: each temperature band (calibration towers)
-$('#legend').innerHTML = bands.slice().reverse().map((b, k) => {
-  const i = bands.length - 1 - k, cc = bandColour(i);
-  return `<div style="color:#${cc.getHexString()}"><i style="background:#${cc.getHexString()}"></i>${b.temp}°</div>`;
-}).join('');
+const mat = new LineMaterial({vertexColors: true, worldUnits: true, linewidth: 0.42, alphaToCoverage: false});
+let lines = null, idx = new Uint32Array(0), layerStart = new Uint32Array(L + 1);
+const light = new THREE.Vector3(0.45, 0.8, 0.4).normalize();
+const c = new THREE.Color();
+let single = false;
+function colourOf(i, z) {
+  if (mode === 'type') return c.copy(palette[featOf[i]] || palette[0]);
+  if (mode === 'temp') { let b = 0; while (b + 1 < bands.length && z >= bands[b + 1].z) b++; return c.copy(bandColour(b)); }
+  return c.copy(heat((z - lo[2]) / Math.max(1e-6, hi[2] - lo[2])));
+}
+// build the visible lines (hidden types left out; "only this layer": just that layer). layerStart[k] = the first line
+// of layer k among them, for the sliders.
+let builtFor = null;
+function rebuild() {
+  const top = +$('#layer').value - 1;
+  builtFor = single ? top : 'all';
+  const keep = [];
+  for (let i = 0; i < N; i++) if (!hidden.has(featOf[i]) && (!single || layerOf[i] === top)) keep.push(i);
+  idx = Uint32Array.from(keep);
+  layerStart = new Uint32Array(L + 1);
+  for (let k = 0, j = 0; k <= L; k++) { while (j < idx.length && layerOf[idx[j]] < k) j++; layerStart[k] = j; }
+  const pos = new Float32Array(Math.max(1, idx.length) * 6), col = new Float32Array(Math.max(1, idx.length) * 6);
+  for (let j = 0; j < idx.length; j++) {
+    const i = idx[j], o = i * 6;
+    const x0 = ints[o] / S, y0 = ints[o + 1] / S, z0 = ints[o + 2] / S, x1 = ints[o + 3] / S, y1 = ints[o + 4] / S, z1 = ints[o + 5] / S;
+    pos.set([x0, z0, -y0, x1, z1, -y1], j * 6);
+    // shade by the line's direction against the light: walls get light and shadow, like a real preview
+    const dx = x1 - x0, dy = y1 - y0, len = Math.hypot(dx, dy) || 1;
+    const facing = Math.abs((-dy / len) * light.x + (dx / len) * light.z);
+    colourOf(i, z0).multiplyScalar(0.62 + 0.38 * facing);
+    col.set([c.r, c.g, c.b, c.r, c.g, c.b], j * 6);
+  }
+  const g = new LineSegmentsGeometry();
+  g.setPositions(pos); g.setColors(col);
+  if (lines) { scene.remove(lines); lines.geometry.dispose(); }
+  lines = new LineSegments2(g, mat);
+  scene.add(lines);
+  applyRange();
+}
 
-// the slider: show the print up to a height, like scrubbing through the layers
-$('#layer').oninput = e => {
-  const f = +e.target.value / 1000, zcut = zmin + (zmax - zmin) * f;
-  let k = n; if (f < 1) { k = 0; while (k < n && zs[k] <= zcut + 1e-6) k += 2; }
-  geo.setDrawRange(0, k);
-  $('#layer-l').textContent = f >= 1 ? 'all layers' : `up to ${zcut.toFixed(1)} mm`;
+// --- sliders ------------------------------------------------------------------------------------------------------------
+const lay = $('#layer'), mv = $('#move');
+lay.max = L; lay.value = L;
+let playing = null;
+function applyRange() {
+  const top = +lay.value - 1;
+  if ((single ? top : 'all') !== builtFor) return rebuild();  // "only this layer" moved to another layer
+  const inLayer = layerStart[top + 1] - layerStart[top];
+  const f = +mv.value / 1000, end = layerStart[top] + Math.round(inLayer * f);
+  lines.geometry.instanceCount = end;  // everything up to here, in print order
+  const L0 = layers[top] || {z: 0, h: 0};
+  $('#layer-l').textContent = `${top + 1} / ${L} · Z ${(+L0.z).toFixed(2)} · ${(+L0.h).toFixed(2)} mm`;
+  $('#move-l').textContent = f >= 1 ? 'whole layer' : `${Math.round(inLayer * f)} / ${inLayer} moves`;
+  // the nozzle sits at the end of the last line drawn while scrubbing
+  nozzle.visible = f < 1 && end > 0;
+  if (nozzle.visible) { const o = idx[end - 1] * 6; nozzle.position.set(ints[o + 3] / S, ints[o + 5] / S, -ints[o + 4] / S); }
+}
+lay.oninput = () => { mv.value = 1000; applyRange(); };
+mv.oninput = applyRange;
+$('#lprev').onclick = () => { lay.value = Math.max(1, +lay.value - 1); mv.value = 1000; applyRange(); };
+$('#lnext').onclick = () => { lay.value = Math.min(L, +lay.value + 1); mv.value = 1000; applyRange(); };
+$('#single').onclick = () => { single = !single; $('#single').classList.toggle('on', single); applyRange(); };
+$('#play').onclick = () => {
+  if (playing) { cancelAnimationFrame(playing); playing = null; $('#play').textContent = '▶'; return; }
+  if (+mv.value >= 1000) mv.value = 0;
+  $('#play').textContent = '❚❚';
+  const step = () => { mv.value = Math.min(1000, +mv.value + 4); applyRange();
+    playing = +mv.value < 1000 ? requestAnimationFrame(step) : ($('#play').textContent = '▶', null); };
+  playing = requestAnimationFrame(step);
 };
+
+function resize() {
+  renderer.setSize(innerWidth, innerHeight); camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix();
+  mat.resolution.set(innerWidth, innerHeight);
+}
+addEventListener('resize', resize); resize();
+drawLegend(); rebuild();
+$('#msg').remove();
+renderer.setAnimationLoop(() => { controls.update(); renderer.render(scene, camera); });
 </script>
 </body>
 </html>

@@ -141,6 +141,12 @@ def _kill(proc: subprocess.Popen) -> None:
             pass
 
 
+def busy(thread: str = "turn") -> bool:
+    """Is Claude working on something for this thread right now?"""
+    with _lock:
+        return any(t == thread and p.poll() is None for p, t in _running.items())
+
+
 def cancel(thread: str = "turn") -> int:
     """Stop the Claude Code runs started by a voice turn (you said "stop", pressed "~" or closed the screen).
     Background work (learning skills, picking pictures) carries on. Returns how many were stopped."""

@@ -422,7 +422,7 @@ def slice_model(model: Path, process: str | None = None, overrides: dict | None 
             tail = (p.stderr or p.stdout).strip().splitlines()[-3:]
             log.warning("slicer failed (%s): %s", p.returncode, " | ".join(tail))
             raise ValueError("OrcaSlicer couldn't slice it" + (f": {tail[-1][:160]}" if tail else "."))
-        out_dir = model.parent / "sliced"
+        out_dir = model.parent if model.parent.name == "sliced" else model.parent / "sliced"  # (arrangements live there)
         out_dir.mkdir(exist_ok=True)
         dest = out_dir / f"{model.stem} - {pname}{(' ' + label) if label else ''}.gcode"
         shutil.move(str(gcodes[0]), dest)
@@ -439,6 +439,28 @@ def slice_model(model: Path, process: str | None = None, overrides: dict | None 
         log.warning("slicer: no preview (%s)", e)
     log.info("sliced %s: %s", model.name, result)
     return result
+
+
+def hours(t: str) -> float:
+    """'16h 45m 3s' / '1d 2h 3m' -> hours."""
+    unit = {"d": 24, "h": 1, "m": 1 / 60, "s": 1 / 3600}
+    return sum(float(v) * unit[u] for v, u in re.findall(r"(\d+(?:\.\d+)?)\s*([dhms])", t or ""))
+
+
+def too_long(r: dict, copies: int = 1, limit: float | None = None) -> str:
+    """'' unless this print has a time limit (one you gave for it: "under 4 hours") and goes over it."""
+    h = hours(r.get("time", ""))
+    if not limit or h <= limit:
+        return ""
+    tip = f" That's over your {limit:g}-hour limit."
+    if copies > 1:
+        fit = int(limit // (h / copies))
+        each = h / copies * fit
+        tip += (f" {fit} of them would take about {_say_time(f'{int(each)}h {round(each % 1 * 60)}m')}." if fit >= 1 else
+                " Even one is over it: say smaller, or faster.")
+    else:
+        tip += " Say faster, or a smaller size."
+    return tip
 
 
 def describe(model: Path, r: dict) -> str:
@@ -497,7 +519,10 @@ def handle(app, n: str) -> str | None:
                            r"the last model|again)\b.*)?", n)
     if not named and not generic and not n.startswith("make"):
         return None  # you named something I don't have ("print a calibration test"): not the last model instead
-    model = named or (Path(last["model"]) if last and n.startswith("make") else None) or _target(app, None)
+    # "slice it finer" after "put five on the bed": the arrangement you sliced last, not the single original
+    last_model = Path(last["model"]) if last and last.get("model") else None
+    model = named or (last_model if last_model and (n.startswith("make") or (generic and last_model.exists()))
+                      else None) or _target(app, None)
     if n.startswith("make") and not (last or model):
         return None  # "make it louder": not about printing
     names = processes()

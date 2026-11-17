@@ -397,6 +397,12 @@ def cmd_doctor(cfg, args) -> None:
 
 
 def main() -> None:
+    if len(sys.argv) > 1 and sys.argv[1] == "print":  # `batsy print info|slice ...`: the print expert's tool
+        from batsy import printagent
+
+        Config.load()
+        printagent.cli(sys.argv[2:])
+        return
     if len(sys.argv) > 1 and sys.argv[1] == "3d":  # `batsy 3d ...`: drive the 3D viewer (used by Claude Code)
         import json
 
