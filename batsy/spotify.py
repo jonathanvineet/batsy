@@ -15,6 +15,7 @@ import logging
 import os
 import re
 import secrets
+import threading
 import time
 import urllib.error
 import urllib.parse
@@ -54,6 +55,39 @@ MOODS = re.compile(r"\b(chill|relax\w*|calm|focus|study\w*|work(ing|out)?|gym|sa
                    r"romantic|mood|vibes?|coding|morning|night|rainy|energetic|hype|acoustic|instrumental)\b")
 NOT_MUSIC = re.compile(r"\b(youtube|video|movie|netflix|film|episode|game|chess)\b")
 
+
+
+# One kept-open HTTPS connection to Spotify per thread: a new TLS connection for every call cost 0.3-0.8 s, and a
+# play/pause makes two or three calls.
+_conns = threading.local()
+
+
+def _send(method: str, url: str, data: bytes | None, headers: dict) -> bytes:
+    """The request over the kept-open connection; HTTPError / URLError like urllib, so callers don't change."""
+    import http.client
+    import io
+
+    u = urllib.parse.urlsplit(url)
+    path = u.path + ("?" + u.query if u.query else "")
+    for attempt in (0, 1):
+        conn = getattr(_conns, u.netloc, None)
+        if conn is None:
+            conn = http.client.HTTPSConnection(u.netloc, timeout=10)
+            setattr(_conns, u.netloc, conn)
+        try:
+            conn.request(method, path, body=data, headers=headers)
+            r = conn.getresponse()
+            body = r.read()
+        except (OSError, http.client.HTTPException) as e:
+            conn.close()
+            setattr(_conns, u.netloc, None)
+            if attempt:  # the kept connection had gone stale: one fresh try, then give up
+                raise urllib.error.URLError(e)
+            continue
+        if r.status >= 400:
+            raise urllib.error.HTTPError(url, r.status, r.reason, r.headers, io.BytesIO(body))
+        return body
+    raise urllib.error.URLError("no connection")
 
 class SpotifyError(Exception):
     pass
@@ -145,16 +179,16 @@ class Spotify:
     def _req(self, method: str, path: str, params: dict | None = None, body: dict | None = None):
         url = API + path + ("?" + urllib.parse.urlencode(params) if params else "")
         data = json.dumps(body).encode() if body is not None else (b"" if method in ("PUT", "POST") else None)
-        req = urllib.request.Request(url, data=data, method=method, headers={
-            "Authorization": f"Bearer {self._token()}", "Content-Type": "application/json"})
+        headers = {"Authorization": f"Bearer {self._token()}", "Content-Type": "application/json"}
         try:
-            with urllib.request.urlopen(req, timeout=10) as r:
-                raw = r.read()
-                try:
-                    return json.loads(raw) if raw.strip() else None
-                except ValueError:  # some player commands answer 200 with a non-JSON body: that's still success
-                    return None
+            raw = _send(method, url, data, headers)
+            try:
+                return json.loads(raw) if raw.strip() else None
+            except ValueError:  # some player commands answer 200 with a non-JSON body: that's still success
+                return None
         except urllib.error.HTTPError as e:
+            if e.code == 404:
+                self._devs = (0.0, [])  # a device went away: look again next time
             try:
                 err = json.loads(e.read()).get("error", {})
             except ValueError:
@@ -173,8 +207,13 @@ class Spotify:
             raise SpotifyError("I can't reach Spotify. Check the internet connection.")
 
     # --- devices ----------------------------------------------------------
-    def devices(self) -> list[dict]:
-        return (self._req("GET", "/me/player/devices") or {}).get("devices", [])
+    def devices(self, fresh: bool = False) -> list[dict]:
+        """Spotify's devices, remembered for 30 s (a play/pause shouldn't have to look them up every time)."""
+        t, devs = getattr(self, "_devs", (0.0, []))
+        if fresh or not devs or time.time() - t > 30:
+            devs = (self._req("GET", "/me/player/devices") or {}).get("devices", [])
+            self._devs = (time.time(), devs)
+        return devs
 
     def device(self) -> dict:
         devs = self.devices()

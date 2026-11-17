@@ -230,7 +230,7 @@ class Hub:
         pr = getattr(self.app, "printer3d", None)
         if pr is not None:
             out["printer"] = pr.snapshot()
-        pc = self._pc()
+        pc = self._pc_card()
         if pc is not None:
             out["machines"].append(pc)
         return out
@@ -254,7 +254,8 @@ class Hub:
                 "battery": round(b.percent) if b else None, "charging": bool(b.power_plugged) if b else None,
                 "uptime_s": int(time.time() - psutil.boot_time())}
 
-    def _pc(self) -> dict | None:
+    def _pc_card(self) -> dict | None:
+        """The PC's widget card (stats refreshed in the background). Not `_pc`: that's the SSH link the USB code uses."""
         pc = getattr(self.app, "pc", None)
         if not (pc and pc.configured):
             return None

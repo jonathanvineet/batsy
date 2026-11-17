@@ -393,8 +393,9 @@ $$('[data-sp]').forEach(b => b.addEventListener('click', async () => {
     songAt = Date.now(); song.playing = !song.playing; holdUntil = Date.now() + 3000;
     mwPP.classList.toggle('playing', song.playing); drawMusic(song);
   }
-  try {
-    const r = await api('/api/spotify', {action: act});
+  try {  // the app knows what it shows: say pause or play outright (no round trip to ask Spotify first)
+    const send = act === 'toggle' && song ? (song.playing ? 'resume' : 'pause') : act;
+    const r = await api('/api/spotify', {action: send});
     if (r.say && !r.ok) toast(r.say);
     setTimeout(refresh, act === 'toggle' ? 1500 : 700);
   } catch (e) { toast(e.message); holdUntil = 0; }
@@ -682,7 +683,7 @@ function drawSpace(r) {
   $('#cw-space').textContent = `${human(r.total - r.free)} used · ${human(r.free)} free`;
 }
 let cwItems = [];
-function drawWidget(r, note = '') {
+function drawCloudWidget(r, note = '') {
   cwItems = (r.items || []).slice(0, 6);
   drawSpace(r);
   $('#cw-grid').innerHTML = cwItems.map(tile).join('') ||
@@ -692,10 +693,10 @@ function drawWidget(r, note = '') {
 async function loadCloudWidget() {
   if ($('#cloud-w').classList.contains('w-hidden') || getComputedStyle($('#cloud-w')).display === 'none') return;
   const old = store.get('cloudRecent', null);
-  if (old) drawWidget(old);
+  if (old) drawCloudWidget(old);
   const r = await cloudGet('mode=recent', 'cloudRecent');
-  if (r.error) drawWidget(old || r, r.setup ? r.error : r.offline ? 'PC asleep: showing what was there' : r.error);
-  else drawWidget(r);
+  if (r.error) drawCloudWidget(old || r, r.setup ? r.error : r.offline ? 'PC asleep: showing what was there' : r.error);
+  else drawCloudWidget(r);
 }
 $('#cw-grid').addEventListener('click', e => {
   const t = e.target.closest('.ct'); if (!t) return;
