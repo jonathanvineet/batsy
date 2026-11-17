@@ -396,6 +396,8 @@ class Hub:
 
         from batsy.voice.ears import strip_wake_word
 
+        from batsy import activity
+
         if mode == "ears":
             self.app.phone_ears_until = time.time() + 60  # the phone is listening: the laptop's mic stands down
         elif raw and hasattr(self.app.brain, "warm_soon"):
@@ -408,7 +410,8 @@ class Hub:
         audio = np.frombuffer(pcm, dtype=np.int16)
         if audio.size < 16000 * 0.3 or self.app.stt is None:
             return {"ok": True, "ignored": True}
-        text = self.app.stt.transcribe(audio, quiet=True).strip()
+        with activity.work("Your phone's mic", "voice", "Transcribing what you said on the phone"):
+            text = self.app.stt.transcribe(audio, quiet=True).strip()
         log.info("phone mic (%s): %r", mode, text)
         if not text:
             return {"ok": True, "ignored": True}
@@ -1008,8 +1011,9 @@ def _handler(hub: Hub):
                     from batsy import push
 
                     n = push.subscribe(body.get("subscription") or {}, str(body.get("device", "")))
-                    push.notify("Batsy", "Notifications are on. You'll hear about your prints and reminders here.",
-                                tag="welcome")
+                    if not body.get("quiet"):  # the app re-checks itself each time it opens: no message for that
+                        push.notify("Batsy", "Notifications are on. You'll hear about your prints and reminders here.",
+                                    tag="welcome")
                     return self._send(200, {"ok": True, "say": f"Notifications on ({n} device{'s' if n != 1 else ''})."})
                 if self.path == "/api/push/test":
                     from batsy import push

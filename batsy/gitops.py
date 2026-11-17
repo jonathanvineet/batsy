@@ -94,9 +94,17 @@ def message(path: Path, cfg) -> str:
 
 
 def run(app, path: Path, push: bool) -> None:
-    """Stage, write the message, ask, commit, push: on a thread (the local model takes a moment)."""
+    from batsy import activity
+
+    with activity.agent(f"{'Commit & push' if push else 'Commit'} {path.name}", "git") as job:
+        _run(app, path, push, job)
+
+
+def _run(app, path: Path, push: bool, job) -> None:
+    """Stage, write the message, commit, push: on a thread (the local model takes a moment)."""
     _last["path"] = str(path)
     name = path.name
+    job.step("Checking what changed")
     code, status = _git(path, "status", "--porcelain")
     if code:
         app.announce(f"{name} isn't a git folder I can use: {status[:120]}")
@@ -105,22 +113,27 @@ def run(app, path: Path, push: bool) -> None:
         app.announce(f"Nothing to commit in {name}.")
         return
     if status:
+        job.step("Staging the changes")
         _git(path, "add", "-A")
         n = len([l for l in _git(path, "diff", "--cached", "--name-only")[1].splitlines() if l.strip()])
         app.announce(f"Staged {n} file{'s' if n != 1 else ''} in {name}. Writing the commit message.")
+        job.step(f"Writing the commit message for {n} file{'s' if n != 1 else ''} (local AI)")
         msg = message(path, app.cfg)
         first = msg.splitlines()[0].rstrip(".")
         # you said commit (and push): no "are you sure?" - just say what it's called ("undo the commit" takes it back)
         app.announce(f"Committing {n} file{'s' if n != 1 else ''} as: {first}.")
+        job.step(f"Committing: {first}")
         code, out = _commit(path, msg)
         if code:
             app.announce(f"The commit failed: {out[-200:]}")
             return
     if push:
+        job.step("Pushing to GitHub")
         code, out = _git(path, "push", "-q", "origin", "HEAD", timeout=180)
         if code:
             app.announce(f"Committed, but the push failed: {out[-200:]}")
             return
+        job.result("Committed and pushed" if status else "Pushed")
         app.announce(f"Committed and pushed {name}." if status else f"Pushed {name}.")
     else:
         app.announce(f"Committed {name}. Say push it when you want it on GitHub.")

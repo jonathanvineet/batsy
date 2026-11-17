@@ -8,6 +8,7 @@ it refuses and Batsy answers with the local brain until the window resets (unles
 import json
 import logging
 import os
+import re
 import shlex
 import shutil
 import subprocess
@@ -159,6 +160,32 @@ def cancel(thread: str = "turn") -> int:
     return len(procs)
 
 
+def _tool_step(name: str, inp: dict) -> str:
+    """'Bash {command: "batsy print slice dice.stl --copies 5 --size 41"}' -> 'Slicing: dice.stl --copies 5 --size 41'."""
+    import os.path
+
+    if name == "Bash":
+        cmd = re.sub(r"\s+", " ", str(inp.get("command", ""))).strip()
+        for pre, say in (("batsy print slice", "Slicing:"), ("batsy print info", "Looking at the printer and models"),
+                         ("batsy 3d", "3D viewer:"), ("batsy doc", "Document:"), ("git ", "git:")):
+            if cmd.startswith(pre):
+                rest = cmd[len(pre):].strip()
+                return f"{say} {rest}"[:90] if say.endswith(":") else say
+        return ("Running: " + (inp.get("description") or cmd))[:90]
+    if name in ("Read", "Edit", "Write", "MultiEdit", "NotebookEdit"):
+        f = os.path.basename(str(inp.get("file_path") or inp.get("notebook_path") or ""))
+        return {"Read": "Reading", "Write": "Writing"}.get(name, "Editing") + (f" {f}" if f else "")
+    if name in ("Grep", "Glob"):
+        return f"Searching files for {str(inp.get('pattern', ''))[:50]}"
+    if name == "WebSearch":
+        return f"Searching the web: {str(inp.get('query', ''))[:60]}"
+    if name == "WebFetch":
+        return f"Reading {str(inp.get('url', ''))[:60]}"
+    if name == "TodoWrite":
+        return "Planning the steps"
+    return f"Using {name}"
+
+
 def _stream(exe, prompt, args, cwd, timeout, env, on_text) -> dict | str:
     """Stream-json mode: text deltas go to on_text as they arrive; returns the final result object."""
     proc = _start([exe, "-p", prompt, "--output-format", "stream-json", "--verbose",
@@ -172,6 +199,10 @@ def _stream(exe, prompt, args, cwd, timeout, env, on_text) -> dict | str:
                 ev = json.loads(line)
             except ValueError:
                 continue
+            if ev.get("type") == "assistant":  # each tool Claude uses: the job's current step in the side tab
+                for block in (ev.get("message") or {}).get("content") or []:
+                    if block.get("type") == "tool_use":
+                        activity.step(_tool_step(block.get("name", ""), block.get("input") or {}))
             if ev.get("type") == "stream_event":
                 e = ev.get("event", {})
                 if e.get("type") == "content_block_delta" and e.get("delta", {}).get("type") == "text_delta":
@@ -207,9 +238,10 @@ def run(prompt: str, label: str, args: list[str] | None = None, cwd=WORKSPACE, t
             return why
     env = dict(os.environ, PATH=f"{os.path.dirname(sys.executable)}:{os.path.expanduser('~/.local/bin')}:"
                                 f"{os.environ.get('PATH', '')}")
-    with activity.agent(label):
-        if on_text is not None:
-            data = _stream(exe, prompt, args, cwd, timeout, env, on_text)
+    with activity.agent(label) as job:
+        job.step("Thinking")
+        if True:  # always streamed: each step it takes shows in the side tab (the answer is the same)
+            data = _stream(exe, prompt, args, cwd, timeout, env, on_text or (lambda _t: None))
             if isinstance(data, str):
                 return data
         else:

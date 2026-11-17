@@ -109,6 +109,7 @@ DEFAULTS = {
         "screensaver_minutes": 3,     # token-usage screensaver after this long idle (0 = off)
         "qt_platform": "",            # e.g. "xcb" to force XWayland if the window won't come to the front
         "dock": True,                 # a small Batman bat in the top-right corner while the overlay is closed
+        "sidetab": True,           # the side tab on the right edge: what Batsy is doing right now (sidetab.py)
         "renderer": "auto",           # auto | web (GPU, line + particles, 3D inside) | classic (plain Qt painting)
     },
     "pc": {"host": "", "mac": "", "broadcast": ""},

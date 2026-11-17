@@ -109,21 +109,35 @@ async function showBell() {
   if (!('PushManager' in window) || !('serviceWorker' in navigator) || !store.get('token', '')) return;
   if (/iPhone|iPad/.test(navigator.userAgent) && !standalone) return;  // iOS: only once it's on the home screen
   const reg = await navigator.serviceWorker.ready.catch(() => null);
-  const sub = reg && await reg.pushManager.getSubscription();
-  $('#bell').hidden = !!(sub && Notification.permission === 'granted');
+  if (!reg) return;
+  if (Notification.permission === 'granted') {
+    // already allowed: keep the laptop's copy current, quietly (a new app version, a renewed push address, a
+    // subscription the laptop dropped: no tap needed, ever, unless you delete the app or turn them off)
+    try { await subscribePush(reg, true); $('#bell').hidden = true; return; } catch {}
+  }
+  $('#bell').hidden = false;
+}
+async function subscribePush(reg, quiet) {
+  const {key} = await api('/api/push/key');
+  const pad = '='.repeat((4 - key.length % 4) % 4);
+  const raw = Uint8Array.from(atob((key + pad).replace(/-/g, '+').replace(/_/g, '/')), c => c.charCodeAt(0));
+  let sub = await reg.pushManager.getSubscription();
+  if (sub && sub.options && sub.options.applicationServerKey &&
+      btoa(String.fromCharCode(...new Uint8Array(sub.options.applicationServerKey))) !== btoa(String.fromCharCode(...raw))) {
+    await sub.unsubscribe(); sub = null;  // made with another key: start fresh
+  }
+  sub = sub || await reg.pushManager.subscribe({userVisibleOnly: true, applicationServerKey: raw});
+  return api('/api/push/subscribe', {subscription: sub.toJSON(), quiet,
+    device: navigator.userAgent.match(/iPhone|iPad|Android/)?.[0] || 'browser'});
 }
 $('#bell').addEventListener('click', async () => {
   try {
     if (await Notification.requestPermission() !== 'granted') { toast('Notifications are off in Settings › Batsy.'); return; }
-    const reg = await navigator.serviceWorker.ready;
-    const {key} = await api('/api/push/key');
-    const pad = '='.repeat((4 - key.length % 4) % 4);
-    const raw = Uint8Array.from(atob((key + pad).replace(/-/g, '+').replace(/_/g, '/')), c => c.charCodeAt(0));
-    const sub = await reg.pushManager.subscribe({userVisibleOnly: true, applicationServerKey: raw});
-    const r = await api('/api/push/subscribe', {subscription: sub.toJSON(), device: navigator.userAgent.match(/iPhone|iPad|Android/)?.[0] || 'browser'});
+    const r = await subscribePush(await navigator.serviceWorker.ready, false);
     toast(r.say); $('#bell').hidden = true;
   } catch (e) { toast('Couldn’t turn notifications on: ' + e.message); }
 });
+document.addEventListener('visibilitychange', () => { if (!document.hidden) showBell(); });  // each time it's opened
 showBell();
 
 // --- views (sideways) and stacks (up/down), each remembered ---------------------------------------------

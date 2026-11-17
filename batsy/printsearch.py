@@ -292,6 +292,13 @@ def handle(app, n: str) -> str | None:
     q = re.sub(r"\s+", " ", re.sub(r"\b(?:uh+|um+|erm|uhm|hmm+|like|you know)\b", " ", q)).strip()  # "batman uh mask"
 
     def go():
+        from batsy import activity
+
+        with activity.agent(f"Finding {q} to print", "search") as job:
+            job.step("Searching Printables and MakerWorld")
+            _go(job)
+
+    def _go(job):
         try:
             items = search(q, app.cfg)
         except Exception as e:
@@ -301,6 +308,7 @@ def handle(app, n: str) -> str | None:
             app.announce(f"I couldn't find any {q} models.")
             return
         app.model_results = {"q": q, "items": items, "t": time.time()}
+        job.step(f"Making the cards for {len(items)} models")
         try:  # the numbered photo cards, on the laptop's screen
             pic = collage(items, f"“{q}” · {len(items)} models · say the number")
             if app.overlay.enabled:
@@ -431,6 +439,13 @@ def pick(app, item: dict) -> str:
                 f"download it there and send it to me, and I'll slice it.")
 
     def go():
+        from batsy import activity
+
+        with activity.agent(f"Getting {item['name'][:40]}", "download") as job:
+            job.step(f"Downloading from {item['site']}")
+            _get(job)
+
+    def _get(job):
         try:
             stage = OUT / f"{item['site']}-{item['id']}"
             files = download(item, app.cfg, stage.parent, folder=stage)
@@ -441,6 +456,7 @@ def pick(app, item: dict) -> str:
             if not parts:
                 app.announce(f"{item['name']} has no STL or 3MF files I can download.")
                 return
+            job.step("Measuring it and drawing its outline")
             info, pic = preview(parts[0], item["name"], len(parts))
             app.model_preview = {"t": time.time(), "item": item, "info": info, "image": str(pic),
                                  "files": [str(f) for f in files], "state": "asking"}

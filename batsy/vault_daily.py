@@ -33,8 +33,15 @@ def _save(**kv) -> None:
     STATE.write_text(json.dumps({**_state(), **kv}))
 
 
-def local_model(prompt: str, max_tokens: int = 350) -> str:
+def local_model(prompt: str, max_tokens: int = 350, label: str = "Local AI") -> str:
     """One answer from the local Ollama model (free, offline)."""
+    from batsy import activity
+
+    with activity.work(label, "local", "Thinking with the local AI"):
+        return _local_model(prompt, max_tokens)
+
+
+def _local_model(prompt: str, max_tokens: int = 350) -> str:
     body = {"model": _cfg.get("local.model"), "stream": False, "keep_alive": _cfg.get("local.keep_alive"),
             "messages": [{"role": "user", "content": prompt}],
             "options": {"temperature": 0.3, "num_predict": max_tokens, "num_ctx": 4096}}

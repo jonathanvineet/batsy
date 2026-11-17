@@ -20,7 +20,7 @@ from batsy import apps, calc, calib, home, instant, keyboard, lifecycle, model3d
 from batsy.learner import Automator, Learner
 from batsy.learning import ACTION, NEGATIVE, SkillBook, claude_cli
 from batsy.vocab import get_vocab
-from batsy.config import SOCKET_PATH
+from batsy.config import DATA_DIR, SOCKET_PATH
 from batsy.tools import ToolContext, build_registry
 from batsy.tools import monitor, music
 from batsy.voice.tts import Speaker
@@ -130,7 +130,12 @@ class Batsy:
             screen.on_camera = lambda on: self.overlay.send("camera", on=on, path=str(FRAME_PATH))
         self.brain.visual = self.show_visual
         if self.overlay.enabled:
-            self.brain.status = lambda text: self.overlay.send("status", text=text)
+            def status(text: str) -> None:
+                from batsy import activity
+
+                self.overlay.send("status", text=text)
+                activity.step(text)  # the side tab shows it too
+            self.brain.status = status
         self.routines = Routines(self)
         from batsy import claude_code
         from batsy.tasks import TaskTalk
@@ -196,6 +201,8 @@ class Batsy:
         self.phone_ears_until = 0.0  # the phone is listening for "Batsy" instead of this laptop's mic, until then
         self.events: list[dict] = []  # announcements, for the phone's full-screen alerts (the last 20)
         self.music_on = False  # Spotify is playing (in the room): the wake word has to be clearer
+        if voice and cfg.get("overlay.sidetab") and os.environ.get("DISPLAY"):
+            threading.Thread(target=self._sidetab_loop, daemon=True, name="sidetab").start()
         threading.Thread(target=self._music_watch, daemon=True, name="music-watch").start()
 
     def _host_3d(self) -> bool:
@@ -597,6 +604,42 @@ class Batsy:
         self.overlay.say(text)
 
     # --- shared plumbing --------------------------------------------------
+    def _sidetab_loop(self) -> None:
+        """The side tab (batsy/sidetab.py): its own window process, fed what Batsy is doing whenever that changes
+        (and every second while something runs, so the timers move). Restarted if it ever crashes."""
+        from batsy import activity
+
+        deaths = []
+        while len(deaths) < 4:
+            env = dict(os.environ, QT_QPA_PLATFORM="xcb")  # XWayland: allowed to stay on top at the screen edge
+            try:
+                with open(DATA_DIR / "sidetab.log", "ab") as err:
+                    proc = subprocess.Popen([sys.executable, "-m", "batsy.sidetab"], stdin=subprocess.PIPE, stderr=err,
+                                            text=True, bufsize=1, env=env, start_new_session=True)
+            except OSError as e:
+                log.warning("side tab unavailable: %s", e)
+                return
+            last = ""
+            while proc.poll() is None:
+                activity.changed.wait(1.0)
+                activity.changed.clear()
+                try:
+                    live = dict(getattr(self.overlay, "live", {}) or {})
+                    snap = activity.snapshot()
+                    msg = json.dumps({"state": live.get("state", "idle"), "status": live.get("status", ""),
+                                      "agents": snap["agents"], "asks": snap["asks"], "done": snap["done"]})
+                    if msg != last or snap["agents"]:
+                        proc.stdin.write(msg + "\n")
+                        proc.stdin.flush()
+                        last = msg
+                except (BrokenPipeError, OSError):
+                    break
+                except Exception:
+                    log.exception("side tab")
+            deaths = [t for t in deaths if time.time() - t < 600] + [time.time()]
+            log.warning("side tab stopped; starting it again")
+            time.sleep(2)
+
     def _music_watch(self) -> None:
         """Every 30 s: is music playing? Lyrics and film dialogue were waking Batsy dozens of times an hour."""
         from batsy.tools import music
@@ -721,7 +764,10 @@ class Batsy:
 
             vault_capture.exchange(text, known, "cache", source)
             return known
-        with self.turn_lock:
+        from batsy import activity
+
+        short = text.strip() if len(text.strip()) <= 44 else text.strip()[:43].rstrip() + "…"
+        with self.turn_lock, activity.agent(f"“{short}”", "turn"):
             self.confirm_handler = confirm
             self._turn_markers = []
             self.brain.route, self.brain.last_actions = "full", []

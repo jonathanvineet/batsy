@@ -380,6 +380,14 @@ def slice_model(model: Path, process: str | None = None, overrides: dict | None 
                 filament_overrides: dict | None = None) -> dict:
     """Slice model with your printer and the process (default "nicee"), plus any tweaks on top.
     Returns {"gcode", "time", "grams", ...}."""
+    from batsy import activity
+
+    with activity.work(f"Slicing {model.stem}", "slice", f"Slicing {model.stem} with {process or settings().get('default', 'your preset')} (OrcaSlicer)"):
+        return _slice_model(model, process, overrides, label, filament_overrides)
+
+
+def _slice_model(model: Path, process: str | None = None, overrides: dict | None = None, label: str = "",
+                 filament_overrides: dict | None = None) -> dict:
     cmd = command()
     if not cmd:
         raise ValueError("OrcaSlicer isn't installed.")
@@ -432,6 +440,9 @@ def slice_model(model: Path, process: str | None = None, overrides: dict | None 
         from batsy import preview
 
         title = f"{model.stem.replace('_', ' ')} · {result['process']}"
+        from batsy import activity
+
+        activity.step("Drawing the slice preview")
         png, paths = preview.both(dest, title)  # (drawn in its own process)
         result["preview"], result["paths"] = str(png), str(paths)
         result["name"] = model.stem.replace("_", " ")
