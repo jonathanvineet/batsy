@@ -80,8 +80,8 @@ COMPLEX = re.compile(
     r"|\b(?:my|in my|on my|from my) (?:github|git ?hub|repo|repos|repository|repositories|codebase)\b"
     r"|\b(?:see|check|find out|look up|look into) what (?:is |are )?\w+"
     # git and repos: real work in the right folder (the small model ran git in the wrong place and gave up)
-    r"|\b(?:git|commit|commits|push|pushed|pull request|rebase|amend|stage|unstage|co-?authors?|branch|merge|"
-    r"revert|stash|diff)\b")
+    r"|\b(?:git|pull request|rebase|amend|unstage|co-?authors?|branch|merge|revert|stash|diff)\b")
+# (commit / push / stage: Batsy's own gitops does those, never Claude)
 
 # One-off jobs and questions: never turned into "skills" (a skill that force-pushes was learned from one)
 ONE_OFF = re.compile(r"\b(?:git|commit|push|github|repo|repository|amend|co-?author|see what|what is|what's|who is|"

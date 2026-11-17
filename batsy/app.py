@@ -796,6 +796,13 @@ class Batsy:
             self._route = "instant"
             self._reply(said)
             return True
+        from batsy import gitops
+
+        said = gitops.handle(self, n)  # "commit and push the batsy folder": Batsy does git itself, never Claude
+        if said:
+            self._route = "instant"
+            self._reply(said)
+            return True
         from batsy import discover
 
         said = discover.handle(self, n)  # "make my discovery playlist", "play something new" (before the slicer's "make")

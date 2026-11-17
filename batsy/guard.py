@@ -31,6 +31,9 @@ def check(call: dict) -> str | None:
     if call.get("tool_name") != "Bash":
         return None
     command = str((call.get("tool_input") or {}).get("command", ""))
+    if re.search(r"\bgit\b(?:\s+-[cC]\s+\S+)*\s+(?:add|commit|push|stage)\b", command):
+        return ("Jonathan doesn't want Claude staging, committing or pushing: Batsy does that itself. Leave the changes "
+                "uncommitted and tell him to say 'commit and push' (and which folder).")
     if re.search(r"\bgit\b.*\b(?:commit|tag)\b", command, re.S) and \
             re.search(r"co-authored-by:[^\n]*(?:claude|anthropic)|generated with \[?claude", command, re.I):
         return ("Jonathan never wants Claude credited in his commits. Remove the Co-Authored-By / 'Generated with "
