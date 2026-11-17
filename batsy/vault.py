@@ -77,6 +77,9 @@ def start(app) -> None:
 
     vault_index.start(app)
     vault_daily.start(app)
+    from batsy import vault_music
+
+    vault_music.start(app)  # every song you listen to, from Spotify's history
     if app.cfg.get("vault.git"):
         threading.Thread(target=_sync_loop, daemon=True, name="vault-git").start()
 

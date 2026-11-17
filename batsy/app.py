@@ -162,6 +162,10 @@ class Batsy:
             vault.start(self)  # Batsy Brain: the Obsidian vault in ~/Batsy/Brain
         except Exception:
             log.exception("brain didn't start")
+        from batsy import discover
+
+        discover.start(self)  # the weekly Batsy Discovery playlist
+        self.phone_ears_until = 0.0  # the phone is listening for "Batsy" instead of this laptop's mic, until then
 
     def _host_3d(self) -> bool:
         """Start the 3D viewer inside the overlay; False if this overlay can't (then it opens its own window)."""
@@ -718,6 +722,13 @@ class Batsy:
             self._route = "instant"
             self._reply(said)
             return True
+        from batsy import discover
+
+        said = discover.handle(self, n)  # "make my discovery playlist", "play something new" (before the slicer's "make")
+        if said:
+            self._route = "instant"
+            self._reply(said)
+            return True
         from batsy import showcase
 
         if showcase.handle(self, n):  # "show what you can do": the narrated tour on a live dashboard
@@ -1012,8 +1023,8 @@ class Batsy:
                     self.overlay.heard(text)
                 else:
                     frame = self.ears.read(0.5)
-                    if frame is None or not self.ears.wake_hit(frame):
-                        continue
+                    if frame is None or time.time() < self.phone_ears_until or not self.ears.wake_hit(frame):
+                        continue  # (while the phone is Batsy's ears, the laptop's mic doesn't wake it)
                     text = self._listen_after_wake(strip_wake_word)
                     if text is None:
                         continue

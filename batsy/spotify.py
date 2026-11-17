@@ -32,7 +32,8 @@ AUTH_URL = "https://accounts.spotify.com/authorize"
 TOKEN_URL = "https://accounts.spotify.com/api/token"
 TOKEN_FILE = CONFIG_DIR / "spotify_token.json"
 SCOPES = ("user-read-playback-state user-modify-playback-state user-read-currently-playing "
-          "playlist-read-private user-library-read user-library-modify user-top-read user-read-recently-played")
+          "playlist-read-private user-library-read user-library-modify user-top-read user-read-recently-played "
+          "playlist-modify-private playlist-modify-public")  # the weekly Batsy Discovery playlist (discover.py)
 INDEX_FILE = DATA_DIR / "music_index.json"  # your saved songs, playlists and artists, for matching what you say
 CATALOG_FILE = DATA_DIR / "music_catalog.json"  # + popular songs of your artists and of big Tamil/English names
 # Spotify no longer lets new apps browse genres or other people's playlists, but search still works: the catalogue
@@ -584,13 +585,6 @@ class Spotify:
         else:
             self.radio = None  # an album / playlist / artist: Spotify plays the whole thing itself
         self._req("PUT", "/me/player/play", {"device_id": target["id"]}, body)
-        try:
-            from batsy import vault_capture
-
-            title, _, artist = cand[2].rpartition(" by ")
-            vault_capture.song(title or cand[2], artist if title else "")
-        except Exception:
-            pass
         if self._playing_on(target, 1.2):
             return f"Playing {cand[2]}."
         # Spotify accepted it, but the device didn't start (asleep, app in the background): hand it over explicitly

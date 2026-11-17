@@ -293,18 +293,6 @@ def task_logged(title: str, kind: str, status: str, note: str = "") -> None:
 
 
 @_bg
-def song(title: str, artist: str = "") -> None:
-    if not _all() or not title:
-        return
-    p = vault.daily(vault.today())
-    body = vault.get_block(p, "music") or ""
-    line = f"- {title}" + (f" · {artist}" if artist else "")
-    if line in body.splitlines() or len(body.splitlines()) >= 40:
-        return
-    vault.add_to_block(p, "music", line, "Music")
-
-
-@_bg
 def shopping(query: str, summary: str, report: str = "") -> None:
     p = vault.path("shopping", query.capitalize())
     head = vault.frontmatter(type="shopping", query=query, date=dt.date.today().isoformat(), tags=["shopping"])

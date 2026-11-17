@@ -489,6 +489,8 @@ def handle(app, n: str) -> str | None:
         return describe(Path(last["model"]), last["result"])
     if not (KICK.match(n) or HOW_LONG.match(n)):
         return None
+    if n.startswith("make") and not re.match(r"(?:please )?make (?:it|this|that|the (?:model|print|part|last one))\b", n):
+        return None  # "make my discovery playlist", "make a note": not a print tweak (those are "make it …")
     named = _named_model(n)
     # "slice it ...", "print this", "make it stronger", or just "slice": the last model. Anything else names a model.
     generic = re.fullmatch(r"(?:please )?(?:re ?slice|slice|print|make)(?: (?:it|this|that|the model|the last one|"

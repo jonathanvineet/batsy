@@ -365,19 +365,66 @@ class Hub:
                 return {"ok": True, "say": "Got it."}
             said: list[str] = []
             self.app.overlay.heard(text)
-            if not self._handled_locally(text, said.append):
-                self.app.run_turn(text, "phone", lambda s: (said.append(s), self.app.overlay.say(s)),
+            if not self._handled_locally(text, said.append, speak=not body.get("quiet")):
+                aloud = body.get("speak")  # said into the phone's mic: answered out loud from the laptop
+                self.app.run_turn(text, "phone", lambda s: (said.append(s), self.app.speaker.say(s) if aloud else None,
+                                                            self.app.overlay.say(s)),
                                   threading.Event(), lambda q: False)
             return {"ok": True, "say": " ".join(said) or "Done."}
         return {"ok": False, "say": f"Unknown action {action}"}
 
-    def _handled_locally(self, text: str, capture) -> bool:
-        """Run it as a local command, catching what Batsy says (it's also spoken and shown as usual)."""
+    # --- the phone's microphone ------------------------------------------------------------------------------
+    def voice(self, raw: bytes, mode: str) -> dict:
+        """Audio recorded on the phone. mode "ptt" (held the mic button): it's a request. mode "ears" (the phone
+        listens for "Batsy" instead of the laptop): only what starts with "Batsy" (or follows a bare "Batsy") counts.
+        The phone is only the microphone: Batsy answers out loud from the laptop, as usual (and as text on the phone)."""
+        import tempfile
+
+        import numpy as np
+
+        from batsy.voice.ears import strip_wake_word
+
+        if mode == "ears":
+            self.app.phone_ears_until = time.time() + 60  # the phone is listening: the laptop's mic stands down
+        with tempfile.NamedTemporaryFile(suffix=".audio") as f:
+            f.write(raw)
+            f.flush()
+            pcm = subprocess.run(["ffmpeg", "-loglevel", "error", "-i", f.name, "-ac", "1", "-ar", "16000", "-f", "s16le",
+                                  "-"], capture_output=True, timeout=30).stdout
+        audio = np.frombuffer(pcm, dtype=np.int16)
+        if audio.size < 16000 * 0.3 or self.app.stt is None:
+            return {"ok": True, "ignored": True}
+        text = self.app.stt.transcribe(audio, quiet=True).strip()
+        log.info("phone mic (%s): %r", mode, text)
+        if not text:
+            return {"ok": True, "ignored": True}
+        if mode == "ears":
+            found, rest = strip_wake_word(text, self.cfg.get("voice.wake_words"))
+            if found and not rest.strip(" .,!?"):
+                self.armed = time.time() + 8  # just "Batsy": the next thing said is the request
+                return {"ok": True, "heard": text, "armed": True}
+            if found:
+                text = rest.strip(" ,")
+            elif time.time() < getattr(self, "armed", 0):
+                self.armed = 0
+            else:
+                return {"ok": True, "ignored": True, "heard": text}
+        self.app.speaker.unhush()
+        r = self.batsy_action({"action": "ask", "text": text, "speak": True})
+        return {"ok": True, "heard": text, "say": r.get("say", "")}
+
+    def _handled_locally(self, text: str, capture, speak: bool = True) -> bool:
+        """Run it as a local command, catching what Batsy says (also spoken and shown as usual, unless not `speak`:
+        a request from the phone's mic is answered on the phone)."""
         old = self.app._reply
 
         def both(t):
             capture(t)
-            old(t)
+            if speak:
+                old(t)
+            else:
+                self.app.last_said = t
+                self.app.overlay.say(t)
 
         self.app._reply = both
         try:
@@ -869,6 +916,21 @@ def _handler(hub: Hub):
                 return self._send(200, {"token": token(), "remote": hub.remote_url()})
             if not self._authed():
                 return
+            if self.path.startswith("/api/voice"):  # the phone's microphone: raw audio in, Batsy's answer out
+                from urllib.parse import parse_qs, urlparse
+
+                q = {k: v[0] for k, v in parse_qs(urlparse(self.path).query).items()}
+                n = int(self.headers.get("Content-Length") or 0)
+                if self.path.startswith("/api/voice/off"):
+                    self.rfile.read(n)
+                    hub.app.phone_ears_until = 0.0  # the laptop's own mic is back
+                    return self._send(200, {"ok": True})
+                raw = self.rfile.read(min(n, 8_000_000))
+                try:
+                    return self._send(200, hub.voice(raw, q.get("mode", "ptt")))
+                except Exception as e:
+                    log.exception("phone voice")
+                    return self._send(500, {"ok": False, "say": str(e)})
             if self.path.startswith("/api/cloud/upload"):  # the raw file is the body; folder and name in the URL
                 from urllib.parse import parse_qs, urlparse
 

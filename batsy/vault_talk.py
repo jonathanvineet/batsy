@@ -31,6 +31,10 @@ ASK = re.compile(PRE + r"(?:what do|what does) (?:my )?(?:notes|brain|vault) (?:
 OPEN = re.compile(PRE + r"(?:open|show|pull up) (?:me )?(?:my |the )?(?:(?P<brain>brain|second brain|obsidian|vault|"
                         r"notes app)|(?P<today>today'?s? note|daily note|today in (?:my )?brain|journal)|"
                         r"(?P<which>.+?) (?:note|notes|page))$")
+LISTENED = re.compile(PRE + r"what (?:did|have) i (?:listen(?:ed)? to|play(?:ed)?|hear(?:d)?)(?: (?P<when>yesterday|today|"
+                             r"this week|last week|(?:on |last )?(?:monday|tuesday|wednesday|thursday|friday|saturday|"
+                             r"sunday)))?$|" + PRE + r"what(?:'s| is| was) my (?:music|listening)(?: (?P<when2>today|"
+                             r"yesterday|this week))?$")
 SYNC = re.compile(PRE + r"(?:sync|save|back ?up|push|commit) (?:my )?(?:brain|vault|second brain|notes)(?: now)?$")
 SUMMARY_NOW = re.compile(PRE + r"(?:write|make|do) (?:my |today'?s |the )?(?:summary|daily summary|journal)(?: now)?$")
 DAYS = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
@@ -59,6 +63,10 @@ def handle(app, n: str, raw: str = "") -> str | None:
     m = DAY.match(n)
     if m:
         return _what_i_did(m.group("when") or m.group("when2") or "today")
+
+    m = LISTENED.match(n)
+    if m:
+        return _listened(m.group("when") or m.group("when2") or "today")
 
     m = ASK.match(n)
     if m:
@@ -172,6 +180,20 @@ def _what_i_did(when: str) -> str:
         return f"{label} there's nothing logged."
     items = [re.sub(r"^- \d\d:\d\d · \S+ ", "", x).split(" → ")[0] for x in tl]
     return f"{label}, {len(tl)} things. " + _spoken("; ".join(items[-6:]))[:500] + "."
+
+
+def _listened(when: str) -> str:
+    if "week" in when:
+        body = vault.get_block(vault.ROOT / "03 Areas" / "Music.md", "listening") or ""
+        week = re.search(r"\*\*This week:\*\* (.*?)(?:\n\n|\Z)", body, re.S)
+        return "This week: " + _spoken(week.group(1))[:500] if week else "No music logged this week yet."
+    day = _day_for(when)
+    lines = [x for x in (vault.get_block(vault.daily_path(day), "music") or "").splitlines() if x.strip()]
+    label = "Today" if day == vault.today() else "Yesterday" if day == vault.today() - dt.timedelta(days=1) else f"On {day:%A}"
+    if not lines:
+        return f"{label} you didn't play anything on Spotify."
+    songs = [re.sub(r"^- \d\d:\d\d · ", "", x).split(" · ")[0] for x in lines[1:]]
+    return f"{label}: {_spoken(lines[0])}. Including {', '.join(s.strip('*') for s in songs[-4:])}."
 
 
 def _ask(q: str) -> str:

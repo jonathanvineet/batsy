@@ -204,6 +204,144 @@ $('#ask').addEventListener('submit', async e => {
   delete pending.wait; store.set('chat', chat.slice(-30)); drawChat(); refresh();
 });
 
+// --- the phone's microphone: hold to talk, or let the phone be Batsy's ears for a while ------------------------------
+// Audio goes to the laptop (Whisper there turns it into words; Batsy handles it like anything you'd say); Batsy
+// answers out loud from the laptop, and as text here. The phone is only the microphone.
+const mic = {stream: null, rec: null, chunks: [], ears: false, ctx: null, an: null, busy: false, mute: false, timer: null};
+async function micStream() {
+  if (!mic.stream) {
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) throw new Error('This phone can’t use its microphone here (it needs the secure Batsy address).');
+    mic.stream = await navigator.mediaDevices.getUserMedia({audio: {echoCancellation: true, noiseSuppression: true, autoGainControl: true}});
+  }
+  return mic.stream;
+}
+const recType = () => ['audio/webm;codecs=opus', 'audio/mp4', 'audio/webm', 'audio/ogg'].find(t => window.MediaRecorder && MediaRecorder.isTypeSupported(t)) || '';
+function startRec() {
+  const t = recType(), r = new MediaRecorder(mic.stream, t ? {mimeType: t} : {});
+  mic.chunks = []; r.ondataavailable = e => { if (e.data.size) mic.chunks.push(e.data); };
+  r.start(); r.t0 = Date.now(); mic.rec = r;
+}
+function stopRec() {
+  return new Promise(res => {
+    const r = mic.rec; mic.rec = null;
+    if (!r || r.state === 'inactive') return res(null);
+    r.onstop = () => res({blob: new Blob(mic.chunks, {type: r.mimeType}), ms: Date.now() - r.t0});
+    r.stop();
+  });
+}
+let unlocked = false, voicePlayer = null;
+function unlockAudio() {  // iOS plays sound only after a tap: play a silent clip on the first one
+  if (unlocked) return;
+  unlocked = true;
+  voicePlayer = new Audio(URL.createObjectURL(silentWav()));
+  voicePlayer.play().catch(() => {});
+}
+function silentWav(ms = 60, rate = 8000) {  // a few silent samples, as a real WAV file
+  const n = Math.round(rate * ms / 1000), b = new DataView(new ArrayBuffer(44 + n));
+  const w = (o, t) => [...t].forEach((c, i) => b.setUint8(o + i, c.charCodeAt(0)));
+  w(0, 'RIFF'); b.setUint32(4, 36 + n, true); w(8, 'WAVEfmt '); b.setUint32(16, 16, true); b.setUint16(20, 1, true);
+  b.setUint16(22, 1, true); b.setUint32(24, rate, true); b.setUint32(28, rate, true); b.setUint16(32, 1, true);
+  b.setUint16(34, 8, true); w(36, 'data'); b.setUint32(40, n, true);
+  for (let i = 0; i < n; i++) b.setUint8(44 + i, 128);
+  return new Blob([b], {type: 'audio/wav'});
+}
+function chime(up = true) {
+  try {
+    const c = mic.ctx || new (window.AudioContext || window.webkitAudioContext)();
+    mic.ctx = c;
+    const o = c.createOscillator(), g = c.createGain();
+    o.frequency.setValueAtTime(up ? 660 : 520, c.currentTime); o.frequency.linearRampToValueAtTime(up ? 990 : 390, c.currentTime + .12);
+    g.gain.setValueAtTime(.0001, c.currentTime); g.gain.exponentialRampToValueAtTime(.25, c.currentTime + .02);
+    g.gain.exponentialRampToValueAtTime(.0001, c.currentTime + .22);
+    o.connect(g).connect(c.destination); o.start(); o.stop(c.currentTime + .25);
+  } catch {}
+}
+async function sendVoice(blob, mode) {
+  const r = await fetch('/api/voice?mode=' + mode, {method: 'POST', body: blob,
+    headers: {Authorization: 'Bearer ' + store.get('token', ''), 'Content-Type': blob.type || 'application/octet-stream'}});
+  if (!r.ok) throw new Error('Batsy didn’t get that (' + r.status + ')');
+  return r.json();
+}
+function answered(d) {
+  if (d.armed) { chime(true); $('#b-said').textContent = 'Listening…'; return; }
+  if (d.ignored || !d.heard) return;
+  chat.push({who: 'you', text: '🎙 ' + d.heard}, {who: 'bot', text: d.say || 'Done.'}); store.set('chat', chat.slice(-30));
+  $('#b-said').textContent = d.say || d.heard;
+  // Batsy answers from the laptop's speakers: don't take that (if the phone hears it) as a new request
+  mic.mute = true;
+  setTimeout(() => { mic.mute = false; }, Math.min(15000, 1500 + 70 * (d.say || '').length));
+}
+// hold to talk
+const micBtn = $('#b-mic');
+micBtn.addEventListener('click', e => e.stopPropagation());
+micBtn.addEventListener('pointerdown', async e => {
+  e.stopPropagation(); e.preventDefault();
+  unlockAudio();
+  micBtn.setPointerCapture && micBtn.setPointerCapture(e.pointerId);
+  micBtn.dataset.down = '1';
+  try { await micStream(); } catch (err) { micBtn.dataset.down = ''; return toast(err.message); }
+  if (!micBtn.dataset.down) return;  // let go while the permission prompt was up
+  startRec(); micBtn.classList.add('rec'); chime(true);
+  $('#b-said').textContent = 'Listening… let go when you’re done';
+});
+['pointerup', 'pointercancel'].forEach(ev => micBtn.addEventListener(ev, async e => {
+  e.stopPropagation();
+  micBtn.dataset.down = '';
+  if (!mic.rec) return;
+  micBtn.classList.remove('rec');
+  const got = await stopRec();
+  if (!got || got.ms < 400) { $('#b-said').textContent = 'Hold the mic while you talk.'; return; }
+  $('#b-said').textContent = 'Thinking…'; micBtn.classList.add('wait');
+  try { answered(await sendVoice(got.blob, 'ptt')); } catch (err) { toast(err.message); }
+  micBtn.classList.remove('wait');
+}));
+
+// the phone as Batsy's ears: it listens for "Batsy" (the laptop's mic stands down meanwhile)
+async function earsOn() {
+  unlockAudio();
+  try { await micStream(); } catch (err) { return toast(err.message); }
+  const c = mic.ctx || new (window.AudioContext || window.webkitAudioContext)();
+  mic.ctx = c; c.resume && c.resume();
+  mic.an = c.createAnalyser(); mic.an.fftSize = 1024;
+  c.createMediaStreamSource(mic.stream).connect(mic.an);
+  mic.ears = true; $('#b-ears').classList.add('on'); document.body.classList.add('phone-ears');
+  toast('The phone is listening: say “Batsy, …”');
+  const buf = new Float32Array(mic.an.fftSize);
+  let floor = 0.01, loudAt = 0, recAt = 0;
+  sendVoice(new Blob([]), 'ears').catch(() => {});  // tells the laptop its mic can rest
+  mic.beat = setInterval(() => { if (mic.ears) sendVoice(new Blob([]), 'ears').catch(() => {}); }, 30000);
+  mic.timer = setInterval(async () => {
+    if (!mic.ears) return;
+    mic.an.getFloatTimeDomainData(buf);
+    let sum = 0; for (const v of buf) sum += v * v;
+    const level = Math.sqrt(sum / buf.length), now = Date.now();
+    if (mic.mute || mic.busy) return;
+    if (!mic.rec) floor = floor * 0.98 + level * 0.02;
+    const loud = level > Math.max(0.012, floor * 3);
+    if (loud) loudAt = now;
+    if (loud && !mic.rec) { startRec(); recAt = now; $('#b-ears').classList.add('hear'); }
+    if (mic.rec && (now - loudAt > 900 || now - recAt > 12000)) {  // a pause, or 12 s: that's one thing said
+      $('#b-ears').classList.remove('hear');
+      const got = await stopRec();
+      if (!got || got.ms < 700) return;
+      mic.busy = true;
+      try { answered(await sendVoice(got.blob, 'ears')); } catch {}
+      mic.busy = false;
+    }
+  }, 60);
+}
+function earsOff(quiet = false) {
+  if (!mic.ears) return;
+  mic.ears = false; clearInterval(mic.timer); clearInterval(mic.beat);
+  if (mic.rec) stopRec();
+  $('#b-ears').classList.remove('on', 'hear'); document.body.classList.remove('phone-ears');
+  fetch('/api/voice/off', {method: 'POST', headers: {Authorization: 'Bearer ' + store.get('token', '')}}).catch(() => {});
+  if (mic.stream) { mic.stream.getTracks().forEach(t => t.stop()); mic.stream = null; }
+  if (!quiet) toast('The laptop’s mic is listening again.');
+}
+$('#b-ears').addEventListener('click', e => { e.stopPropagation(); mic.ears ? earsOff() : earsOn(); });
+document.addEventListener('visibilitychange', () => { if (document.hidden) earsOff(true); });  // the phone can't listen in the background
+
 // --- home tiles ---------------------------------------------------------------------------------------------
 let lightOn = null, pc = null;
 async function loadLight() {

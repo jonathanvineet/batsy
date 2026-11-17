@@ -9,6 +9,8 @@ import android.os.Bundle
 import android.view.Gravity
 import android.view.View
 import android.webkit.JavascriptInterface
+import android.webkit.PermissionRequest
+import android.webkit.WebChromeClient
 import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
 import android.webkit.WebView
@@ -31,6 +33,7 @@ class MainActivity : Activity() {
     private lateinit var offline: LinearLayout
     private lateinit var offlineText: TextView
     private var loadedBase = ""
+    private var micAsk: PermissionRequest? = null  // the page wants the mic: waiting for Android's permission
 
     @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(saved: Bundle?) {
@@ -50,6 +53,19 @@ class MainActivity : Activity() {
             settings.domStorageEnabled = true
             settings.mediaPlaybackRequiresUserGesture = false
             addJavascriptInterface(Bridge(), "BatsyApp")
+            webChromeClient = object : WebChromeClient() {
+                // the page's mic (hold to talk / phone as Batsy's ears): allowed once Android allows this app the mic
+                override fun onPermissionRequest(request: PermissionRequest) {
+                    if (PermissionRequest.RESOURCE_AUDIO_CAPTURE !in request.resources) { request.deny(); return }
+                    if (checkSelfPermission(android.Manifest.permission.RECORD_AUDIO) ==
+                        android.content.pm.PackageManager.PERMISSION_GRANTED) {
+                        request.grant(arrayOf(PermissionRequest.RESOURCE_AUDIO_CAPTURE))
+                    } else {
+                        micAsk = request
+                        requestPermissions(arrayOf(android.Manifest.permission.RECORD_AUDIO), MIC)
+                    }
+                }
+            }
             webViewClient = object : WebViewClient() {
                 override fun shouldOverrideUrlLoading(v: WebView, r: WebResourceRequest): Boolean {
                     if (r.url.toString().startsWith(loadedBase)) return false
@@ -77,6 +93,16 @@ class MainActivity : Activity() {
         setContentView(FrameLayout(this).apply { addView(web); addView(offline) })
         fullScreen()
         connect()
+    }
+
+    override fun onRequestPermissionsResult(code: Int, perms: Array<out String>, results: IntArray) {
+        super.onRequestPermissionsResult(code, perms, results)
+        if (code != MIC) return
+        val ask = micAsk ?: return
+        micAsk = null
+        if (results.firstOrNull() == android.content.pm.PackageManager.PERMISSION_GRANTED) {
+            ask.grant(arrayOf(PermissionRequest.RESOURCE_AUDIO_CAPTURE))
+        } else ask.deny()
     }
 
     override fun onWindowFocusChanged(hasFocus: Boolean) {
@@ -153,5 +179,5 @@ class MainActivity : Activity() {
 
     private fun dp(v: Int) = (v * resources.displayMetrics.density).toInt()
 
-    companion object { val BG = Color.BLACK }
+    companion object { val BG = Color.BLACK; const val MIC = 7 }
 }

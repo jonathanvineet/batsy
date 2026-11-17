@@ -299,6 +299,14 @@ On the iPhone the app is a **dashboard** (one scrolling page of cards, no clock)
 - **Cached on the phone:** folder listings show at once, even with the PC asleep; thumbnails are made once per file version; files you open are kept (about 400 MB, oldest dropped first) so they reopen instantly, offline too.
 - **One-time setup:** say **"Batsy, set up the batman drive"** and type the PC's password in the terminal that opens. It lets the laptop's SSH key sign in as `batman`. Files opened on the laptop are copied to `~/Batsy/batman/`.
 
+## Talk to Batsy through the phone
+
+In the phone app (Android and iPhone), next to **Ask Batsy…**:
+- **🎙 Hold to talk:** hold it, speak, let go. The laptop turns it into words with Whisper and handles it exactly as if you'd said it after "Batsy". Batsy answers **out loud from the laptop's speakers**, as usual; the phone is only the microphone, and shows the answer as text.
+- **👂 Phone as Batsy's ears:** tap it and the phone listens for "**Batsy, …**" (or "Batsy", a beep, then your request) for as long as it's on and the app is open. Meanwhile the laptop's own mic stops waking Batsy. Tap again, or leave the app, and the laptop's mic takes over again.
+
+The Android app (version 4.0+) asks for the microphone the first time. The iPhone app asks through Safari. Background noise (music in the room) lowers accuracy: hold the phone near you.
+
 ## Batsy Brain: your Obsidian second brain
 
 `~/Batsy/Brain` is an Obsidian vault that Batsy **writes as your day happens and reads back when it answers**. It's made the first time Batsy starts, already filled from everything Batsy knew: memories, projects, every file you've received, prints, your printer setup and presets, your music taste, and daily notes for the past 30 days rebuilt from your conversations.
@@ -311,7 +319,7 @@ On the iPhone the app is a **dashboard** (one scrolling page of cards, no clock)
 | `00 Inbox` | quick notes ("note that…", the ＋ in the phone app) |
 | `01 Daily` | a note per day: **Plan**, **Summary** (written each night by the free local AI), **Timeline** (what you asked, received, printed, were reminded of), **Files**, **Prints**, **Music**, and your own **Notes**. **Weekly reviews** every Sunday night, written by Claude: wins, project progress, open loops, next week |
 | `02 Projects` | a note per project you told Batsy about: repo, folder, a log of every update |
-| `03 Areas` | 3D Printing (setup, presets, every slice and print), Music (taste profile), College, Home & Devices |
+| `03 Areas` | 3D Printing (setup, presets, every slice and print), Music (taste profile, plus **Listening**: this week and month, top artists, songs on repeat, latest plays), College, Home & Devices |
 | `04 Resources` | a card for every file received (who sent it, a link, its opening lines), every print (preview, grams, time, result), every price comparison |
 | `05 People` | who sent you what |
 | `06 Memory` | **About Jonathan**: everything Batsy remembers. **Edit it in Obsidian**: change a line to correct a memory, delete one to make Batsy forget, add one to teach it |
@@ -322,6 +330,8 @@ On the iPhone the app is a **dashboard** (one scrolling page of cards, no clock)
 - "Note that the bed needs levelling" · "jot down: buy PETG" · "add to my robot notes: the driver overheats"
 - "What did I do yesterday?" · "…today / this week / on Monday" · "summarise my day"
 - "What do my notes say about PLA?" · "search my brain for supports" (the local AI answers from your notes)
+- **Batsy Discovery:** every Monday Claude picks about 25 songs you've **never played** that fit your taste profile and listening (your eras, composers, moods; remixes and covers skipped), and they replace the tracks of your private Spotify playlist **Batsy Discovery**. "Play my discovery playlist" / "play something new" plays it; "make my discovery playlist" / "find me new songs" makes a fresh one now. The list is in Music.md (Discovery), and each one you play gets ticked ▶. Needs `batsy spotify-login` once (playlist permission).
+- "What did I listen to yesterday?" · "…today / this week": **every song you play on Spotify** (any device, playlist or radio) goes into that day's Music, with its time, artists, album and mood
 - "Open my brain" · "open today's note" · "open the robot note" (in Obsidian) · "sync my brain"
 - "Remember that…" still goes to memory, which now also shows up in About Jonathan
 

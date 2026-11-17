@@ -562,3 +562,18 @@ body.dash .brain-w { height: auto; }
 .note.hits { display: flex; flex-direction: column; gap: 8px; }
 .hit { all: unset; display: flex; flex-direction: column; gap: 2px; padding: 12px 14px; border-radius: 14px; background: var(--w2, #22262e); cursor: pointer; }
 .hit small { color: var(--muted); font-size: 12px; } .hit p { margin: 4px 0 0; font-size: 14px; color: var(--muted); }
+
+/* --- the phone's microphone ------------------------------------------------------------------------------------ */
+.askrow { display: flex; gap: 8px; align-items: center; flex: none; }
+.askrow .askbar { flex: 1; min-width: 0; }
+.micbtn, .earsbtn { flex: none; width: clamp(42px, 12vmin, 60px); height: clamp(42px, 12vmin, 60px); border-radius: 50%; border: 0;
+  display: grid; place-items: center; background: var(--w2); color: var(--signal); touch-action: none;
+  -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; transition: transform .12s, background .2s; }
+.micbtn svg, .earsbtn svg { width: 46%; height: 46%; }
+.micbtn.rec { background: #ff4d4d; color: #fff; transform: scale(1.12); box-shadow: 0 0 0 8px rgba(255, 77, 77, .25); }
+.micbtn.wait { animation: pulse 1s ease-in-out infinite; }
+.earsbtn { color: var(--muted); }
+.earsbtn.on { background: var(--signal); color: #000; box-shadow: 0 0 0 0 rgba(255, 194, 14, .5); animation: earsglow 2s ease-out infinite; }
+.earsbtn.on.hear { box-shadow: 0 0 0 10px rgba(255, 194, 14, .35); animation: none; }
+@keyframes earsglow { 0% { box-shadow: 0 0 0 0 rgba(255, 194, 14, .5); } 100% { box-shadow: 0 0 0 14px rgba(255, 194, 14, 0); } }
+@keyframes pulse { 50% { opacity: .5; } }
