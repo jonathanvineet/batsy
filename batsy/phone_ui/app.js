@@ -204,6 +204,58 @@ $('#ask').addEventListener('submit', async e => {
   delete pending.wait; store.set('chat', chat.slice(-30)); drawChat(); refresh();
 });
 
+// --- Android StandBy: something Batsy announces takes over the whole screen for a few seconds ---------------------
+const TO_ICONS = {slice: '🧊', print: '🖨', reminder: '⏰', file: '📥', music: '🎵', warn: '⚠️', ask: '❓', batsy: '🦇'};
+const TO_COLORS = {slice: '124, 92, 255', print: '255, 194, 14', reminder: '255, 122, 122', file: '122, 167, 255',
+  music: '60, 207, 110', warn: '255, 92, 77', ask: '255, 194, 14', batsy: '255, 194, 14'};
+let toQueue = [], toBusy = false;
+function takeEvents(events) {
+  if (!events || document.body.classList.contains('dash')) return;  // the iPhone gets push notifications instead
+  const seen = store.get('evSeen', null);
+  const newest = events.length ? events[events.length - 1].id : 0;
+  if (seen === null) { store.set('evSeen', newest); return; }  // first run: nothing old pops up
+  const fresh = events.filter(e => e.id > seen);
+  if (!fresh.length) return;
+  store.set('evSeen', newest);
+  toQueue.push(...fresh.slice(-3));
+  if (!toBusy) nextTakeover();
+}
+async function nextTakeover() {
+  const e = toQueue.shift();
+  if (!e) { toBusy = false; return; }
+  toBusy = true;
+  const to = $('#takeover');
+  $('#to-icon').textContent = TO_ICONS[e.kind] || '🦇';
+  $('#to-title').textContent = e.title;
+  $('#to-text').textContent = e.text.replace(new RegExp('^' + e.title + ':\\s*', 'i'), '');  // not "Reminder: Reminder: …"
+  $('#to-hint').textContent = e.kind === 'ask' ? 'Answer out loud, or hold the mic' : '';
+  to.style.setProperty('--to', TO_COLORS[e.kind] || TO_COLORS.batsy);
+  const img = $('#to-img');
+  img.hidden = true;
+  if (e.kind === 'slice') {  // the slice's own picture
+    await loadSlice().catch(() => {});
+    if ($('#sw-img').src) { img.src = $('#sw-img').src; img.hidden = false; }
+  }
+  to.classList.toggle('long', e.text.length > 110);
+  const ms = Math.min(14000, 5000 + e.text.length * 45);
+  const bar = $('#to-bar');
+  bar.style.transition = 'none'; bar.style.transform = 'scaleX(1)';
+  to.hidden = false;
+  requestAnimationFrame(() => requestAnimationFrame(() => {
+    to.classList.add('on');
+    bar.style.transition = `transform ${ms}ms linear`; bar.style.transform = 'scaleX(0)';
+  }));
+  clearTimeout(to.timer);
+  to.timer = setTimeout(closeTakeover, ms);
+}
+function closeTakeover() {
+  const to = $('#takeover');
+  clearTimeout(to.timer);
+  to.classList.remove('on');
+  setTimeout(() => { to.hidden = true; nextTakeover(); }, 450);
+}
+$('#takeover').addEventListener('click', closeTakeover);
+
 // --- the phone's microphone: hold to talk, or let the phone be Batsy's ears for a while ------------------------------
 // Audio goes to the laptop (Whisper there turns it into words; Batsy handles it like anything you'd say); Batsy
 // answers out loud from the laptop, and as text here. The phone is only the microphone.
@@ -1232,6 +1284,7 @@ async function refresh() {
   try {
     const s = await api('/api/status');
     drawBatsy(s.batsy || {}); drawClaude(s.claude); drawMachines(s.machines || []); drawMusic(s.spotify);
+    takeEvents(s.events);
     if (Date.now() - (window.prAt || 0) > 9000) { window.prAt = Date.now(); loadPrinter(s); } else drawPrinter(s.printer);
   } catch (e) {
     if (String(e.message).startsWith('Not paired')) toast(e.message);

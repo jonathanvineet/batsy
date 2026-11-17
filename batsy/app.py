@@ -166,6 +166,7 @@ class Batsy:
 
         discover.start(self)  # the weekly Batsy Discovery playlist
         self.phone_ears_until = 0.0  # the phone is listening for "Batsy" instead of this laptop's mic, until then
+        self.events: list[dict] = []  # announcements, for the phone's full-screen alerts (the last 20)
 
     def _host_3d(self) -> bool:
         """Start the 3D viewer inside the overlay; False if this overlay can't (then it opens its own window)."""
@@ -450,6 +451,7 @@ class Batsy:
     def ask_user(self, question: str) -> None:
         """Ask something out of the blue and listen for the answer without needing the wake word."""
         self.last_said = question
+        self.phone_event(question, question=True)
         self.speaker.say(question)
         self.overlay.say(question, force=True)  # worth reopening the screen for, even after you closed it
         if self.overlay.enabled:
@@ -551,8 +553,25 @@ class Batsy:
         self.overlay.say(text)
 
     # --- shared plumbing --------------------------------------------------
+    def phone_event(self, text: str, question: bool = False) -> None:
+        """Something Batsy announced or asked: the Android app shows it full screen for a few seconds."""
+        low = text.lower()
+        kind, title = next(((k, t) for k, t, words in (
+            ("slice", "Sliced", ("sliced", "slicing", "tower is")),
+            ("print", "3D printer", ("print", "printer", "nozzle", "bed ")),
+            ("reminder", "Reminder", ("reminder", "remind", "timer", "it was due")),
+            ("file", "Files", ("sent ", "arrived", "received", ".pdf", ".stl", ".jpg")),
+            ("music", "Music", ("playing", "playlist", "spotify", "song")),
+            ("warn", "Heads up", ("warning", "running hot", "battery", "disk")),
+        ) if any(w in low for w in words)), ("batsy", "Batsy"))
+        if question:
+            kind, title = "ask", "Batsy asks"
+        self.events = (self.events + [{"id": (self.events[-1]["id"] + 1) if self.events else int(time.time()),
+                                       "t": time.time(), "kind": kind, "title": title, "text": text}])[-20:]
+
     def announce(self, text: str) -> None:
         log.info("announce: %s", text)
+        self.phone_event(text)
         self.brain.note_announcement(text)
         self.speaker.say(text)
         try:
@@ -577,6 +596,7 @@ class Batsy:
         if self.ears is None:
             return self._confirm(question)
         req = {"question": question, "done": threading.Event(), "answer": False}
+        self.phone_event(question, question=True)
         self.confirm_request = req
         req["done"].wait(timeout=90)
         self.confirm_request = None
@@ -588,6 +608,7 @@ class Batsy:
         if abort is not None and abort.is_set():
             return False  # the request was cancelled: never ask (or do) anything more for it
         req = {"question": question, "done": threading.Event(), "answer": False}
+        self.phone_event(question, question=True)
         self.confirm_request = req
         req["done"].wait(timeout=60)
         self.confirm_request = None

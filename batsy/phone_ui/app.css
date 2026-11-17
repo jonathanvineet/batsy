@@ -577,3 +577,39 @@ body.dash .brain-w { height: auto; }
 .earsbtn.on.hear { box-shadow: 0 0 0 10px rgba(255, 194, 14, .35); animation: none; }
 @keyframes earsglow { 0% { box-shadow: 0 0 0 0 rgba(255, 194, 14, .5); } 100% { box-shadow: 0 0 0 14px rgba(255, 194, 14, 0); } }
 @keyframes pulse { 50% { opacity: .5; } }
+
+/* --- the hold-to-talk button: the widget's main control ------------------------------------------------------- */
+.askrow .micbtn { flex: 1; width: auto; border-radius: 999px; display: flex; align-items: center; justify-content: center; gap: 10px;
+  background: var(--signal); color: #000; font: 700 clamp(15px, 4.4vmin, 21px)/1 var(--display); letter-spacing: .05em;
+  height: clamp(50px, 14vmin, 68px); box-shadow: 0 6px 20px rgba(255, 194, 14, .25); }
+.askrow .micbtn svg { width: clamp(22px, 6vmin, 30px); height: auto; }
+.askrow .micbtn.rec { background: #ff4d4d; color: #fff; transform: scale(1.04); box-shadow: 0 0 0 10px rgba(255, 77, 77, .25); }
+.askrow .micbtn.rec span::after { content: ' · listening'; }
+.askrow .earsbtn, .askrow .askbar { flex: none; width: clamp(50px, 14vmin, 68px); height: clamp(50px, 14vmin, 68px); padding: 0;
+  border-radius: 50%; justify-content: center; }
+.askrow .askbar .i { width: 46%; height: auto; color: var(--muted); }
+
+/* --- Android StandBy: an announcement fills the screen for a few seconds --------------------------------------- */
+.takeover { --to: 255, 194, 14; position: fixed; inset: 0; z-index: 95; background: #000; display: flex; flex-direction: column;
+  justify-content: center; padding: 6vh 7vw; opacity: 0; transform: scale(1.04); transition: opacity .45s ease, transform .45s ease;
+  cursor: pointer; overflow: hidden; }
+.takeover.on { opacity: 1; transform: none; }
+.to-glow { position: absolute; inset: -30%; background: radial-gradient(circle at 25% 45%, rgba(var(--to), .35), transparent 55%);
+  animation: toglow 6s ease-in-out infinite alternate; pointer-events: none; }
+@keyframes toglow { to { transform: translate(6%, -4%) scale(1.1); } }
+.to-main { position: relative; display: flex; align-items: center; gap: 5vw; min-height: 0; }
+.to-side { flex: none; display: grid; place-items: center; }
+.to-icon { width: 26vh; height: 26vh; border-radius: 28%; display: grid; place-items: center; font-size: 15vh;
+  background: rgba(var(--to), .18); box-shadow: 0 0 60px rgba(var(--to), .35); }
+.to-img { width: 52vh; height: 52vh; object-fit: contain; border-radius: 6%; background: rgba(255, 255, 255, .04); }
+.to-img:not([hidden]) ~ .to-icon, .to-side:has(.to-img:not([hidden])) .to-icon { display: none; }
+.to-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2vh; }
+.to-body small { font: 700 4.6vh/1 var(--display); letter-spacing: .14em; text-transform: uppercase; color: rgb(var(--to)); }
+.to-body p { margin: 0; font: 700 9vh/1.1 var(--display); color: #f3eee2; display: -webkit-box; -webkit-line-clamp: 5;
+  -webkit-box-orient: vertical; overflow: hidden; }
+.takeover.long .to-body p { font-size: 6.4vh; -webkit-line-clamp: 7; }
+.to-body em { font-style: normal; color: rgba(255, 255, 255, .5); font-size: 3.6vh; }
+.to-bar { position: absolute; left: 7vw; right: 7vw; bottom: 5vh; height: 4px; border-radius: 2px; background: rgba(255, 255, 255, .1);
+  overflow: hidden; }
+.to-bar i { display: block; height: 100%; background: rgb(var(--to)); transform-origin: left; }
+.askrow .earsbtn svg { width: 52%; height: 52%; }

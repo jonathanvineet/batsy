@@ -226,7 +226,8 @@ class Hub:
     def status(self) -> dict:
         self.last_seen = time.time()
         out = {"t": int(time.time()), "machines": [self._laptop()], "claude": self._claude(),
-               "spotify": self._spotify(), "batsy": self._batsy()}
+               "spotify": self._spotify(), "batsy": self._batsy(),
+               "events": [e for e in getattr(self.app, "events", []) if time.time() - e["t"] < 600][-5:]}
         pr = getattr(self.app, "printer3d", None)
         if pr is not None:
             out["printer"] = pr.snapshot()
