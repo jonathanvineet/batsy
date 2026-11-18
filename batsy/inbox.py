@@ -237,7 +237,12 @@ class Inbox:
                 log.warning("taildrop collection unavailable: %s", e)
             if self.problem:
                 log.warning("Taildrop files can't be collected: %s", self.problem)
-            delay = 10 if time.time() - t0 > 120 else min(300, delay * 2)  # back off while it keeps failing
+                if not getattr(self, "_told", False):  # say it once, out loud: a log line is easy to never see
+                    self._told = True
+                    self.app.announce("Files sent to me over Tailscale are stuck: I'm not allowed to collect them. "
+                                      "Run sudo tailscale set operator equals your user name, once, in a terminal.")
+            # back off while it keeps failing, but not for long: once it's fixed, files arrive within a minute
+            delay = 10 if time.time() - t0 > 120 else min(60, delay * 2)
             time.sleep(delay)
 
     def _files(self, sender: str | None = None) -> list[Path]:
