@@ -218,9 +218,60 @@ def _f(x: float) -> str:
     return str(int(x)) if float(x).is_integer() else str(round(x, 3))
 
 
+# "no X", "without X", "don't use X", "remove the X", "turn off X": that setting off
+NEG = r"(?:no|without|don'?t (?:use|want|add|do)|do not (?:use|want|add)|remove|turn off|disable|skip|stop using|get rid of)" \
+      r"\s+(?:the\s+|any\s+|a\s+)?"
+# "don't use fuzzy skin, keep the other changes and slice it again": a change to the LAST slice, then slice
+AGAIN = re.compile(r"^(?P<wish>(?:don'?t|do not|no|without|remove|turn off|disable|use|add|keep|change|reduce|increase|"
+                   r"lower|raise|set|put|make|switch|go|try|only)\b.*?)[ ,]+(?:and |but |so )?(?:then )?(?:re ?slice|slice)"
+                   r"(?: (?:it|that|this|the model|the print|[\w-]+))?(?: again)?$")
+FILLERS = re.compile(r"\b(?:uh+|um+|er+|mm+|hmm+|like|you know|i mean)\b")
+# infill patterns you might name -> OrcaSlicer's value
+PATTERNS = {"gyroid": "gyroid", "grid": "grid", "honeycomb": "honeycomb", "3d honeycomb": "3dhoneycomb",
+            "lightning": "lightning", "cubic": "cubic", "adaptive cubic": "adaptivecubic", "triangles": "triangles",
+            "triangle": "triangles", "lines": "line", "line": "line", "zig zag": "zig-zag", "zigzag": "zig-zag",
+            "rectilinear": "zig-zag", "concentric": "concentric", "cross hatch": "crosshatch", "crosshatch": "crosshatch"}
+# What a plain settings instruction is made of ("slice it with 0.16 layer height and 20% infill"). Anything left
+# over ("…because it takes too long", "…but stronger", "five of them") needs judgement: the print expert.
+_PLAIN = re.compile(r"\b(?:with|and|at|a|an|the|of|to|use|using|set|put|add|on|off|no|without|plus|also|please|then|"
+                    r"mm|millimet\w*|percent|layers?|layer height|height|infill|fill|density|pattern|walls?|"
+                    r"perimeters?|wall loops?|supports?|tree|brim|ironing|iron|fuzzy|skin|"
+                    + "|".join(sorted(PATTERNS, key=len, reverse=True)) + r")\b|\d+(?:\.\d+)?\s*%?|%")
+
+
+def canonical(n: str) -> tuple[str, bool]:
+    """(the request as "slice it ...", is it a change to the last slice?). "don't use fuzzy skin and slice it again"
+    -> ("slice it again don't use fuzzy skin", True)."""
+    n = re.sub(r"\s+", " ", FILLERS.sub(" ", n.lower())).strip()
+    n = re.sub(r"^[a-z]{1,2} (?=(?:please )?(?:re ?slice|slice|print)\b)", "", n)
+    n = re.sub(r"\b(?:fudgy|fussy|fuzzie|fozzy|foggy)\b", "fuzzy", n)  # how the mic hears "fuzzy"
+    n = re.sub(r"\b(0?\.\d{1,2})\s*(?:light|lite|late|lair|leyer|liar)\b", r"\1 layer", n)  # ...and "0.16 layer"
+    m = AGAIN.match(n)
+    if m:
+        return "slice it again " + m.group("wish"), True
+    return n, bool(re.match(r"(?:please )?(?:re ?slice|slice) (?:it|that|this|the model|[\w-]+) again\b", n))
+
+
+def explicit(n: str) -> bool:
+    """Is this a plain "slice it with <settings>" (or "with <preset>") that needs no thinking? Then Batsy does it
+    itself, in seconds, without asking Claude."""
+    t, _ = canonical(n)
+    t = re.sub(r"\b(?:again|keep|all|other|the|changes?|settings?|rest|same|but|do|don'?t|not|use|reduce|increase|"
+               r"lower|raise|change|remove|turn|disable|get|rid|stop|using|want|everything|else)\b", " ", t)
+    m = re.match(r"\s*(?:[a-z]{1,2}\s+)?(?:please\s+)?(?:re ?slice|slice|print)\s+(?:it|this|that|the model|the last one|again)\b(?P<w>.*)$", t)
+    if not m:
+        return False
+    w = m.group("w")
+    for name in sorted(processes(), key=len, reverse=True):  # "with fast": one of your presets
+        w = re.sub(rf"\b{re.escape(name.lower())}\b(?: preset| profile| settings)?", " ", w)
+    return not _PLAIN.sub(" ", w).strip(" ,.")
+
+
 def plan(text: str, base: dict) -> tuple[dict, list[str]]:
     """What you asked for -> (overrides on top of the base process, what changed in words)."""
-    t = text.lower()
+    t = FILLERS.sub(" ", text.lower())  # "with 0.16 uh layer height": speech fillers mustn't hide the setting
+    t = re.sub(r"\b(0?\.\d{1,2})\s*(?:mm\s*)?(?:light|lite|late|lair|leyer|liar|lay)\b", r"\1 layer", t)  # misheard
+    t = re.sub(r"\b(?:fudgy|fussy|fuzzie|fozzy|fuzz|foggy)\b", "fuzzy", t)
     o: dict = {}
     has = lambda *ws: any(re.search(rf"\b{w}\b", t) for w in ws)  # noqa: E731
     fast, quality = has("fast", "faster", "quick", "quickly", "speed", "draft", "rush"), \
@@ -265,29 +316,40 @@ def plan(text: str, base: dict) -> tuple[dict, list[str]]:
         o["ironing_type"] = "top"
         o["seam_position"] = "back"
     # exact values: "40% infill", "5 walls", "0.12 layers", "no supports", "add a brim"
-    m = re.search(r"(\d{1,3})\s*(?:%|percent)\s*(?:infill|fill)|infill (?:of |to |at )?(\d{1,3})\s*(?:%|percent)?", t)
+    m = re.search(r"(\d{1,3})\s*(?:%|percent)?\s*(?:infill|fill)\b|infill (?:of |to |at )?(\d{1,3})\s*(?:%|percent)?", t)
     if m:
         o["sparse_infill_density"] = f"{min(100, int(m.group(1) or m.group(2)))}%"
     m = re.search(r"(\d{1,2})\s*(?:walls?|perimeters?)|(?:walls?|perimeters?) (?:of |to )?(\d{1,2})", t)
     if m:
         o["wall_loops"] = str(min(12, int(m.group(1) or m.group(2))))
-    m = re.search(r"(0?\.\d{1,2})\s*(?:mm)?\s*(?:layers?|layer height)|layer height (?:of |to )?(0?\.\d{1,2})", t)
+    m = re.search(r"(0?\.\d{1,2})\s*(?:mm)?\s*(?:layers?|layer height)|layer height (?:of |to )?(0?\.\d{1,2})", t) or \
+        (None if "nozzle" in t else re.search(r"(?<![\d.])(0?\.(?:0[6-9]|[1-3]\d?))(?![\d%])()", t))  # bare "0.16"
     if m:
         o["layer_height"] = str(max(0.06, min(0.32, float(m.group(1) or m.group(2)))))
-    if has("no supports?", "without supports?", "supports? off", "remove (?:the )?supports?"):
+    if has(f"{NEG}supports?", "supports? off"):
         o["enable_support"] = "0"
     elif has("supports?", "with supports?", "add supports?"):
         o["enable_support"], o["support_type"] = "1", "tree(auto)"
-    if has("no brim", "without (?:a )?brim", "brim off"):
+    if has(f"{NEG}brim", "brim off"):
         o["brim_type"] = "no_brim"
     elif has("brim"):
         o["brim_type"], o["brim_width"] = "outer_only", "8"
-    if has("ironing", "iron"):
+    if has(f"{NEG}iron(?:ing)?", "ironing off"):
+        o["ironing_type"] = "no ironing"
+    elif has("ironing", "iron"):
         o["ironing_type"] = "top"
+    if has(f"{NEG}fuzzy(?: skin)?", "fuzzy(?: skin)? off"):
+        o["fuzzy_skin"] = "none"
+    elif has("fuzzy(?: skin)?"):
+        o["fuzzy_skin"] = "external"  # the outside only: a textured look, the holes stay true
+    m = re.search(rf"\b({'|'.join(PATTERNS)})\b", t)
+    if m:
+        o["sparse_infill_pattern"] = PATTERNS[m.group(1)]
     names = {"layer_height": "layers", "wall_loops": "walls", "sparse_infill_density": "infill",
              "sparse_infill_pattern": "infill pattern", "top_shell_layers": "top layers", "bottom_shell_layers": "bottom layers",
              "outer_wall_speed": "outer wall speed", "inner_wall_speed": "inner wall speed",
-             "sparse_infill_speed": "infill speed", "enable_support": "supports", "brim_type": "brim", "ironing_type": "ironing"}
+             "sparse_infill_speed": "infill speed", "enable_support": "supports", "brim_type": "brim", "ironing_type": "ironing",
+             "fuzzy_skin": "fuzzy skin"}
     notes = []
     for k, v in o.items():
         was_v = base.get(k, "")
@@ -296,7 +358,8 @@ def plan(text: str, base: dict) -> tuple[dict, list[str]]:
         if k in names and not same:
             was = base.get(k, "?")
             was = was[0] if isinstance(was, list) and was else was
-            pretty = {"1": "on", "0": "off", "no_brim": "off", "outer_only": "on", "top": "on", "no ironing": "off"}.get(v, v)
+            pretty = {"1": "on", "0": "off", "no_brim": "off", "outer_only": "on", "top": "on", "no ironing": "off",
+                      "external": "on", "none": "off"}.get(v, v)
             notes.append(f"{names[k]} {pretty}" + (f" (was {was})" if was not in ("?", "") else ""))
     return o, notes
 
@@ -505,6 +568,9 @@ KICK = re.compile(r"^(?:please )?(?:slice|re ?slice|make|print)\b")
 
 
 def handle(app, n: str) -> str | None:
+    # "s uh slice it with 0.16 uh layer height" -> "slice it with 0.16 layer height";
+    # "don't use fuzzy skin and slice it again" -> "slice it again don't use fuzzy skin" (on top of the last slice)
+    n, again = canonical(n)
     if SHOW.match(n):
         return "Opening the slice in 3D." if show_3d(app) else "I couldn't open the browser."
     if PROFILES.match(n):
@@ -538,7 +604,7 @@ def handle(app, n: str) -> str | None:
         return None  # "make it louder": not about printing
     names = processes()
     proc = next((x for x in sorted(names, key=len, reverse=True) if re.search(rf"\b{re.escape(x.lower())}\b", n)), None)
-    relative = n.startswith("make") and last  # "make it stronger": on top of what you sliced last
+    relative = (n.startswith("make") or again) and last  # "make it stronger", "slice it again without X": on top of the last
     base_name = proc or (last["process"] if relative else None) or settings().get("default", DEFAULT_PROCESS)
     if model is None:
         return "Which model? Send me an STL or a 3MF first."
@@ -547,7 +613,7 @@ def handle(app, n: str) -> str | None:
     except ValueError as e:
         return str(e)
     base = {**flatten(json.loads(pfile.read_text()), "process"), **((last or {}).get("overrides", {}) if relative else {})}
-    wish = re.sub(r"^(?:please )?(?:re ?slice|slice|make|print)\s*(?:it|this|that|the model)?\s*", "", n)
+    wish = re.sub(r"^(?:please )?(?:re ?slice|slice|make|print)\s*(?:it|this|that|the model)?\s*(?:again\s*)?", "", n)
     if proc:  # "with fast" picked the preset called fast: that's not also a wish to go faster
         wish = re.sub(rf"\s*(?:with|using|on|in|from)?\s*(?:the )?(?:my )?{re.escape(proc.lower())}(?: preset| profile| settings)?\b",
                       " ", wish).strip(" ,")
@@ -615,6 +681,27 @@ def _target(app, said: str | None) -> Path | None:
     return None
 
 
+def fix_units(model: Path) -> str | None:
+    """A model drawn in metres (tree.STL: 0.07 x 0.07 x 0.08 "mm", far too small to have a single layer) is
+    rescaled x1000 in place, as slicers offer to. Returns what was done, to say, or None."""
+    if model.suffix.lower() not in (".stl", ".obj"):
+        return None
+    try:
+        import trimesh
+
+        m = trimesh.load(str(model), force="mesh")
+        if not len(m.faces) or not 0 < float(max(m.extents)) < 1.0:  # under 1 mm across: never a real print
+            return None
+        m.apply_scale(1000.0)
+        m.export(str(model))
+    except Exception as e:
+        log.warning("checking %s's units: %s", model.name, e)
+        return None
+    x, y, z = (round(float(v)) for v in m.extents)
+    log.info("%s was in metres: scaled to %s x %s x %s mm", model.name, x, y, z)
+    return f"{model.stem} was drawn in metres, so I scaled it up: it's {x} by {y} by {z} millimetres."
+
+
 def on_arrival(app, files: list[Path]) -> None:
     """Called for every batch that arrives: printer bundles become your presets, models get sliced."""
     for f in files:
@@ -626,6 +713,10 @@ def on_arrival(app, files: list[Path]) -> None:
             except (OSError, ValueError, zipfile.BadZipFile) as e:
                 log.warning("printer bundle %s: %s", f.name, e)
     models = [f for f in files if f.suffix.lower() in MODELS]
+    for f in models:
+        said = fix_units(f)
+        if said:
+            app.announce(said)
     if not models or not ready():
         return
 

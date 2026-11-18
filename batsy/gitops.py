@@ -89,9 +89,24 @@ def _named_in(n: str) -> str | None:
 
 def message(path: Path, cfg) -> str:
     """The commit message, written by the local model from what's staged (never by Claude)."""
-    _, stat = _git(path, "diff", "--cached", "--stat")
-    _, diff = _git(path, "diff", "--cached", "--unified=1", "--no-color")
+    _, stat = _git(path, "diff", "--cached", "--stat=100")
+    _, diff = _git(path, "diff", "--cached", "--unified=0", "--no-color")
     files = [l.split("|")[0].strip() for l in stat.splitlines() if "|" in l]
+    # Small but telling: the model reads ~15 words a second, so 5000 characters of raw diff took 2-3 minutes.
+    # Per file, the functions that changed (git names them in each hunk header) and a few of the added lines.
+    brief, cur = [], None
+    for line in diff.splitlines():
+        if line.startswith("+++ b/"):
+            cur = line[6:]
+            brief.append(f"\n{cur}:")
+        elif line.startswith("@@") and cur:
+            fn = line.split("@@")[-1].strip()
+            if fn and fn[:60] not in "".join(brief[-6:]):
+                brief.append(f"  in {fn[:60]}")
+        elif line.startswith("+") and not line.startswith("+++") and len(line.strip()) > 12 and \
+                sum(1 for b in brief if b.startswith("    +")) < 24:
+            brief.append("    " + line[:90])
+    brief_text = "\n".join(brief)[:1800]
     fallback = f"Update {', '.join(Path(f).name for f in files[:4])}" + (f" and {len(files) - 4} more" if len(files) > 4 else "")
     try:
         from batsy import vault_daily
@@ -100,7 +115,8 @@ def message(path: Path, cfg) -> str:
         out = vault_daily.local_model(
             "Write a git commit message for these changes. First line: a summary in the imperative, at most 70 "
             "characters. Then a blank line and 2 to 5 short '- ' bullet lines saying what changed. Plain text only, "
-            f"no quotes, no AI credit.\n\nFiles:\n{stat[-1500:]}\n\nDiff (trimmed):\n{diff[:5000]}", 220)
+            f"no quotes, no AI credit.\n\nFiles:\n{stat[-600:]}\n\nWhat changed (functions, some added lines):"
+            f"{brief_text}", 140)
         msg = out.strip().strip("`").strip()
     except Exception as e:
         log.info("local model couldn't write the message: %s", e)

@@ -69,7 +69,8 @@ def _strip_fillers(n: str) -> str:
 
 
 def _norm(text: str) -> str:
-    return re.sub(r"\s+", " ", re.sub(r"[^a-z0-9' ]", "", text.lower())).strip()
+    t = re.sub(r"(?<=\d)\.(?=\d)", "qdotq", text.lower())  # "0.16 layer height" keeps its decimal point
+    return re.sub(r"\s+", " ", re.sub(r"[^a-z0-9' ]", "", t).replace("qdotq", ".")).strip()
 
 
 class Batsy:

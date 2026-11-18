@@ -825,8 +825,10 @@ YES = re.compile(r"^(?:yes|yeah|yep|yup|sure|correct|right|exactly|that one|that
 SECOND = re.compile(r"^(?:the )?(?:second|2nd|number two|two|other)(?: one)?\b")
 THIRD = re.compile(r"^(?:the )?(?:third|3rd|number three|three)(?: one)?\b")
 NO = re.compile(r"^(?:no|nope|nah|neither|none|not that|not those|none of them|wrong)\b")
-OPEN_IT = re.compile(r"^(?:yes|yeah|yep|sure|ok|okay|please)?\s*(?:open|show)(?: it| that| that one| the first one| this)?"
-                     r"(?: please)?$|^(?:yes|yeah|yep|sure)(?: please)?$")
+OPEN_IT = re.compile(r"^(?:yes|yeah|yep|sure|ok|okay|please)?\s*(?:open|show)(?: it| that| that one| the first one| this|"
+                     r"(?: up)? the (?:file|model|stl|3d model|one you got))?(?: please)?$|^(?:yes|yeah|yep|sure)(?: please)?$")
+# "open the file and then slice it (with fast)": the answer to "Want me to open it?" plus what to do next
+AND_SLICE = re.compile(r"^(?P<first>.+?),?\s+(?:and\s+)?(?:then\s+)?(?P<slice>slice (?:it|that|this)\b.*)$")
 PROJECT_WORDS = re.compile(r"\b(projects?|repos?|repository|codebase|github)\b")
 CONNECT = re.compile(r"\s+(?:using|with|that|which|where|so that|to|in|on|for|and it|because|so i)\s+")
 
@@ -1007,6 +1009,9 @@ class ProjectTalk:
             self._say(f"Got it, {pick['name']}. I'll follow it from now on.")
             return True
         if p["kind"] == "open":
+            then = AND_SLICE.match(n)
+            if then and (OPEN_IT.match(then.group("first")) or YES.match(then.group("first"))):
+                n = then.group("first")  # open it now; slice it right after (below)
             files = p["files"]
             target = files[1] if SECOND.match(n) and len(files) > 1 else files[2] if THIRD.match(n) and len(files) > 2 \
                 else files[0] if (OPEN_IT.match(n) or YES.match(n)) else None
@@ -1022,6 +1027,12 @@ class ProjectTalk:
             else:  # opens it and previews it (PDFs, pictures); 3D models go to Batsy's viewer
                 self.app.open_result(target)
             self._say(f"Opening {os.path.basename(target)}.")
+            if then:
+                from batsy import slicer
+
+                said = slicer.handle(self.app, then.group("slice"))  # "slice it": the model that just arrived
+                if said:
+                    self._say(said)
             return True
         return False
 

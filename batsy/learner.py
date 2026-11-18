@@ -100,6 +100,9 @@ def chatter(norm: str) -> bool:
     w = norm.split()
     if not w or norm in ("yes", "yeah", "yep", "no", "nope"):  # an answer, with no question pending
         return True
+    if len(w) == 1 and not _ADDRESS.match(norm) and norm not in ("weather", "time", "date", "battery", "news",
+                                                                 "temperature", "help", "status"):
+        return True  # one word that no command took ("somebody"): a fragment of talk, not a question
     if _ADDRESS.match(norm) and not _TRAIL.search(norm):
         return False
     if _TRAIL.search(norm) and not _ADDRESS.match(norm):

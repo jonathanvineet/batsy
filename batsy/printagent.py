@@ -38,6 +38,10 @@ CONTROL = re.compile(r"\b(?:pause|resume|cancel|stop the print|preheat|cool|home
 
 def wants(n: str, app=None) -> bool:
     """Is this about planning a print (for the expert), rather than a plain printer command?"""
+    from batsy import slicer
+
+    if slicer.explicit(n):  # "slice it with 0.16 layer height": an instruction, not a question; Batsy does it
+        return False
     if CONTROL.search(n) and not re.search(r"\b(?:but|faster|slower|quality|smaller|bigger|instead)\b", n):
         return False
     if NOT_PRINT.search(n) or re.match(r"(?:hey |ok |so )?(?:batsy )?(?:please )?(?:remember|don'?t forget|keep in mind|"
