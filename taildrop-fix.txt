@@ -1,0 +1,27 @@
+TASK: Files sent to this machine with Tailscale (Taildrop) never show up in Batsy. Find out why and fix it.
+
+CONTEXT
+- This machine is "workstation" on Tailscale (100.117.229.111), Fedora. Batsy (this repo, ~/elco/batsy or wherever
+  it's cloned) is the voice assistant that should receive the files.
+- From the Mac (Tailscale device "c") the user sends a file (e.g. tree.STL, 5.4 MB) via Finder > Share > Tailscale >
+  workstation. The Mac shows "Sent", so the file reaches this machine's tailscaled.
+- On Linux, received Taildrop files wait in tailscaled's holding area until something runs `tailscale file get`.
+- Batsy's collector (batsy/inbox.py, Inbox._collect) runs:
+      tailscale file get --loop --wait --conflict=rename --verbose ~/Batsy/inbox/.taildrop
+  Inbox._watch then moves files from .taildrop into ~/Batsy/inbox/<user>/ and announces them ("You sent Tree...").
+- That second half is verified working: dropping tree.STL into ~/Batsy/inbox/.taildrop by hand gets it filed and
+  announced within ~10 s. So the failure is in collecting from tailscaled.
+- Most likely cause: Tailscale's operator isn't set, so a non-root user can't run `tailscale file get`
+  ("access denied"). Other possibilities: Batsy isn't running, is an old version without the collector,
+  [files] taildrop = false in ~/.config/batsy/config.toml, or `tailscale` isn't on the service's PATH.
+
+STEPS
+1. tailscale file get --verbose ~/Batsy/inbox
+     - "access denied" / operator error  ->  sudo tailscale set --operator=$USER   (then repeat step 1)
+     - saves tree.STL                    ->  permission is fine; go to step 2
+2. Is Batsy running and up to date?  git -C <repo> pull ; systemctl --user status batsy (or: pgrep -af batsy)
+3. Is the collector running?  pgrep -af "tailscale file get"   (should show the --loop command above)
+4. Log:  grep -iE "taildrop|inbox|arriv" ~/.local/share/batsy/batsy.log | tail -30
+5. Fix whatever is wrong, restart Batsy (say "Batsy, restart yourself" or restart the service), then ask the user to
+   send a file again and confirm it lands in ~/Batsy/inbox/<user>/ and Batsy announces it.
+6. `batsy doctor` has a check named "Tailscale file sharing" that should end up OK.

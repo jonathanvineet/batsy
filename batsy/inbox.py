@@ -300,17 +300,18 @@ class Inbox:
         log.info("arrived: %s", ", ".join(p.name for p in files))
         from batsy import vault_capture
 
+        # The extras below must never cost you the announcement: each one failing is logged and skipped.
         for p in files:  # remembered for good: "who sent the last file?", "open the audit report"
             via = "taildrop" if str(p) in self._taildropped else "upload page"
-            received.record(p, self.sender_of(p) or self.mine, via)
-            vault_capture.file_received(str(p), self.sender_of(p) or self.mine, via, received.kind_of(p.name),
-                                        p.stat().st_size if p.exists() else 0)  # a card in the brain
+            _safely("record", received.record, p, self.sender_of(p) or self.mine, via)
+            _safely("vault card", vault_capture.file_received, str(p), self.sender_of(p) or self.mine, via,
+                    received.kind_of(p.name), p.stat().st_size if p.exists() else 0)  # a card in the brain
         from batsy import slicer
 
-        slicer.on_arrival(self.app, files)  # printer presets -> your printer; 3D models -> sliced in the background
+        _safely("slicer", slicer.on_arrival, self.app, files)  # presets -> your printer; models sliced in background
         fw = getattr(self.app, "pc_forward", None)
         if fw is not None:  # a copy to the sender's Inbox on the PC (Karan -> nightwing, ...)
-            fw.send(files, self.sender_of)
+            _safely("copy to the PC", fw.send, files, self.sender_of)
         self.last = files[-1]
         self.app.last_file = files[0]
         first = files[0]
@@ -661,6 +662,13 @@ def _safe_name(name: str) -> str:
     """A file or folder name that stays where it's put: no path parts, no leading dot, no control characters."""
     name = re.sub(r"[\x00-\x1f\x7f]", "", os.path.basename(str(name).replace("\\", "/"))).strip().lstrip(".")
     return name[:200] or "file"
+
+
+def _safely(what: str, fn, *args) -> None:
+    try:
+        fn(*args)
+    except Exception:
+        log.exception("arrival: %s failed", what)
 
 
 def _place(src: Path, folder: Path, name: str | None = None) -> Path:
