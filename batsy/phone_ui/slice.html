@@ -192,7 +192,7 @@ if (innerWidth < 700 || innerHeight < 520) $('#legend').classList.add('hide');  
 
 // --- the scene: plate, lights, camera ----------------------------------------------------------------------------------
 const renderer = new THREE.WebGLRenderer({antialias: true, alpha: true});
-renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.setPixelRatio(Math.min(devicePixelRatio, 1.5));  // a million lines at 3x on a phone was what made it crawl
 document.body.prepend(renderer.domElement);
 const scene = new THREE.Scene();
 // the build plate, 220 x 220 (G-code coordinates are bed coordinates): printer X -> three X, Y -> -Z, Z -> Y
@@ -216,7 +216,13 @@ const controls = new OrbitControls(camera, renderer.domElement);
 controls.target.copy(centre); controls.enableDamping = true;
 
 const mat = new LineMaterial({vertexColors: true, worldUnits: true, linewidth: 0.42, alphaToCoverage: false});
-let lines = null, idx = new Uint32Array(0), layerStart = new Uint32Array(L + 1);
+// What a slicer actually shows: below the layer you're looking at, only what can be seen from outside (outer walls,
+// top/bottom surfaces, overhangs, bridges, ironing, brim): ~1 line in 5. The inner walls and infill of those layers
+// are hidden behind the walls anyway. The top layer has everything, so scrubbing and the move player see inside.
+// Building and turning ~a million real-width lines made a phone crawl.
+const SHELL = new Set(names.map((nm, i) => /outer wall|overhang|top surface|bottom surface|^bridge|ironing|brim|skirt/i.test(nm) ? i : -1));
+let shell = null, shellStart = new Uint32Array(L + 1);   // the outside, of every layer
+let topLines = null, topIdx = new Uint32Array(0), topFor = -1;  // everything, of the top layer
 const light = new THREE.Vector3(0.45, 0.8, 0.4).normalize();
 const c = new THREE.Color();
 let single = false;
@@ -225,53 +231,61 @@ function colourOf(i, z) {
   if (mode === 'temp') { let b = 0; while (b + 1 < bands.length && z >= bands[b + 1].z) b++; return c.copy(bandColour(b)); }
   return c.copy(heat((z - lo[2]) / Math.max(1e-6, hi[2] - lo[2])));
 }
-// build the visible lines (hidden types left out; "only this layer": just that layer). layerStart[k] = the first line
-// of layer k among them, for the sliders.
-let builtFor = null;
-function rebuild() {
-  const top = +$('#layer').value - 1;
-  builtFor = single ? top : 'all';
-  const keep = [];
-  for (let i = 0; i < N; i++) if (!hidden.has(featOf[i]) && (!single || layerOf[i] === top)) keep.push(i);
-  idx = Uint32Array.from(keep);
-  layerStart = new Uint32Array(L + 1);
-  for (let k = 0, j = 0; k <= L; k++) { while (j < idx.length && layerOf[idx[j]] < k) j++; layerStart[k] = j; }
-  const pos = new Float32Array(Math.max(1, idx.length) * 6), col = new Float32Array(Math.max(1, idx.length) * 6);
-  for (let j = 0; j < idx.length; j++) {
-    const i = idx[j], o = i * 6;
+function makeLines(pick, count) {  // real-width lines for these lines (indices into the data), shaded like a preview
+  const pos = new Float32Array(Math.max(1, count) * 6), col = new Float32Array(Math.max(1, count) * 6);
+  for (let j = 0; j < count; j++) {
+    const i = pick[j], o = i * 6, q = j * 6;
     const x0 = ints[o] / S, y0 = ints[o + 1] / S, z0 = ints[o + 2] / S, x1 = ints[o + 3] / S, y1 = ints[o + 4] / S, z1 = ints[o + 5] / S;
-    pos.set([x0, z0, -y0, x1, z1, -y1], j * 6);
+    pos[q] = x0; pos[q + 1] = z0; pos[q + 2] = -y0; pos[q + 3] = x1; pos[q + 4] = z1; pos[q + 5] = -y1;
     // shade by the line's direction against the light: walls get light and shadow, like a real preview
     const dx = x1 - x0, dy = y1 - y0, len = Math.hypot(dx, dy) || 1;
-    const facing = Math.abs((-dy / len) * light.x + (dx / len) * light.z);
-    colourOf(i, z0).multiplyScalar(0.62 + 0.38 * facing);
-    col.set([c.r, c.g, c.b, c.r, c.g, c.b], j * 6);
+    colourOf(i, z0).multiplyScalar(0.62 + 0.38 * Math.abs((-dy / len) * light.x + (dx / len) * light.z));
+    col[q] = col[q + 3] = c.r; col[q + 1] = col[q + 4] = c.g; col[q + 2] = col[q + 5] = c.b;
   }
   const g = new LineSegmentsGeometry();
   g.setPositions(pos); g.setColors(col);
-  if (lines) { scene.remove(lines); lines.geometry.dispose(); }
-  lines = new LineSegments2(g, mat);
-  scene.add(lines);
+  return new LineSegments2(g, mat);
+}
+function swap(old, now) { if (old) { scene.remove(old); old.geometry.dispose(); } scene.add(now); return now; }
+// the outside of every layer (rebuilt when you hide a line type or change the colours)
+function rebuild() {
+  const pick = new Uint32Array(N); let n = 0;
+  shellStart = new Uint32Array(L + 1);
+  for (let i = 0, k = 0; i < N; i++) {
+    while (k < layerOf[i]) shellStart[++k] = n;
+    if (SHELL.has(featOf[i]) && !hidden.has(featOf[i])) pick[n++] = i;
+  }
+  for (let k = 1; k <= L; k++) if (!shellStart[k] && k > layerOf[N - 1]) shellStart[k] = n;
+  shell = swap(shell, makeLines(pick, n));
+  topFor = -1;
   applyRange();
+}
+// everything of one layer, in print order
+function buildTop(top) {
+  const pick = [];
+  for (let i = 0; i < N; i++) if (layerOf[i] === top && !hidden.has(featOf[i])) pick.push(i);
+  topIdx = Uint32Array.from(pick);
+  topLines = swap(topLines, makeLines(topIdx, topIdx.length));
+  topFor = top;
 }
 
 // --- sliders ------------------------------------------------------------------------------------------------------------
 const lay = $('#layer'), mv = $('#move');
 lay.max = L; lay.value = L;
 let playing = null;
-function applyRange() {
+let applyRange = function () {
   const top = +lay.value - 1;
-  if ((single ? top : 'all') !== builtFor) return rebuild();  // "only this layer" moved to another layer
-  const inLayer = layerStart[top + 1] - layerStart[top];
-  const f = +mv.value / 1000, end = layerStart[top] + Math.round(inLayer * f);
-  lines.geometry.instanceCount = end;  // everything up to here, in print order
+  if (top !== topFor) buildTop(top);
+  shell.geometry.instanceCount = single ? 0 : shellStart[top];  // the outside of every layer below this one
+  const inLayer = topIdx.length, f = +mv.value / 1000, end = Math.round(inLayer * f);
+  topLines.geometry.instanceCount = end;  // this layer, up to here in print order
   const L0 = layers[top] || {z: 0, h: 0};
   $('#layer-l').textContent = `${top + 1} / ${L} · Z ${(+L0.z).toFixed(2)} · ${(+L0.h).toFixed(2)} mm`;
-  $('#move-l').textContent = f >= 1 ? 'whole layer' : `${Math.round(inLayer * f)} / ${inLayer} moves`;
+  $('#move-l').textContent = f >= 1 ? 'whole layer' : `${end} / ${inLayer} moves`;
   // the nozzle sits at the end of the last line drawn while scrubbing
   nozzle.visible = f < 1 && end > 0;
-  if (nozzle.visible) { const o = idx[end - 1] * 6; nozzle.position.set(ints[o + 3] / S, ints[o + 5] / S, -ints[o + 4] / S); }
-}
+  if (nozzle.visible) { const o = topIdx[end - 1] * 6; nozzle.position.set(ints[o + 3] / S, ints[o + 5] / S, -ints[o + 4] / S); }
+};
 lay.oninput = () => { mv.value = 1000; applyRange(); };
 mv.oninput = applyRange;
 $('#lprev').onclick = () => { lay.value = Math.max(1, +lay.value - 1); mv.value = 1000; applyRange(); };
@@ -293,7 +307,34 @@ function resize() {
 addEventListener('resize', resize); resize();
 drawLegend(); rebuild();
 $('#msg').remove();
-renderer.setAnimationLoop(() => { controls.update(); renderer.render(scene, camera); });
+// Draw only when something changed (you turn it, zoom, move a slider): drawing ~a million lines 60 times a second,
+// even when nothing moved, slowed the whole app down. Nothing at all while the page is hidden.
+// #fps=1 in the address: frames per second while moving, in the corner (for testing)
+const FPS = h.get('fps') ? (() => { const el = Object.assign(document.createElement('div'), {style:
+  'position:fixed;left:50%;top:90px;z-index:999;font:700 26px system-ui;color:#ffc20e;background:#000a;padding:4px 10px'}); document.body.append(el);
+  let n = 0, t = performance.now();
+  return {tick() { n++; const now = performance.now(); if (now - t > 500) { el.textContent = Math.round(n * 1000 / (now - t)) + ' fps'; n = 0; t = now; } }};
+})() : null;
+let queued = false;
+function draw() {
+  if (queued || document.hidden) return;
+  queued = true;
+  requestAnimationFrame(() => {
+    queued = false;
+    const moving = controls.update();  // true while it's still gliding after you let go
+    renderer.render(scene, camera);
+    if (FPS) FPS.tick();
+    if (moving) draw();
+  });
+}
+controls.addEventListener('change', draw);
+for (const el of [lay, mv]) el.addEventListener('input', draw);
+document.addEventListener('click', () => setTimeout(draw, 0));  // legend, layer buttons, modes
+addEventListener('resize', draw);
+document.addEventListener('visibilitychange', draw);
+const _apply = applyRange;  // the move player and every slider change go through here
+applyRange = (...a) => { const r = _apply(...a); draw(); return r; };
+draw();
 </script>
 </body>
 </html>

@@ -31,7 +31,7 @@ def parse(gcode: Path, every: int = 1) -> dict:
     layers: list[dict] = []
     names = list(ORDER)
     cur, w, h, li = names.index("Custom"), 0.42, 0.2, -1
-    num = re.compile(r"([XYZEF])(-?[\d.]+)")
+    num = re.compile(r"([XYZEFIJ])(-?[\d.]+)")
     n, started = 0, False
     for line in gcode.read_text(errors="replace").splitlines():
         if not line:
@@ -76,12 +76,60 @@ def parse(gcode: Path, every: int = 1) -> dict:
             if extruding and started and (nx != x or ny != y):
                 n += 1
                 if n % every == 0:
-                    segs.append((x, y, z, nx, ny, nz))
-                    feat.append(cur)
-                    layer.append(max(0, li))
-                    width.append(w)
+                    pts = _arc(x, y, z, nx, ny, nz, v, code[1] == "2") if code[:2] in ("G2", "G3") else \
+                        [(x, y, z), (nx, ny, nz)]
+                    for a, b in zip(pts, pts[1:]):  # an arc as the curve it is, not one straight chord
+                        segs.append((*a, *b))
+                        feat.append(cur)
+                        layer.append(max(0, li))
+                        width.append(w)
             x, y, z = nx, ny, nz
     return {"segs": segs, "feat": feat, "layer": layer, "width": width, "layers": layers, "features": names}
+
+
+def _arc(x, y, z, nx, ny, nz, v: dict, cw: bool, tol: float = 0.01) -> list[tuple]:
+    """G2 (clockwise) / G3 arc from (x, y) to (nx, ny) around (x + I, y + J), as points close enough to the curve
+    that you can't tell (at most `tol` mm off it). OrcaSlicer writes most curves as arcs: drawn as one straight
+    line each, a round model came out faceted."""
+    import math
+
+    cx, cy = x + float(v.get("I", 0)), y + float(v.get("J", 0))
+    r = math.hypot(x - cx, y - cy)
+    if r < 1e-6:
+        return [(x, y, z), (nx, ny, nz)]
+    a0, a1 = math.atan2(y - cy, x - cx), math.atan2(ny - cy, nx - cx)
+    sweep = a1 - a0
+    if cw and sweep >= 0:
+        sweep -= 2 * math.pi
+    elif not cw and sweep <= 0:
+        sweep += 2 * math.pi
+    step = 2 * math.acos(max(-1.0, 1 - tol / r)) if r > tol else math.pi / 4
+    k = max(1, min(64, math.ceil(abs(sweep) / max(step, 1e-3))))
+    pts = [(cx + r * math.cos(a0 + sweep * i / k), cy + r * math.sin(a0 + sweep * i / k), z + (nz - z) * i / k)
+           for i in range(k)]
+    return pts + [(nx, ny, nz)]
+
+
+def _merge(p: dict) -> dict:
+    """Join consecutive lines that carry straight on (same feature, layer and width, no bend): fewer to send and
+    draw, nothing you could see lost."""
+    segs, feat, layer, width = p["segs"], p["feat"], p["layer"], p["width"]
+    out_s, out_f, out_l, out_w = [], [], [], []
+    for i, sg in enumerate(segs):
+        if out_s:
+            a = out_s[-1]
+            if feat[i] == out_f[-1] and layer[i] == out_l[-1] and width[i] == out_w[-1] and \
+                    a[3:] == sg[:3] and a[2] == sg[5]:
+                dx0, dy0, dx1, dy1 = a[3] - a[0], a[4] - a[1], sg[3] - sg[0], sg[4] - sg[1]
+                cross, dot = dx0 * dy1 - dy0 * dx1, dx0 * dx1 + dy0 * dy1
+                if dot > 0 and abs(cross) <= 0.002 * (dx0 * dx0 + dy0 * dy0) ** 0.5 * (dx1 * dx1 + dy1 * dy1) ** 0.5:
+                    out_s[-1] = (*a[:3], *sg[3:])  # straight on: one longer line
+                    continue
+        out_s.append(sg)
+        out_f.append(feat[i])
+        out_l.append(layer[i])
+        out_w.append(width[i])
+    return {**p, "segs": out_s, "feat": out_f, "layer": out_l, "width": out_w}
 
 
 def paths(gcode: Path, every: int = 1):
@@ -147,18 +195,27 @@ def render(gcode: Path, out: Path, title: str = "", bands: list[tuple[float, int
 
 
 def export(gcode: Path, out: Path, title: str = "", bands: list[tuple[float, int]] | None = None,
-           limit: int = 400000) -> Path:
+           limit: int = 1200000) -> Path:
     """Everything the interactive view needs, compact: per line int16 x,y,z * 20 (0.05 mm), uint8 feature, uint16
     layer, uint8 width * 100; per layer z and height; and how much of each feature there is (mm of line)."""
     import base64
 
     import numpy as np
 
-    p = parse(gcode)
+    p = _merge(parse(gcode))
     n = len(p["segs"])
-    if n > limit:  # very big prints: thin evenly, keeping every layer
-        keep = slice(None, None, n // limit + 1)
-        p = {**p, **{k: p[k][keep] for k in ("segs", "feat", "layer", "width")}}
+    if n > limit:  # a huge print: thin only the infill hidden inside; walls and surfaces you see stay complete
+        inside = {i for i, nm in enumerate(p["features"]) if nm in ("Sparse infill", "Internal solid infill")}
+        n_in = sum(1 for f in p["feat"] if f in inside)
+        every = max(2, -(-n_in // max(1, limit - (n - n_in))))
+        keep, k = [], 0
+        for i, f in enumerate(p["feat"]):
+            if f in inside:
+                k += 1
+                if k % every:
+                    continue
+            keep.append(i)
+        p = {**p, **{key: [p[key][i] for i in keep] for key in ("segs", "feat", "layer", "width")}}
     a = np.array(p["segs"], dtype=float).reshape(-1, 6)
     pos = np.round(a.reshape(-1, 3) * 20).astype("<i2")
     feat = np.array(p["feat"], dtype="u1")
