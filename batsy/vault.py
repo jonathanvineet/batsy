@@ -302,17 +302,32 @@ def open_note(p: Path | None = None) -> bool:
 
 
 # --- Git: history and the sync to the phone ------------------------------------------------------------------------
+# Use the GitHub login saved in the keyring, but never change it: a failed pull/push (the repo doesn't exist yet)
+# makes git's normal helper DELETE the saved token, so every git push on the laptop asked for it again.
+READ_ONLY_LOGIN = ["-c", "credential.helper=", "-c", "credential.helper=!f() { test \"$1\" = get && "
+                   "exec /usr/libexec/git-core/git-credential-libsecret get; }; f"]
+REMOTE = {"pull", "push", "fetch", "ls-remote"}
+
+
 def git(*args, timeout: float = 60) -> tuple[int, str]:
+    env = {k: v for k, v in os.environ.items() if k != "SSH_ASKPASS"}  # (git used it to pop up a GitHub login)
+    env.update(GIT_TERMINAL_PROMPT="0", GIT_ASKPASS="true")  # never ask: no login saved = fail quietly
+    pre = READ_ONLY_LOGIN if args and args[0] in REMOTE else []
     try:
-        r = subprocess.run(["git", "-C", str(ROOT), *args], capture_output=True, text=True, timeout=timeout,
-                           env={**os.environ, "GIT_TERMINAL_PROMPT": "0"})
+        r = subprocess.run(["git", "-C", str(ROOT), *pre, *args], capture_output=True, text=True, timeout=timeout,
+                           env=env)
         return r.returncode, (r.stdout + r.stderr).strip()
     except (OSError, subprocess.TimeoutExpired) as e:
         return 1, str(e)
 
 
-def sync(push: bool = True) -> str:
-    """Commit what changed; pull the phone's edits (rebase); push. Returns a short sentence."""
+_remote_off_until = 0.0  # GitHub said no (no repo yet / no login): stop asking it every 10 minutes
+
+
+def sync(push: bool = True, force: bool = False) -> str:
+    """Commit what changed; pull the phone's edits (rebase); push. Returns a short sentence. While GitHub keeps
+    saying no, only every 6 hours (or when you say "sync my brain": force)."""
+    global _remote_off_until
     flush()
     with _lock:
         if not (ROOT / ".git").exists():
@@ -329,18 +344,30 @@ def sync(push: bool = True) -> str:
             git("commit", "-q", "-m", f"Batsy: {n} note{'s' if n != 1 else ''} {dt.datetime.now():%Y-%m-%d %H:%M}")
         if not (push and remote):
             return "Saved the brain's history." if changed else "Nothing new to save."
-        code, out = git("pull", "--rebase", "--autostash", "-q", "origin", "main", timeout=120)
+        if not force and time.time() < _remote_off_until:
+            return "Saved here; GitHub isn't set up for the brain yet."
+        code, out = git("pull", "--rebase", "--autostash", "-q", "origin", "main", timeout=60)
         if code and "couldn't find remote ref" not in out:
-            if "repository not found" in out.lower() or "not found" in out.lower():
+            if _refused(out):
+                _remote_off_until = time.time() + 6 * 3600
                 return "The GitHub repo for the brain doesn't exist yet. Make a private repo called brain."
             git("rebase", "--abort")
             log.warning("vault pull failed: %s", out[-300:])
-        code, out = git("push", "-q", "-u", "origin", "main", timeout=120)
+        code, out = git("push", "-q", "-u", "origin", "main", timeout=60)
         if code:
             log.warning("vault push failed: %s", out[-300:])
+            if _refused(out):
+                _remote_off_until = time.time() + 6 * 3600
             return "Saved here, but I couldn't push it to GitHub." + (
                 " The repo doesn't exist yet: make a private repo called brain." if "not found" in out.lower() else "")
+        _remote_off_until = 0.0
         return "The brain is synced with GitHub."
+
+
+def _refused(out: str) -> bool:
+    o = out.lower()
+    return any(w in o for w in ("not found", "invalid username", "authentication failed", "could not read username",
+                                "terminal prompts disabled", "403", "401"))
 
 
 def _sync_loop() -> None:

@@ -46,6 +46,79 @@ def clear_request(text: str) -> bool:
     sentences = len([s for s in re.split(r"[.?!]+", text) if s.strip()])
     return len(real) >= 3 and len(real) >= 0.7 * len(words) and len(words) <= 25 and sentences <= 2
 
+BUDGET = DATA_DIR / "learn_budget.json"
+LEARNS_PER_DAY = 3  # background skill-learning runs (each is a Claude run): only for real repeats
+
+
+def repeated(norm: str, days: int = 7, need: int = 2) -> bool:
+    """Has this request (or one worded almost the same) come up at least `need` times lately? One-offs ("i don't
+    know", "the batsy folder") were being turned into skills after a single slow answer."""
+    since = time.time() - days * 86400
+    try:
+        db = sqlite3.connect(str(DB), timeout=2)
+        rows = [r[0] for r in db.execute("SELECT norm FROM requests WHERE t > ?", (since,))]
+        db.close()
+    except sqlite3.Error:
+        return False
+    same = sum(1 for r in rows if r == norm or difflib.SequenceMatcher(None, r, norm).ratio() >= 0.85)
+    return same >= need
+
+
+def spend_learn() -> bool:
+    """Take one of today's background learning runs; False when today's are used up."""
+    import json
+
+    day = time.strftime("%Y-%m-%d")
+    try:
+        b = json.loads(BUDGET.read_text())
+    except (OSError, ValueError):
+        b = {}
+    if b.get("day") != day:
+        b = {"day": day, "n": 0}
+    if b["n"] >= LEARNS_PER_DAY:
+        log.info("skill learning: today's %d runs are used up", LEARNS_PER_DAY)
+        return False
+    b["n"] += 1
+    BUDGET.write_text(json.dumps(b))
+    return True
+
+
+_FILL = {"uh", "um", "umm", "hmm", "mm", "mmm", "mmhmm", "mhm", "ah", "oh", "yeah", "okay", "ok", "like", "right", "just",
+         "huh"}
+_TRAIL = re.compile(r"(?:\b(?:mm+|mmhmm|mhm|hmm|uh|um|yeah|okay|ok|just|right|i'?m sorry|you know)\s*)+$")
+_ADDRESS = re.compile(
+    r"^(?:(?:hey|ok|okay|so|and|now|please|batsy|uh|um)\s+)*(?:what|whats|what's|who|whos|why|how|when|where|which|is|"
+    r"are|can|could|would|will|do|does|did|should|tell|show|open|close|play|pause|stop|start|turn|set|remind|remember|"
+    r"put|make|slice|print|send|find|search|check|give|take|read|call|add|go|skip|next|resume|volume|lights?|switch|"
+    r"ask|note|jot|let's|lets|i want|i need|help)\b")
+
+
+def chatter(norm: str) -> bool:
+    """Talk in the room the mic caught after a false "Batsy", not a request: "such a thank you mmhmm", "this fatal
+    life can die...". Half of what reached a model was this (each one 12-35 s of CPU and a confused reply). Only
+    used once instant commands and skills have had their go, and only for speech."""
+    w = norm.split()
+    if not w or norm in ("yes", "yeah", "yep", "no", "nope"):  # an answer, with no question pending
+        return True
+    if _ADDRESS.match(norm) and not _TRAIL.search(norm):
+        return False
+    if _TRAIL.search(norm) and not _ADDRESS.match(norm):
+        return True
+    return len(w) >= 4 and sum(x in _FILL for x in w) / len(w) > 0.25
+
+
+_STOP = {"what", "whats", "what's", "is", "are", "was", "the", "a", "an", "of", "in", "on", "to", "for", "me", "tell",
+         "about", "do", "does", "how", "who", "whos", "who's", "one", "sentence", "please", "and", "can", "you"}
+
+
+def _same_subject(a: str, b: str) -> bool:
+    """Worded differently, same question: "whats the capital of japan" / "what is the capital of japan". Not
+    "what is a resistor" / "what is a transistor" (nearly the same letters, a different thing)."""
+    def words(x):
+        return {w.rstrip("s") for w in x.replace("'", "").split() if w not in _STOP}
+    return words(a) == words(b)
+
+
 class Learner:
     def __init__(self):
         self.lock = threading.Lock()
@@ -57,14 +130,19 @@ class Learner:
             self.db.execute("CREATE TABLE IF NOT EXISTS answers (norm TEXT PRIMARY KEY, text TEXT, reply TEXT, t REAL, "
                             "hits INTEGER DEFAULT 0)")
             self.db.execute("CREATE TABLE IF NOT EXISTS automated (norm TEXT PRIMARY KEY, t REAL, outcome TEXT)")
+            cols = [r[1] for r in self.db.execute("PRAGMA table_info(requests)")]
+            if "first" not in cols:  # seconds until the first spoken word (what feels fast or slow)
+                self.db.execute("ALTER TABLE requests ADD COLUMN first REAL")
         self.last_answer: str | None = None  # norm of the last remembered/remembering answer, for "that's wrong"
 
     # --- the log ------------------------------------------------------------------------------------------------
-    def record(self, text: str, norm: str, route: str, secs: float, reply: str = "") -> None:
+    def record(self, text: str, norm: str, route: str, secs: float, reply: str = "", first: float | None = None) -> None:
         with self.lock, self.db:
-            self.db.execute("INSERT INTO requests VALUES (?,?,?,?,?,?)",
-                            (time.time(), text, norm, route, round(secs, 2), (reply or "")[:500]))
-        log.info("request %r -> %s in %.1fs", norm[:60], route, secs)
+            self.db.execute("INSERT INTO requests (t, text, norm, route, secs, reply, first) VALUES (?,?,?,?,?,?,?)",
+                            (time.time(), text, norm, route, round(secs, 2), (reply or "")[:500],
+                             None if first is None else round(first, 2)))
+        log.info("request %r -> %s in %.1fs%s", norm[:60], route, secs,
+                 "" if first is None else f" (first word {first:.1f}s)")
 
     # --- remembered answers -------------------------------------------------------------------------------------
     @staticmethod
@@ -78,7 +156,7 @@ class Learner:
             row = self.db.execute("SELECT norm, reply FROM answers WHERE norm = ?", (norm,)).fetchone()
             if row is None:  # same question, slightly different words: "whats the capital of japan"
                 keys = [r["norm"] for r in self.db.execute("SELECT norm FROM answers")]
-                close = difflib.get_close_matches(norm, keys, n=1, cutoff=0.92)
+                close = [k for k in difflib.get_close_matches(norm, keys, n=3, cutoff=0.92) if _same_subject(k, norm)]
                 row = self.db.execute("SELECT norm, reply FROM answers WHERE norm = ?", (close[0],)).fetchone() \
                     if close else None
             if row is None:
@@ -158,6 +236,8 @@ class Automator:
         self.recent = [t for t in getattr(self, "recent", []) if now - t < 3600]
         if len(self.recent) >= 6 or self.learner.cacheable(norm) or not clear_request(text):
             return
+        if not repeated(norm):  # once is a one-off; the second time it's worth making instant
+            return
         with self.learner.lock:
             if self.learner.db.execute("SELECT 1 FROM automated WHERE norm = ?", (norm,)).fetchone():
                 return
@@ -173,7 +253,7 @@ class Automator:
             from batsy import claude_code
 
             skills.reload()
-            if skills.match(norm) or claude_code.over_budget(self.app.cfg):
+            if skills.match(norm) or claude_code.over_budget(self.app.cfg) or not spend_learn():
                 return
             log.info("making %r instant", norm)
             out = skills.learn(text, lambda _q: False, execute=False)

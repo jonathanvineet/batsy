@@ -85,6 +85,23 @@ print(json.dumps({"cpu": round(100 * (1 - (i2 - i1) / max(1, t2 - t1)), 1), "cor
 '"""
 
 
+def _ai_speed() -> dict:
+    """How quick the local AI has been today: median seconds to the first word and to the end, and how many."""
+    import sqlite3
+    import statistics
+
+    try:
+        db = sqlite3.connect(str(DATA_DIR / "requests.db"), timeout=2)
+        rows = db.execute("SELECT secs, first FROM requests WHERE t > ? AND route IN ('quick', 'full')",
+                          (time.time() - 86400,)).fetchall()
+        db.close()
+    except Exception:
+        return {}
+    first = [f for _, f in rows if f is not None and f > 0.2]  # (not "One moment.", which is instant)
+    return {"answers_today": len(rows), "first_s": round(statistics.median(first), 1) if first else None,
+            "done_s": round(statistics.median([s for s, _ in rows]), 1) if rows else None}
+
+
 def token() -> str:
     if not TOKEN_FILE.exists():
         TOKEN_FILE.write_text(secrets.token_urlsafe(24))
@@ -243,6 +260,9 @@ class Hub:
         pc = self._pc_card()
         if pc is not None:
             out["machines"].append(pc)
+        box = self._ai_card()
+        if box is not None:
+            out["machines"].append(box)
         return out
 
     def _laptop(self) -> dict:
@@ -284,6 +304,45 @@ class Hub:
                 {"online": False}
         except (ValueError, IndexError):
             self.pc_stats = {"online": code == 0}
+
+    def _ai_card(self) -> dict | None:
+        """The HP that runs Batsy's local AI: its stats, whether it's serving, the model, and how fast answers are.
+        Refreshed in the background at most every 8 s (one SSH call + two small HTTP calls)."""
+        target = self.cfg.get("local.box_ssh")
+        if not target:
+            return None
+        if time.time() - getattr(self, "ai_checked", 0) > 8:
+            self.ai_checked = time.time()
+            threading.Thread(target=self._refresh_ai, daemon=True).start()
+        st = getattr(self, "ai_stats", None) or {"online": None}
+        return {"name": self.cfg.get("local.box_name"), "kind": "ai", **st}
+
+    def _refresh_ai(self) -> None:
+        import subprocess
+        import urllib.request
+
+        from batsy import llm_hosts
+
+        target = self.cfg.get("local.box_ssh")
+        try:
+            r = subprocess.run(["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=3", target, _pc_probe()],
+                               capture_output=True, text=True, timeout=8)
+            st = {"online": True, **json.loads(r.stdout.strip().splitlines()[-1])} if r.returncode == 0 else \
+                {"online": False}
+        except (subprocess.SubprocessError, ValueError, IndexError, OSError):
+            st = {"online": False}
+        host = (self.cfg.get("local.hosts") or [""])[0].rstrip("/")
+        ai = {"serving": llm_hosts.best(self.cfg) == host, "model": None, "loaded": False}
+        if st.get("online") and host:
+            try:
+                with urllib.request.urlopen(host + "/api/ps", timeout=2) as resp:
+                    models = json.loads(resp.read()).get("models", [])
+                ai["loaded"] = bool(models)
+                ai["model"] = models[0].get("name") if models else self.cfg.get("local.model")
+            except Exception:
+                ai["model"] = None  # the machine is up but its AI isn't
+        ai.update(_ai_speed())
+        self.ai_stats = {**st, "ai": ai}
 
     def _claude(self) -> dict:
         from batsy import claude_code

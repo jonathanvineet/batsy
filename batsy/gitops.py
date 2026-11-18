@@ -11,6 +11,7 @@ import logging
 import re
 import subprocess
 import threading
+import time
 from pathlib import Path
 
 from batsy.config import DATA_DIR
@@ -36,9 +37,27 @@ def _git(path: Path, *args, timeout: float = 60) -> tuple[int, str]:
     return r.returncode, (r.stdout + r.stderr).strip()
 
 
+# How speech-to-text mishears "batsy" ("commit and push the patchy folder"): the wake word's own variants and a
+# few more. Only for finding the folder, nothing else.
+BATSY = {"patchy", "batchy", "patsy", "bats", "bat see", "bats see", "betsy", "batsie", "bitsy", "batsi", "batty"}
+
+
+def _batsy(w: str) -> str:
+    try:
+        from batsy.config import Config
+
+        names = {x.lower() for x in Config.load().get("voice.wake_words") or []}
+    except Exception:
+        names = set()
+    w = re.sub(r"\s+", " ", w).strip()
+    return "batsy" if w in BATSY | names else w
+
+
 def find_repo(what: str | None) -> Path | None:
     """'batsy' / 'the robot project' / 'it' -> the git folder."""
-    w = re.sub(r"\b(?:the|my|our|folder|repo|repository|project|changes)\b", " ", (what or "")).strip()
+    w = re.sub(r"\b(?:the|my|our|folder|repo|repository|project|changes|in|it'?s|one|please|uh|um)\b", " ",
+               (what or "").lower().strip(" .!?"))
+    w = _batsy(re.sub(r"[^a-z0-9 -]", "", w).strip())
     if not w or w in ("it", "that", "this", "everything", "all"):
         return Path(_last["path"]) if _last.get("path") else None
     try:
@@ -63,6 +82,7 @@ def _named_in(n: str) -> str | None:
                  if c.get("path")]
     except (OSError, ValueError, KeyError):
         return None
+    n = re.sub(r"\b(?:" + "|".join(sorted(map(re.escape, BATSY), key=len, reverse=True)) + r")\b", "batsy", n)
     hits = [x for x in names if len(x) > 2 and re.search(rf"\b{re.escape(x.lower())}\b", n)]
     return max(hits, key=len) if hits else None
 
@@ -157,11 +177,54 @@ def undo(path: Path) -> str:
     return f"Undone: the changes are back in {path.name}, uncommitted." if code == 0 else f"I couldn't undo it: {out[-120:]}"
 
 
+# Batsy just asked "Which folder?": the next short reply is the answer ("the batsy folder"), not a new request
+# (it went to the local AI, which ran git in the wrong place).
+_asked = {"t": 0.0, "push": False, "undo": False, "tries": 0}
+
+
+def _ask(push: bool = False, undo_: bool = False, text: str = "Which folder? Say, for example, commit and push the "
+         "batsy folder.") -> str:
+    _asked.update(t=time.time(), push=push, undo=undo_, tries=_asked["tries"] + 1 if _asked["t"] else 1)
+    return text
+
+
+def _answer(app, n: str) -> str | None:
+    """The folder, in reply to "Which folder?". None if this isn't that."""
+    if time.time() - _asked["t"] > 90 or len(n.split()) > 8:
+        return None
+    if re.match(r"(?:never ?mind|cancel|stop|forget it|no)\b", n):
+        _asked["t"] = 0.0
+        return "Okay."
+    path = find_repo(n)
+    if path is None:
+        if _asked["tries"] >= 2:
+            _asked.update(t=0.0, tries=0)
+            return "I couldn't find that folder."
+        try:
+            from rapidfuzz import process
+
+            names = [c["name"] for c in json.loads((DATA_DIR / "projects_index.json").read_text())["candidates"]
+                     if c.get("path") and (Path(c["path"]) / ".git").exists()]
+            near = [x[0] for x in process.extract(n, names, limit=2)]
+        except Exception:
+            near = []
+        return _ask(_asked["push"], _asked["undo"], f"Which one, {' or '.join(near)}?" if near else "Which folder?")
+    push, undo_ = _asked["push"], _asked["undo"]
+    _asked.update(t=0.0, tries=0)
+    if undo_:
+        return undo(path)
+    threading.Thread(target=run, args=(app, path, push), daemon=True, name="git").start()
+    return f"On it: {'committing and pushing' if push else 'committing'} {path.name}."
+
+
 def handle(app, n: str) -> str | None:
+    said = _answer(app, n)
+    if said:
+        return said
     m = UNDO.match(n)
     if m:
         path = find_repo(m.group("what") or "it")
-        return undo(path) if path else "Which folder?"
+        return undo(path) if path else _ask(undo_=True, text="Which folder?")
     m = COMMIT.match(n) or COMMIT_ALT.match(n)
     push = bool(m and (m.groupdict().get("push") or m.groupdict().get("push2") or " push" in n))
     what = m.group("what") if m else None
@@ -176,6 +239,6 @@ def handle(app, n: str) -> str | None:
             return None
     path = find_repo(what)
     if path is None:
-        return "Which folder? Say, for example, commit and push the batsy folder."
+        return _ask(push)
     threading.Thread(target=run, args=(app, path, push), daemon=True, name="git").start()
     return f"On it: {'committing and pushing' if push else 'committing'} {path.name}."

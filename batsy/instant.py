@@ -826,7 +826,8 @@ def _condense_fact(app, fid: str, what: str, dest: str | None = None) -> None:
             "Jonathan dictated this note to his assistant Batsy (speech-to-text, rambling, with false starts):\n"
             f"\"{what}\"\n\nRewrite it as one or two short, clear sentences stating the facts themselves (not that he asked "
             "to remember them), in third person (\"Jonathan ...\"), keeping every name, number and detail, with units "
-            "written normally (\"100 x 60 x 10 mm\"). In his note, \"you\" means Batsy. Reply with the text only.", 120)
+            "written normally (\"100 x 60 x 10 mm\"). In his note, \"you\" means Batsy. Reply with the text only.", 120,
+            background=True)
         clean = out.strip().strip('"').split("\n")[0].strip()
         if 4 <= len(clean.split()) <= 45:
             st = get_store()

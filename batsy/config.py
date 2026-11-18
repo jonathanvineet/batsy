@@ -21,7 +21,10 @@ DEFAULTS = {
     # "local" = free model on this laptop via Ollama (default); "claude" = Claude API (needs an API key)
     "brain": {"engine": "local"},
     "local": {
-        "url": "http://127.0.0.1:11434",
+        "url": "http://127.0.0.1:11434",   # this laptop: the fallback
+        "hosts": ["http://10.10.10.4:11434"],  # tried first: the HP on the cable, model always loaded (llm_hosts.py)
+        "box_ssh": "jonathan@10.10.10.4",      # the HP over SSH, for its stats on the phone ("" to hide the card)
+        "box_name": "HP · AI",
         "model": "qwen2.5:3b",     # fast on 8 GB RAM; "llama3.2:3b" or "qwen2.5:1.5b" (faster, simpler) also work
         "keep_alive": "15m",       # loaded for quick replies, then out of memory (it holds 2.6 GB of the 8)
         "context": 4096,
@@ -33,6 +36,7 @@ DEFAULTS = {
     },
     "claude": {
         "model": "claude-opus-5-5",
+        "light_model": "sonnet",       # background jobs and plain questions (skills, tagging, "ask Claude what...")
         # low = fewest thinking tokens and fastest replies; "medium"/"high" for heavy coding sessions
         "effort": "low",
         "max_tokens": 32000,

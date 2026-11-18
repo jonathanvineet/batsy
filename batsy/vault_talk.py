@@ -88,7 +88,7 @@ def handle(app, n: str, raw: str = "") -> str | None:
 
     if SYNC.match(n):
         def go():
-            app.announce(vault.sync())
+            app.announce(vault.sync(force=True))  # you asked: try GitHub now
         threading.Thread(target=go, daemon=True, name="vault-sync-now").start()
         return "Syncing your brain."
 

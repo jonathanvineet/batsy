@@ -532,18 +532,26 @@ function drawMachines(ms) {
   pc = ms.find(m => m.kind === 'pc') || null;
   $('#t-pc-s').textContent = pc ? (pc.online ? 'on' : pc.online === false ? 'off' : '…') : 'not set up';
   $('#t-pc').classList.toggle('on', !!(pc && pc.online));
+  const box = ms.find(m => m.kind === 'ai');
+  const aiHere = box && !(box.online && box.ai && box.ai.serving);  // the HP is off: the laptop runs the AI
+  $('#machines-w').dataset.n = ms.length;  // three machines: side by side in landscape
   $('#machines-w').innerHTML = ms.map(m => {
     const dot = m.online === true ? 'on' : m.online === false ? 'off' : '';
     if (!m.online) return `<div class="m"><h4><i class="${dot}"></i>${esc(m.name)}</h4>
-      <p class="off-note">${m.online === false ? 'Off or asleep' : 'Checking…'}</p>${m.kind === 'pc' ? '<button class="act" data-pc="wake">Wake up</button>' : ''}</div>`;
-    return `<div class="m"><h4><i class="on"></i>${esc(m.name)}</h4>
+      <p class="off-note">${m.online === false ? (m.kind === 'ai' ? 'Off · the laptop runs the AI' : 'Off or asleep') : 'Checking…'}</p>${m.kind === 'pc' ? '<button class="act" data-pc="wake">Wake up</button>' : ''}</div>`;
+    return `<div class="m"><h4><i class="on"></i>${esc(m.name)}</h4>${m.kind === 'ai' ? aiLine(m.ai || {}) : ''}
       ${gauge('CPU', Math.round(m.cpu || 0) + '%', m.cpu, level(m.cpu, 70, 90))}
       ${gauge('Temp', (m.temp ?? '–') + '°', m.temp, level(m.temp || 0, 80, 92))}
       ${gauge('Memory', m.ram_used_gb != null ? `${m.ram_used_gb}/${m.ram_total_gb} GB` : Math.round(m.ram) + '%', m.ram, level(m.ram, 75, 90))}
       ${gauge('Disk', m.disk_free_gb + ' GB free', m.disk, level(m.disk, 80, 92))}
-      ${m.kind === 'pc' ? '<button class="act" data-pc="menu">Controls</button>'
-        : m.battery != null ? `<small>Battery ${m.battery}%${m.charging ? ', charging' : ''}</small>` : ''}</div>`;
+      ${m.kind === 'ai' ? '' : m.kind === 'pc' ? '<button class="act" data-pc="menu">Controls</button>'
+        : `${m.battery != null ? `<small>Battery ${m.battery}%${m.charging ? ', charging' : ''}</small>` : ''}${aiHere ? '<span class="ai-badge here">🧠 Running the AI</span>' : ''}`}</div>`;
   }).join('');
+}
+function aiLine(a) {  // the HP's own job: Batsy's local AI (under its name, clear of the mic button)
+  if (!a.serving) return `<span class="ai-badge off">🧠 AI on standby</span>`;
+  const speed = a.first_s != null ? ` · speaks in ${a.first_s}s` : '';
+  return `<span class="ai-badge">🧠 ${esc((a.model || 'AI').split(':')[0])}${a.loaded ? '' : ' (loading)'}${speed}</span>`;
 }
 function openPc() {
   const on = pc && pc.online;
@@ -1119,7 +1127,7 @@ async function keepFile(key, blob) {
 // --- iPhone dashboard: long-press a widget to move, hide and add widgets (saved on this phone) -------------------
 const WIDGETS = [  // key, element, name; this order is the default
   ['printer', '#pw', '3D printer'], ['slice', '#sw', 'Sliced'], ['home', '.home-w', 'Home'], ['brain', '#brain-w', 'Brain'],
-  ['drive', '#cloud-w', 'Batman drive'], ['files', '.files-w', 'Received files'], ['computers', '#machines-w', 'Laptop & PC'],
+  ['drive', '#cloud-w', 'Batman drive'], ['files', '.files-w', 'Received files'], ['computers', '#machines-w', 'Laptop, PC & HP'],
   ['music', '#mw', 'Music'], ['claude', '.claude-w', 'Claude usage'], ['batsy', '#batsy-w', 'Batsy']];
 const wEl = k => $(WIDGETS.find(w => w[0] === k)[1]);
 let layout = store.get('dashLayout', null);

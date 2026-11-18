@@ -157,6 +157,10 @@ def who(cfg) -> dict:
     return {"user": name, "about": cfg.get("user.about") or "a developer", "github": gh}
 
 
+QUESTION_ONLY = re.compile(r"^(?:(?:hey|ok|so|batsy|claude|ask claude|please)[ ,]+)*(?:what|whats|what's|who|why|how|"
+                           r"when|where|which|is|are|does|do|can|should|explain|tell me|compare|difference)\b")
+
+
 def is_complex(text: str) -> bool:
     return bool(COMPLEX.search(text.lower())) or len(text.split()) > 22
 
@@ -196,7 +200,6 @@ class LocalBrain:
         self.memory = get_store()
         self.lock = threading.Lock()
         self.visual: Callable[[str, str], None] | None = None
-        self.url = cfg.get("local.url").rstrip("/") + "/api/chat"
         self.model = cfg.get("local.model")
         self.system = SYSTEM.format(**who(cfg))
         self.tools = [
@@ -236,7 +239,9 @@ class LocalBrain:
     def loaded(self) -> bool:
         """Is the model in memory right now? (It's unloaded after a quiet spell, to free 2.6 GB.)"""
         try:
-            url = self.cfg.get("local.url").rstrip("/") + "/api/ps"
+            from batsy import llm_hosts
+
+            url = llm_hosts.best(self.cfg) + "/api/ps"
             with urllib.request.urlopen(url, timeout=2) as r:
                 return any(m.get("name", "").startswith(self.model) or m.get("model", "").startswith(self.model)
                            for m in json.loads(r.read()).get("models", []))
@@ -244,22 +249,42 @@ class LocalBrain:
             return True  # can't tell: don't hold anything up
 
     def warm_soon(self) -> None:
-        """You said "Batsy" (or pressed the mic): start loading the model now, while your words are transcribed."""
-        if getattr(self, "_warming", False) or self.loaded():
+        """You said "Batsy" (or pressed the mic): get the model ready while your words are transcribed.
+        On the HP: read the quick prompt (and the conversation so far) ahead of time, so only your new words are
+        left to read; the HP keeps a cache slot for each kind of prompt. On this laptop: just load the model if
+        it's out (pre-reading here would fight speech recognition for the same two cores)."""
+        from batsy import llm_hosts
+
+        if getattr(self, "_warming", False) or self.lock.locked():
+            return
+        here = llm_hosts.local(self.cfg)
+        if here and self.loaded():
             return
         self._warming = True
 
         def go():
             try:
-                self._warm_up()
+                with llm_hosts.live():  # a question is coming: background jobs make room now
+                    self._pre_read(here)
+            except Exception as e:
+                log.info("pre-reading the prompt failed: %s", e)
             finally:
                 self._warming = False
         threading.Thread(target=go, daemon=True, name="warm-soon").start()
 
+    def _pre_read(self, here: bool) -> None:
+        if here:
+            self._warm_up()
+            return
+        body = {"model": self.model, "stream": False, "keep_alive": self.cfg.get("local.keep_alive"),
+                "messages": self._quick_messages(""), "options": {**self._options(), "num_predict": 1}}
+        self._post(body).read()
+
     def _post(self, body: dict):
-        req = urllib.request.Request(self.url, data=json.dumps(body).encode(),
-                                     headers={"Content-Type": "application/json"})
-        return urllib.request.urlopen(req, timeout=300)
+        """To the HP if it's up, else this laptop (llm_hosts)."""
+        from batsy import llm_hosts
+
+        return llm_hosts.open_chat(self.cfg, body)
 
     def _stream(self, messages: list[dict], chunker: SpeechChunker, abort: threading.Event):
         body = {"model": self.model, "stream": True, "keep_alive": self.cfg.get("local.keep_alive"),
@@ -284,6 +309,11 @@ class LocalBrain:
                 calls += msg.get("tool_calls") or []
                 if part.get("done"):
                     stats = part
+        if not stats:  # the stream stopped without finishing: the HP went away mid-answer
+            from batsy import llm_hosts
+
+            llm_hosts.failed(self.cfg)
+            raise urllib.error.URLError("the local model stopped mid-answer")
         self._log_usage(stats)
         if not calls:
             calls = self._calls_in_text(content)
@@ -292,16 +322,28 @@ class LocalBrain:
     def status(self, text: str) -> None:
         """What Batsy is doing right now, for the overlay ("Asking Claude"...). Replaced by the voice app."""
 
-    def _quick(self, text: str, emit, on_marker, abort: threading.Event) -> bool:
+    def _quick_messages(self, text: str) -> list[dict]:
+        """The quick prompt, same-first-changing-last so the model's cache covers all but the new words: the fixed
+        system prompt, then the last exchange (unchanged until a new one happens), then what you just said."""
+        recent = self._recent_block()
+        return [{"role": "system", "content": QUICK_SYSTEM.format(**who(self.cfg))},
+                {"role": "user", "content": (f"{recent}\n\n" if recent else "") + text}]
+
+    def _recent_block(self) -> str:
+        """Only the last exchange (no matched facts: those change with every request and would spoil the cache)."""
+        ctx = self.memory.build_context("", self.cfg, recent=1, related=0)
+        i = ctx.find("[Recent conversation")
+        return ctx[i:][-500:] if i >= 0 else ""
+
+    def _quick(self, text: str, emit, on_marker, abort: threading.Event, retry: bool = True) -> bool:
         """Fast answer with a tiny prompt and no tools, spoken as it streams. False = the small model passed
         (replied PASS: it needs the full path), and nothing was said."""
+        from batsy import llm_hosts
+
         self.status("Thinking with the local model")
-        recent = self.memory.build_context(text, self.cfg, recent=1, related=0)[-400:]
-        messages = [{"role": "system", "content": QUICK_SYSTEM.format(**who(self.cfg))},
-                    {"role": "user", "content": (f"{recent}\n\n" if recent else "") + text}]
         body = {"model": self.model, "stream": True, "keep_alive": self.cfg.get("local.keep_alive"),
-                "messages": messages, "options": {**self._options(), "num_predict": 80}}
-        chunker, content, started = SpeechChunker(emit, on_marker), "", False
+                "messages": self._quick_messages(text), "options": {**self._options(), "num_predict": 80}}
+        chunker, content, started, done = SpeechChunker(emit, on_marker), "", False, False
         try:
             with self._post(body) as resp:
                 for line in resp:
@@ -321,10 +363,21 @@ class LocalBrain:
                     else:
                         chunker.feed(part.get("message", {}).get("content", ""))
                     if part.get("done"):
+                        done = True
                         self._log_usage(part)
-        except (urllib.error.URLError, ValueError) as e:
+                        if part.get("done_reason") == "length" and chunker.buf.strip() and \
+                                not chunker.buf.rstrip().endswith((".", "!", "?")) and not chunker.first:
+                            chunker.buf = ""  # it ran out of words mid-sentence: don't say half a sentence
+        except (urllib.error.URLError, ValueError, OSError) as e:
             log.warning("quick answer failed: %s", e)
-            return False
+        if not done and not abort.is_set():  # the HP went away mid-answer (the stream just stops, no error)
+            log.warning("the local model stopped mid-answer")
+            llm_hosts.failed(self.cfg)
+            if not started:
+                return False  # nothing said yet: the full path asks again (on this laptop if the HP is gone)
+            if retry:
+                emit("Hang on.")
+                return self._quick(text, emit, on_marker, abort, retry=False)
         if not started:
             return False
         chunker.flush()
@@ -362,7 +415,9 @@ class LocalBrain:
         self.memory.add_exchange("alert", "", text, [])
 
     def ask(self, text: str, source: str, say, abort: threading.Event, on_tool=None) -> str:
-        with self.lock:
+        from batsy import llm_hosts
+
+        with self.lock, llm_hosts.live():  # background jobs on the model step aside until this is answered
             return self._ask(text, source, say, abort, on_tool)
 
     def _ask(self, text, source, say, abort, on_tool) -> str:
@@ -395,6 +450,15 @@ class LocalBrain:
             self._claude(request, context, emit, on_marker, on_tool, actions,
                          force=bool(re.search(r"\banyway\b", text, re.I)))  # "anyway" ignores Batsy's budget
             return self._finish(source, text, spoken, actions, abort)
+
+        from batsy.learner import chatter
+
+        spoken_in = source == "voice" and getattr(getattr(self, "app", None), "_turn_source", "voice") == "voice"
+        if spoken_in and chatter(norm(text)):  # overheard, not asked (typed text never is): no model, no reply
+            self.route = "ignored"
+            log.info("sounds like talk in the room, not a request: %r", text[:80])
+            self.status("Didn't catch a request")
+            return self._finish(source, text, spoken, ["ignored: room talk"], abort)
 
         if self.claude_ok and re.search(r"\bscreen ?saver\b", text.lower()):
             emit("Let me redesign that.")
@@ -502,10 +566,17 @@ class LocalBrain:
             self.status("Thinking with the local model")
             try:
                 result = self._stream(messages, chunker, abort)
-            except urllib.error.URLError as e:
-                emit("My local brain isn't running. Start it with: systemctl start ollama.")
-                log.error("ollama: %s", e)
-                break
+            except (urllib.error.URLError, OSError) as e:
+                from batsy import llm_hosts
+
+                log.warning("local model failed (%s): trying again on %s", e, llm_hosts.best(self.cfg))
+                try:  # the HP dropped out: once more, on whichever host is up now
+                    chunker = SpeechChunker(emit, on_marker)
+                    result = self._stream(messages, chunker, abort)
+                except (urllib.error.URLError, OSError) as e2:
+                    emit("My local brain isn't running. Start it with: systemctl start ollama.")
+                    log.error("ollama: %s", e2)
+                    break
             if result is None:
                 break
             chunker.flush()
@@ -554,6 +625,10 @@ class LocalBrain:
         if not (self.claude_ok and self.skills and did) or any("ERROR" in a for a in did):
             return
         if self.skills.match(norm(text)):
+            return
+        from batsy.learner import repeated, spend_learn
+
+        if not repeated(norm(text)) or not spend_learn():  # a repeat, within today's few learning runs
             return
         threading.Thread(target=self.skills.learn, args=(text, self.registry.ctx.confirm),
                          kwargs={"execute": False, "happened": "\n".join(did)}, daemon=True,
@@ -779,6 +854,12 @@ def ask_claude(prompt: str, context: str = "", timeout: int = 900, force: bool =
     full = CLAUDE_BRIEF.format(workspace=WORKSPACE, context=context, request=prompt, home=home,
                                code=Path(__file__).resolve().parent.parent, user=me["user"], about=me["about"],
                                github=github)
+    cfg = claude_code.CFG or Config.load()
+    light = cfg.get("claude.light_model")
+    # a plain question ("what's the difference between PLA and PETG") doesn't need the biggest model; code,
+    # git, files and real work do
+    quick = light and QUESTION_ONLY.match(prompt.lower().strip()) and not is_code_work(prompt) and \
+        not re.search(r"\b(?:code|repo|git|file|folder|fix|change|edit|install|run|build|deploy)\b", prompt.lower())
     return claude_code.run(full, "ask: " + prompt[:40], cwd=home, timeout=timeout, force=force, on_text=on_text, args=[
-        "--permission-mode", "acceptEdits", "--add-dir", "/",
+        *(["--model", light] if quick else []), "--permission-mode", "acceptEdits", "--add-dir", "/",
         "--allowedTools", "Read,Write,Edit,MultiEdit,Glob,Grep,Bash,WebSearch,WebFetch,TodoWrite"])

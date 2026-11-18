@@ -754,11 +754,19 @@ class Batsy:
 
         n, t0 = _norm(text), time.time()
         self.last_turn = t0
+        first: list[float] = []
+        say_ = say
+
+        def say(sentence: str) -> None:  # noqa: F811 - the same, noting when the first word went out
+            if not first:
+                first.append(time.time() - t0)
+            say_(sentence)
+
         known = self.learner.recall(n)  # asked before and answered by a model: instant
         if known:
             for sentence in re.split(r"(?<=[.!?])\s+", known):
                 say(sentence)
-            self.learner.record(text, n, "cache", time.time() - t0, known)
+            self.learner.record(text, n, "cache", time.time() - t0, known, first[0] if first else None)
             self.brain.memory.add_exchange(source, text, known, ["answered from memory"])
             from batsy import vault_capture
 
@@ -777,7 +785,7 @@ class Batsy:
                 self.confirm_handler = self._confirm_console
             route = getattr(self.brain, "route", "full")
             secs = time.time() - t0
-            self.learner.record(text, n, route, secs, reply)
+            self.learner.record(text, n, route, secs, reply, first[0] if first else None)
             if not abort.is_set():
                 from batsy import vault_capture
 

@@ -33,21 +33,24 @@ def _save(**kv) -> None:
     STATE.write_text(json.dumps({**_state(), **kv}))
 
 
-def local_model(prompt: str, max_tokens: int = 350, label: str = "Local AI") -> str:
-    """One answer from the local Ollama model (free, offline)."""
+def local_model(prompt: str, max_tokens: int = 350, label: str = "Local AI", background: bool = False) -> str:
+    """One answer from the local Ollama model (free, offline). background: nobody is waiting for it, so it waits
+    for Batsy to be quiet and steps aside if you start talking (llm_hosts.background_chat)."""
     from batsy import activity
 
     with activity.work(label, "local", "Thinking with the local AI"):
-        return _local_model(prompt, max_tokens)
+        return _local_model(prompt, max_tokens, background)
 
 
-def _local_model(prompt: str, max_tokens: int = 350) -> str:
+def _local_model(prompt: str, max_tokens: int = 350, background: bool = False) -> str:
+    from batsy import llm_hosts
+
     body = {"model": _cfg.get("local.model"), "stream": False, "keep_alive": _cfg.get("local.keep_alive"),
             "messages": [{"role": "user", "content": prompt}],
             "options": {"temperature": 0.3, "num_predict": max_tokens, "num_ctx": 4096}}
-    req = urllib.request.Request(_cfg.get("local.url").rstrip("/") + "/api/chat", data=json.dumps(body).encode(),
-                                 headers={"Content-Type": "application/json"})
-    with urllib.request.urlopen(req, timeout=300) as r:
+    if background:
+        return llm_hosts.background_chat(_cfg, body)
+    with llm_hosts.live(), llm_hosts.open_chat(_cfg, body) as r:
         return json.loads(r.read())["message"]["content"].strip()
 
 
@@ -76,7 +79,7 @@ def summarise(day: dt.date) -> bool:
         "Write a short summary in Markdown for his journal, in second person ('You…'):\n"
         "- 2 to 4 bullet points: what he actually did or achieved (be specific, use names of projects/files/prints)\n"
         "- then a line '**Open loops:**' followed by bullets for anything started but not finished, or planned "
-        "and not done (or 'none').\nUse only facts from the log. No intro, no headings.")
+        "and not done (or 'none').\nUse only facts from the log. No intro, no headings.", background=True)
     out = re.sub(r"^#+ .*\n", "", out).strip()
     vault.submit(lambda: vault.set_block(vault.daily(day), "summary", out, "Summary"))  # the model ran out here
     log.info("brain: summarised %s", day)
@@ -106,7 +109,7 @@ def weekly(day: dt.date) -> None:
     except Exception as e:
         log.info("weekly review by Claude failed (%s); using the local model", e)
     if not text or len(text) < 80:
-        text = local_model(ask, 700)
+        text = local_model(ask, 700, background=True)
     links = " · ".join(f"[[{vault.daily_name(d)}|{d:%a}]]" for d in days)
     vault.submit(vault.create, p, vault.frontmatter(type="weekly", week=name, start=days[0].isoformat(), end=day.isoformat(),
                                      tags=["weekly"]) + f"# Week {iso.week}, {iso.year}\n{links}\n\n{text.strip()}\n")

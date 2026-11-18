@@ -414,5 +414,7 @@ def claude_cli(prompt: str, timeout: int = 180) -> str:
     """Teaching call (Claude only writes text here)."""
     from batsy import claude_code
 
-    out = claude_code.run(prompt, "learning a new skill", cwd=WORKSPACE, timeout=timeout)
+    light = claude_code.CFG.get("claude.light_model") if claude_code.CFG else "sonnet"  # writing a small skill doesn't need the biggest model
+    out = claude_code.run(prompt, "learning a new skill", cwd=WORKSPACE, timeout=timeout,
+                          args=["--model", light] if light else None)
     return out if out.strip() else "ANSWER: Claude didn't answer."

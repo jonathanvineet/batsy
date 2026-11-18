@@ -675,3 +675,14 @@ body.dash .mpv-card iframe { height: 46vh; flex: none; width: 100%; }
 body.ptt .fab-said:not(:empty) { opacity: 1; transform: none; }
 body.editing .fab-mic, body.editing .fab-said { display: none; }  /* out of the way while arranging widgets */
 body:not(.dash) .fab-mic { bottom: max(52px, env(safe-area-inset-bottom)); } body:not(.dash) .fab-said { bottom: 64px; }  /* (the settings gear stays reachable in the corner) */
+
+/* the HP that runs Batsy's AI */
+.ai-badge { display: inline-block; margin-top: 6px; padding: 3px 9px; border-radius: 999px; font-size: 12px;
+  font-weight: 600; background: color-mix(in srgb, var(--signal) 18%, transparent); color: var(--signal); }
+.ai-badge.off { color: var(--muted); background: transparent; border: 1px solid var(--dim); }
+.ai-badge.here { color: var(--warn); background: color-mix(in srgb, var(--warn) 16%, transparent); }
+.m h4 + .ai-badge { margin: 2px 0 6px; }
+@media (orientation: landscape) {
+  .machines-w[data-n="3"] { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .machines-w[data-n="3"] .gauge b { font-size: .86em; }
+}

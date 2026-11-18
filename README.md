@@ -141,7 +141,7 @@ The overlay closes by itself a few seconds after the answer, or 30 seconds after
 - **New actions are learned once.** The first time you ask for something it doesn't know how to do, like "turn on dark mode", "connect my earbuds" or "set brightness to 40", Claude Code writes a small Python skill for it, covering the different ways you might say it. Batsy checks the code, runs it for you, and saves it ("Next time that'll be instant"). After that, any of those phrasings runs the saved code directly: no AI, no Pro usage.
 - **No duplicates.** Before writing anything new, Claude sees a short list of the skills you already have. If your request is just a new way of saying one of them ("I'd prefer the dark theme" for "turn on dark mode"), Batsy adds your phrase to that skill and runs it. Next time that phrase is instant too. Opposites like "turn *off* dark mode" are never merged.
 - **Writing code is never turned into a skill.** "Create a Python script that…", "build me a Flask API", "write unit tests for my parser" go to Claude Code as a coding job: it makes a folder under `~/Batsy/code/` (or works in the project you named), writes the code, runs it on a small example, fixes errors, then tells you the file name and how to run it and opens it in your editor.
-- **Things the local AI already did** (for example "what's my battery") are turned into skills in the background, so they're instant next time too.
+- **Things you ask again and again become skills in the background,** so they're instant next time. To keep this from wasting Claude runs on one-offs, a request has to come up **twice within 7 days** first, there are at most **3 background learning runs a day**, and Claude writes them with the lighter model (`[claude] light_model`, Sonnet). Before this, things like "I don't know" were being turned into skills after a single slow answer.
 - **Feedback teaches it.** Say "no, that's wrong" / "didn't work" right after a skill runs, or let it crash, and Claude rewrites it using your complaint. Two failures in a row switch the skill off until it's relearned. Every clean use counts as a success.
 - **Safety:** skills can only run commands through Batsy's checked shell, so risky ones (deleting, uninstalling, shutting down…) still ask "Should I go ahead?". Code that tries to get around that is rejected. Questions and chat are never turned into code: Claude just answers them.
 - `batsy skills` lists what it has learned, with how often each skill worked or failed. `batsy skills --forget NAME` removes one, or say "Batsy, forget how to …".
@@ -281,7 +281,7 @@ Prices are as listed, before delivery charges; stores change their pages, so a s
 
 ## Phone app (Android and iPhone)
 
-The same app runs on both. Its pages are served by the laptop (`batsy/phone_ui/`, `/app/` on port 8765), so changes reach the phone without reinstalling. It shows Batsy's state and an Ask box, the **3D printer** (a liquid fill rising with the progress, name, grams, time left, finish time, controls), the **latest slice** (preview, 3D view with a filling-bat loader, Print), the **lights and PC**, **files received**, **laptop and PC** specs, **music** (with the album art's colours as the theme) and **Claude usage**. Confirmations appear as frosted glass over the widget you tapped.
+The same app runs on both. Its pages are served by the laptop (`batsy/phone_ui/`, `/app/` on port 8765), so changes reach the phone without reinstalling. It shows Batsy's state and an Ask box, the **3D printer** (a liquid fill rising with the progress, name, grams, time left, finish time, controls), the **latest slice** (preview, 3D view with a filling-bat loader, Print), the **lights and PC**, **files received**, **laptop, PC and HP** specs (the HP card shows that it runs Batsy's AI, the model, and how fast it starts speaking; "AI on standby" when the laptop has taken over), **music** (with the album art's colours as the theme) and **Claude usage**. Confirmations appear as frosted glass over the widget you tapped.
 
 **Android (`android/`, `android/dist/batsy-widgets.apk`): StandBy.** Landscape and full screen, like iPhone StandBy: two panels of widgets you scroll up and down, a big clock and Now Playing to swipe to, dimmed at night, the screen kept on. It connects over the **USB cable** (`adb reverse`) first, then Tailscale. "Batsy, install the widget app on my phone" installs and pairs it over USB. Rebuild with `android/build.sh` (needs a JDK and the Android SDK; this laptop has both in `~/.local/share/jdk` and `~/Android/Sdk`).
 
@@ -463,6 +463,25 @@ Batsy controls the Spotify app on your iPad through Spotify Connect, using the S
 - **Have a Claude API key?** Set `[brain] engine = "claude"` to use the full Claude agent instead.
 - The no-token local commands (music, routines, camera, time, volume, "show me a picture of X") work the same with either brain.
 
+## Two laptops: the HP runs the AI
+
+The local AI runs on the **HP laptop** (`jonathanlen`, i3-8130U, 8 GB, Ubuntu), wired to this one at `10.10.10.4`. This laptop does the listening, speech recognition, voice, screen and apps. It keeps the 2.6 GB the model would take, and stays cooler.
+
+- **Always ready.** On the HP the model never unloads, so there's no "One moment". The HP's Ollama is a user service (`~/.config/systemd/user/ollama.service`, `~/.local/ollama`). It's bound to the cable address only, starts at boot without a login (linger), and keeps 3 prompt caches: quick answers, full answers with tools, and background jobs.
+- **Falls back by itself.** `batsy/llm_hosts.py` checks the HP every 15 s. If it's off, everything uses the Ollama on this laptop: slower, but nothing breaks. When it's back, Batsy switches back. The hosts list is `[local] hosts` in the config.
+- **The prompt cache is the big win.** Prompts start with the parts that stay the same (the instructions, then the conversation), so the model only reads the new words. When you say "Batsy", the HP pre-reads the conversation while your words are being transcribed.
+- **Measured** with `python -m batsy.tools.bench HOST`:
+
+  | | HP | This laptop |
+  |---|---|---|
+  | Writing the answer | 6.1 words/s | 3.9 words/s (hot, throttled) |
+  | New conversation | 62 s | 55 s |
+  | Same conversation, new question | **12 s** | 17 s |
+
+  Real quick answers on the HP take about **5 s, with the first word in about 4 s** (they used to take 12.6 s at the median). With the HP off: about 20 s.
+- **Room talk never reaches a model.** Overheard conversation after a false "Batsy" ("such a thank you mm-hmm") used to be half of everything sent to the AI. It's now recognised and ignored, with no reply and no CPU. This is checked only after instant commands and skills, and only for speech, never for typed text.
+- **`batsy speed`** shows, per route, how long the first word and the whole answer take, where the AI is running, and which jobs use Claude's tokens.
+
 ## How it works
 
 - **Wake word:** Vosk (offline) spots "Batsy" continuously. Whisper then confirms it, which filters out false alarms.
@@ -485,6 +504,8 @@ Batsy controls the Spotify app on your iPad through Spotify Connect, using the S
 - **Instant local commands** use no tokens at all: open/close camera, time, date, "volume 40", mute, stop, new conversation, and Spotify commands (play X, pause, next, previous, what's playing, like, queue, shuffle).
 - **Local memory.** Each request carries a few hundred tokens of memory, not the whole history. Tool outputs and images are never re-sent after the request that used them; only a one-line note of each action is kept.
 - **Lean context.** Effort defaults to `low`. Tool output is capped. Web search and fetch are limited per question.
+- **Remembered answers match the meaning, not the letters.** "What's the capital of Japan" reuses the saved answer for "what is the capital of Japan". "What is a resistor" no longer gets the saved answer for "transistor".
+- **The lighter Claude model for plain questions.** "Ask Claude what the difference between PLA and PETG is" uses Sonnet. Code, files, git and real work use the full model.
 - **Caching.** The system prompt and tools (about 3.3K tokens) are cached for an hour, so repeat questions only pay for the new part.
 - **No false triggers.** Whisper must confirm "Batsy" before anything is sent. Background chatter heard during the follow-up window is ignored.
 - **`batsy usage`** shows how many tokens you've used today, this week and all time. Each request is logged to `~/.local/share/batsy/usage.jsonl`.

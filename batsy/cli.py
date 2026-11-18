@@ -245,6 +245,55 @@ def cmd_skills(cfg, args) -> None:
             print(f"    “{t}”")
 
 
+def cmd_speed(cfg, args) -> None:
+    """How fast Batsy answers (per route: time to the first word and to the end), where the local model runs,
+    and where Claude's tokens go."""
+    import collections
+    import json
+    import sqlite3
+    import statistics
+    import time
+
+    from batsy import llm_hosts
+    from batsy.config import DATA_DIR
+    from batsy.usage import USAGE_FILE
+
+    since = time.time() - args.days * 86400
+    db = sqlite3.connect(str(DATA_DIR / "requests.db"))
+    has_first = "first" in [r[1] for r in db.execute("PRAGMA table_info(requests)")]  # added by Batsy on start
+    rows = db.execute(f"SELECT route, secs, {'first' if has_first else 'NULL'} FROM requests WHERE t > ?",
+                      (since,)).fetchall()
+    by = collections.defaultdict(lambda: ([], []))
+    for route, secs, first in rows:
+        by[route][0].append(secs or 0)
+        if first is not None:
+            by[route][1].append(first)
+
+    def mid(v):
+        return f"{statistics.median(v):5.1f}s" if v else "    -"
+
+    def p90(v):
+        return f"{sorted(v)[int(len(v) * .9)]:5.1f}s" if v else "    -"
+
+    print(f"Last {args.days} days: {len(rows)} requests. Local model on {llm_hosts.best(cfg)}\n")
+    print(f"  {'route':9} {'count':>5}   first word (median / p90)   done (median / p90)")
+    for route, (done, first) in sorted(by.items(), key=lambda x: -len(x[1][0])):
+        print(f"  {route:9} {len(done):5}   {mid(first)} / {p90(first)}             {mid(done)} / {p90(done)}")
+    runs, tokens = collections.Counter(), collections.Counter()
+    try:
+        for line in USAGE_FILE.read_text().splitlines():
+            u = json.loads(line) if line.strip() else {}
+            if u.get("t", 0) > since and u.get("model") == "claude-code":
+                k = (u.get("label") or "?").split(":")[0][:30]
+                runs[k] += 1
+                tokens[k] += u.get("in", 0) + u.get("out", 0) + u.get("cache_write", 0)
+    except OSError:
+        pass
+    print(f"\nClaude: {sum(runs.values())} runs, {sum(tokens.values()):,} tokens")
+    for k, n in tokens.most_common(10):
+        print(f"  {k:30} {runs[k]:4} runs  {n:>9,} tokens")
+
+
 def cmd_vault(cfg, args) -> None:
     """The brain (Obsidian vault): seed it, search it, summarise a day, sync it."""
     import datetime as dt
@@ -268,7 +317,7 @@ def cmd_vault(cfg, args) -> None:
         day = dt.date.fromisoformat(args.text[0]) if args.text else vault.today()
         vault_daily.weekly(day)
     elif what == "sync":
-        print(vault.sync())
+        print(vault.sync(force=True))
     elif what == "open":
         vault.open_note()
     else:
@@ -455,6 +504,8 @@ def main() -> None:
     p = sub.add_parser("type", help="type a request to Batsy, as if you'd said it (bind it to a shortcut)")
     p.add_argument("text", nargs="*", help="the request; without it a small text box opens")
     sub.add_parser("usage", help="show token usage")
+    p = sub.add_parser("speed", help="how fast Batsy answers, per route, and where Claude's tokens go")
+    p.add_argument("--days", type=int, default=7)
     sub.add_parser("spotify-login", help="connect your Spotify account")
     p = sub.add_parser("skills", help="list (or --forget) skills Batsy learned")
     p.add_argument("--forget", metavar="NAME")
@@ -473,6 +524,6 @@ def main() -> None:
     cfg = Config.load()
     _setup_logging(args.verbose or args.cmd in (None, "run") and sys.stderr.isatty())
     {"run": cmd_run, None: cmd_run, "chat": cmd_chat, "ask": cmd_ask,
-     "doctor": cmd_doctor, "reset": cmd_reset, "usage": cmd_usage,
+     "doctor": cmd_doctor, "reset": cmd_reset, "usage": cmd_usage, "speed": cmd_speed,
      "spotify-login": cmd_spotify_login, "vocab": cmd_vocab, "skills": cmd_skills,
      "projects": cmd_projects, "vault": cmd_vault, "stop": cmd_stop, "listen": cmd_listen, "type": cmd_type}[args.cmd](cfg, args)

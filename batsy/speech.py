@@ -40,6 +40,12 @@ class SpeechChunker:
             # chunk a comma after a short phrase will do, so speech starts while the rest is still coming
             ends, least = (r"(?<=[.!?:;,])\s+|\n+", 12) if self.first else (r"(?<=[.!?:;])\s+|\n+", 25)
             m = next((b for b in re.finditer(ends, region) if b.start() >= least or "\n" in b.group()), None)
+            if m is None and self.first and len(region.split()) >= 14:
+                # one long sentence with no commas yet: a person would already be talking, so break before a
+                # joining word ("...stronger than PLA | due to its...") once there's a real phrase to say
+                m = next((b for b in re.finditer(r"\s+(?=(?:and|but|because|as|so|which|while|due to|since|with|"
+                                                 r"when|so that|although)\b)", region)
+                          if len(region[:b.start()].split()) >= 7), None)
             if fence >= 0 and (m is None or fence < m.start()):
                 self._say(self.buf[:fence])
                 self.buf, self.in_code = self.buf[fence + 3:], True
