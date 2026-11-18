@@ -15,7 +15,22 @@ CONTEXT
   ("access denied"). Other possibilities: Batsy isn't running, is an old version without the collector,
   [files] taildrop = false in ~/.config/batsy/config.toml, or `tailscale` isn't on the service's PATH.
 
+LOG (findings so far, from the Mac)
+- 03:02  taildrop-fix.txt sent from the Mac CLI (`tailscale file cp --name taildrop-fix.txt - workstation:`):
+         "sent". The user got it out on this machine (by hand), so delivery Mac -> workstation works.
+- Earlier tree.STL sent with the Mac's Finder Share > Tailscale: Mac shows "Sent", but nothing appears in Batsy.
+- 03:04  Sending tree.STL again from the Mac CLI answered: "409 Conflict: file already exists".
+         => the Share-sheet tree.STL DID reach workstation and is still sitting UNCOLLECTED in tailscaled's
+            holding area. The Mac side and the Share sheet are fine; collection on this machine is what's broken.
+- Batsy's own handling is verified: tree.STL placed in ~/Batsy/inbox/.taildrop is filed into ~/Batsy/inbox/<user>/
+  and announced ("You sent Tree. Want me to open it?") within ~10 s.
+- Conclusion: Batsy's collector (`tailscale file get --loop ...`) is not running here, or is denied. Most likely the
+  Tailscale operator isn't set; otherwise Batsy isn't running / is outdated / the collector died.
+- Fix applied in batsy/inbox.py (pull it): if collection is denied Batsy now says so out loud once, retries every
+  minute instead of five, and a failing side step (vault card, slicer...) can no longer swallow an announcement.
+
 STEPS
+0. Pull the waiting STL out now:  sudo tailscale file get ~/Downloads   (tree.STL should appear)
 1. tailscale file get --verbose ~/Batsy/inbox
      - "access denied" / operator error  ->  sudo tailscale set --operator=$USER   (then repeat step 1)
      - saves tree.STL                    ->  permission is fine; go to step 2
