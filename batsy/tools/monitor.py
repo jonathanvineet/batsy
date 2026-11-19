@@ -120,6 +120,10 @@ class _Health:
                 limit = cfg.get("monitor.cpu_temp_high_c")
                 self._flag("temp", hottest >= limit, f"Warning, the laptop is running hot at {hottest:.0f} degrees.",
                            cleared=hottest < limit - 8)  # hovering around the limit isn't a new warning each time
+                pc = getattr(getattr(self.ctx, "hub", None), "pc_stats", None) or {}  # fresh while the phone watches
+                if pc.get("online") and pc.get("temp") is not None:
+                    self._flag("pc-temp", pc["temp"] >= limit, f"Warning, the PC is running hot at {pc['temp']:.0f} degrees.",
+                               cleared=pc["temp"] < limit - 8)
                 free_gb = psutil.disk_usage("/").free / 1e9
                 self._flag("disk", free_gb < cfg.get("monitor.disk_free_low_gb"),
                            f"Disk space is low, only {free_gb:.1f} gigabytes free.")

@@ -755,6 +755,65 @@ def _spell(app, m, text):
     return f"{word}: " + ", ".join(c.upper() for c in word if c.isalpha()) + "."
 
 
+# --- to-dos for a day: under the clock in the phone app ---------------------------------------------------------------
+_last_note: dict = {"text": "", "t": 0.0, "todo": False}  # what "put that under the clock" means
+TASKY = re.compile(r"^(?:i|we)(?:'ve| have| had| need| needed| must| should| got| gotta| am going| was going)?"
+                   r"(?: got)? (?:to|gotta) ", re.I)
+DAYWORD = re.compile(r"\s*\b(?:today|tonight|this (?:morning|afternoon|evening)|tomorrow(?: morning| evening)?)\b", re.I)
+
+
+def _as_todo(what: str) -> tuple[dt.date, str] | None:
+    """'I had to make a video for our alumni meeting today' -> (today, 'Make a video for our alumni meeting').
+    Only something to do on a named day (today / tonight / tomorrow): other notes stay notes."""
+    if not TASKY.match(what) or not DAYWORD.search(what):
+        return None
+    day = dt.date.today() + dt.timedelta(days=1 if re.search(r"\btomorrow\b", what, re.I) else 0)
+    task = DAYWORD.sub("", TASKY.sub("", what, count=1)).strip(" ,.")
+    return (day, task[:1].upper() + task[1:]) if len(task.split()) >= 2 else None
+
+
+# "put that under the clock" (heard as "under my timer, a chick clock" too), "add that to my to-do"
+CLOCKY = r"(?:the |my )?(?:clock|timer|chick ?clock|tick ?clock|to ?-?do(?: list)?|todo(?: list)?|check ?list|list)"
+
+
+@handles(rf"(?:also |and |uh |um )*(?:put|add|move|show|pin|keep) (?:that|it|this)(?: one)? (?:under|on|in|to|into|below|beneath) "
+         rf"{CLOCKY}(?:.*)?")
+def _under_clock(app, m, text):
+    if not _last_note["text"] or time.time() - _last_note["t"] > 1800:
+        return None  # nothing just noted: let the rest of Batsy have it
+    if _last_note["todo"]:
+        return "It's already under the clock."
+    from batsy.memory_store import get_store
+
+    task = TASKY.sub("", DAYWORD.sub("", _last_note["text"]), count=1).strip(" ,.")
+    task = task[:1].upper() + task[1:]
+    get_store().add_agenda(dt.date.today().isoformat(), task)
+    _last_note["todo"] = True
+    return f"Done, it's under the clock in the phone app: {task}."
+
+
+# "completed making a video for our alumni meeting", "I finished the website", "tick off the video", "mark X done"
+@handles(r"(?:batsy )?(?:i(?:'ve| have)? )?(?:completed|finished|done with|done|did|wrapped up|sent|submitted) (.+)",
+         r"(?:tick|check|cross) off (.+)", r"mark (.+?) (?:as )?(?:done|finished|complete|completed)")
+def _tick_off(app, m, text):
+    from rapidfuzz import fuzz
+
+    from batsy.memory_store import get_store
+
+    st = get_store()
+    said = re.sub(r"^(?:the|my|our|that|it)\s+", "", m.group(1).strip())
+    days = [(dt.date.today() - dt.timedelta(days=k)).isoformat() for k in range(3)]  # today, and 2 days back
+    open_ = [r for d in days for r in st.agenda_for(d) if not r["done"]]
+    if not open_:
+        return None
+    best = max(open_, key=lambda r: fuzz.token_set_ratio(said.lower(), r["text"].lower()))
+    if fuzz.token_set_ratio(said.lower(), best["text"].lower()) < 70:
+        return None  # "I finished the movie": not one of your to-dos, so just talk
+    st.tick_agenda(best["id"])
+    left = sum(1 for r in st.agenda_for(days[0]) if not r["done"])
+    return f"Nice, ticked off: {best['text']}." + (f" {left} left for today." if left else " That's everything for today.")
+
+
 # --- "remember that ..." -> long-term memory, every time (it used to go to the AI, which could lose it) ------------
 @handles(r"(?:[a-z]+ )?(?:please )?(?:remember|don'?t forget|keep in mind)"
          r"(?: that| to| this| of)?:? (.+)")
@@ -767,6 +826,15 @@ def _remember(app, m, text):
     from batsy.memory_store import get_store
 
     what, dest = _destination(_clean_note(what))
+    todo = _as_todo(what)
+    if todo:  # "I have to make a video for the alumni meeting today": a to-do for that day, under the phone's clock
+        day, task = todo
+        get_store().add_agenda(day.isoformat(), task)
+        _last_note.update(text=what, t=time.time(), todo=True)
+        _to_brain(what, dest)
+        when = "today" if day == dt.date.today() else "tomorrow"
+        return f"Got it. It's under the clock for {when}: {task}."
+    _last_note.update(text=what, t=time.time(), todo=False)
     fid = get_store().add_fact(f"Jonathan asked me to remember ({dt.date.today():%d %b %Y}): {what}")
     if len(what.split()) > 14 or re.search(r"\b(?:i mean|what is it|no wait|sorry|actually|say not)\b", what, re.I):
         threading.Thread(target=_condense_fact, args=(app, fid, what, dest), daemon=True, name="tidy-memory").start()

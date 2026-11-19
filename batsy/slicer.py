@@ -463,7 +463,10 @@ def _slice_model(model: Path, process: str | None = None, overrides: dict | None
                            "printer_settings_id": f"{machine} (Batsy)"}, "machine")
     else:
         printer = flatten(json.loads((PRINTER / "printer.json").read_text()), "machine")
-    proc = {**flatten(json.loads(pfile.read_text()), "process"), **(overrides or {})}
+    # Arc fitting off: OrcaSlicer turned near-straight curves into G2/G3 arcs with radii up to 2 m, and the
+    # Ender-5 Pro's Marlin can misread one of those as a full circle and race the head to the bed's edge. That's
+    # what shifted tree2 a few mm up (19 Nov). Plain short moves print the same curves safely.
+    proc = {**flatten(json.loads(pfile.read_text()), "process"), "enable_arc_fitting": ["0"], **(overrides or {})}
     for cfg in (printer, proc):  # everything is complete now: no "only for printer X" checks against Orca's bundles
         cfg.pop("compatible_printers", None)
         cfg.pop("compatible_printers_condition", None)

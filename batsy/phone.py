@@ -391,7 +391,21 @@ class Hub:
                 "said_t": live.get("t"), "agents": [a["label"] for a in act["agents"]][:4],
                 "asks": [a["question"] for a in act["asks"]][:3],
                 "next_reminder": {"what": rem[0].get("what") or "timer", "at": int(rem[0]["next_run"])} if rem else None,
+                "today": self._today(),  # the day's to-dos, shown under the clock
                 "listening_paused": bool(getattr(self.app, "muted_mic", False))}
+
+    @staticmethod
+    def _today() -> list[str]:
+        import datetime as dt
+
+        from batsy.memory_store import get_store
+
+        try:
+            rows = get_store().agenda_for(dt.date.today().isoformat())
+            rows = sorted(rows, key=lambda r: bool(r["done"]))[:4]  # still to do first, ticked ones after
+            return [{"text": r["text"], "done": bool(r["done"])} for r in rows]
+        except Exception:
+            return []
 
     # --- buttons -----------------------------------------------------------------------------------------
     def spotify_action(self, action: str, body: dict | None = None) -> dict:

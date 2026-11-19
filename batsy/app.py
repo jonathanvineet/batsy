@@ -671,8 +671,11 @@ class Batsy:
             kind, title = "ask", "Batsy asks"
         elif re.match(r"I found \d+ .* models\.", text):
             return  # a model search: the phone shows the cards themselves, not this sentence
+        extra = {}
+        if hot := re.search(r"\bthe (laptop|pc) is running hot at (\d+)", low):  # the phone jumps to that temperature
+            kind, extra = "temp", {"machine": hot[1], "temp": int(hot[2])}
         self.events = (self.events + [{"id": (self.events[-1]["id"] + 1) if self.events else int(time.time()),
-                                       "t": time.time(), "kind": kind, "title": title, "text": text}])[-20:]
+                                       "t": time.time(), "kind": kind, "title": title, "text": text, **extra}])[-20:]
 
     def announce(self, text: str) -> None:
         log.info("announce: %s", text)

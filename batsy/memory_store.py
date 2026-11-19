@@ -49,6 +49,8 @@ class MemoryStore:
                 CREATE TABLE IF NOT EXISTS agenda (id INTEGER PRIMARY KEY, day TEXT, text TEXT, t REAL);
                 CREATE INDEX IF NOT EXISTS agenda_day ON agenda(day);
             """)
+            if "done" not in [r[1] for r in self.db.execute("PRAGMA table_info(agenda)")]:
+                self.db.execute("ALTER TABLE agenda ADD COLUMN done REAL")  # when it was ticked off (None: not yet)
             try:
                 self.db.executescript("""
                     CREATE VIRTUAL TABLE IF NOT EXISTS exchanges_fts USING fts5(user, reply, actions,
@@ -204,6 +206,12 @@ class MemoryStore:
         with self.lock:
             return self.db.execute("SELECT * FROM agenda WHERE day BETWEEN ? AND ? ORDER BY day, id",
                                    (start, end)).fetchall()
+
+    def tick_agenda(self, item_id: int, done: bool = True) -> bool:
+        """Ticked off ("finished making the video"): stays on the day, crossed out."""
+        with self.lock, self.db:
+            return self.db.execute("UPDATE agenda SET done = ? WHERE id = ?",
+                                   (time.time() if done else None, item_id)).rowcount > 0
 
     def remove_agenda(self, item_id: int) -> bool:
         with self.lock, self.db:

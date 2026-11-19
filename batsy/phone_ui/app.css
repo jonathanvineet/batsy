@@ -194,6 +194,11 @@ input { font: inherit; color: inherit; }
 .gauge { display: flex; flex-direction: column; gap: 4px; }
 .gauge span { display: flex; justify-content: space-between; align-items: baseline; color: var(--muted); font-size: clamp(11px, 3vmin, 14px); }
 .gauge span b { color: var(--text); font: 700 clamp(15px, 4.6vmin, 24px)/1 var(--display); }
+/* running hot: the phone jumped here, that temperature glows red for a while */
+.gauge.hot { margin: -6px -8px; padding: 6px 8px; border-radius: 10px; animation: hotglow 1.2s ease-in-out infinite alternate; }
+.gauge.hot span, .gauge.hot span b { color: var(--bad); }
+.gauge.hot span b { font-size: clamp(22px, 7vmin, 38px); }
+@keyframes hotglow { from { background: rgba(255, 92, 77, .08); } to { background: rgba(255, 92, 77, .28); box-shadow: 0 0 0 2px rgba(255, 92, 77, .5); } }
 .bar { height: 6px; border-radius: 3px; background: var(--w2); overflow: hidden; }
 .bar i { display: block; height: 100%; background: var(--signal); border-radius: 3px; transition: width 600ms; }
 .bar i.warn { background: var(--warn); } .bar i.bad { background: var(--bad); }
@@ -686,3 +691,20 @@ body:not(.dash) .fab-mic { bottom: max(52px, env(safe-area-inset-bottom)); } bod
   .machines-w[data-n="3"] { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .machines-w[data-n="3"] .gauge b { font-size: .86em; }
 }
+
+/* the day's to-dos, under the clock */
+.today { list-style: none; margin: 8px 0 0; padding: 0; display: grid; gap: 4px; }
+.today li { position: relative; padding-left: 18px; color: var(--muted); font-size: clamp(14px, 3.6vmin, 20px); line-height: 1.25; }
+.today li::before { content: ""; position: absolute; left: 0; top: .42em; width: 9px; height: 9px; border-radius: 3px;
+  border: 1.5px solid var(--signal); }
+.clock-full .today { margin-top: 14px; justify-items: center; }
+.clock-full .today li { font-size: clamp(16px, 4.2vmin, 26px); }
+.today li { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.today li.done { text-decoration: line-through; opacity: .45; }
+.today li.done::before { background: var(--signal); }
+
+/* the floating mic, movable like AssistiveTouch */
+.fab-mic { touch-action: none; transition: opacity .35s, transform .15s; }
+.fab-mic.dragging { transition: none; transform: scale(1.08); box-shadow: 0 10px 30px rgba(0,0,0,.55); }
+.fab-mic.snapping { transition: left .24s cubic-bezier(.2,.8,.2,1), top .24s cubic-bezier(.2,.8,.2,1); }
+.fab-mic.rest { opacity: .55; }

@@ -196,6 +196,9 @@ function drawBatsy(b) {
   $('#b-said').textContent = b.status || b.said || (b.asks && b.asks[0]) || 'Say “Batsy”, or tap to type.';
   const r = b.next_reminder;
   $('#w-next').textContent = r ? `${r.what} · ${new Date(r.at * 1000).toLocaleTimeString([], {hour: 'numeric', minute: '2-digit'})}` : '';
+  const today = (b.today || []).map(t => typeof t === 'string' ? {text: t} : t)  // the day's to-dos, under the clock
+    .map(t => `<li class="${t.done ? 'done' : ''}">${esc(t.text)}</li>`).join('');
+  for (const id of ['#w-today', '#big-today']) if ($(id)) $(id).innerHTML = today;
 }
 const chat = store.get('chat', []);
 function drawChat() {
@@ -231,8 +234,10 @@ function takeEvents(events) {
   const fresh = events.filter(e => e.id > seen);
   if (!fresh.length) return;
   store.set('evSeen', newest);
-  fresh.filter(e => e.kind === 'warn').forEach(e => toast(e.text));  // heads-ups (running hot): a small note, not the screen
-  const big = fresh.filter(e => e.kind !== 'warn');
+  fresh.filter(e => e.kind === 'warn').forEach(e => toast(e.text));  // heads-ups (battery, disk): a small note
+  const hot = fresh.filter(e => e.kind === 'temp').pop();
+  if (hot) focusTemp(hot);  // running hot: the screen goes to that temperature and lights it up
+  const big = fresh.filter(e => e.kind !== 'warn' && e.kind !== 'temp');
   if (!big.length) return;
   toQueue.push(...big.slice(-3));
   if (!toBusy) nextTakeover();
@@ -243,7 +248,8 @@ async function nextTakeover() {
   toBusy = true;
   const to = $('#takeover');
   $('#to-icon').textContent = TO_ICONS[e.kind] || '🦇';
-  $('#to-title').textContent = e.title;
+  $('#to-title').textContent = e.kind === 'slice' ? 'Slice done' : e.kind === 'print' && /\bdone\b/i.test(e.text) ? 'Print done' : e.title;
+  to.ev = e;
   $('#to-text').textContent = e.text.replace(new RegExp('^' + e.title + ':\\s*', 'i'), '');  // not "Reminder: Reminder: …"
   $('#to-hint').textContent = e.kind === 'ask' ? 'Answer out loud, or hold the mic' : '';
   to.style.setProperty('--to', TO_COLORS[e.kind] || TO_COLORS.batsy);
@@ -269,7 +275,35 @@ function closeTakeover() {
   const to = $('#takeover');
   clearTimeout(to.timer);
   to.classList.remove('on');
-  setTimeout(() => { to.hidden = true; nextTakeover(); }, 450);
+  setTimeout(() => {
+    to.hidden = true;
+    const go = to.ev && TO_WIDGETS[to.ev.kind];
+    to.ev = null;
+    if (go && !toQueue.length) goToWidget($(go));  // then the widget it's about: the slice's picture, the printer
+    nextTakeover();
+  }, 450);
+}
+const TO_WIDGETS = {slice: '#sw', print: '#pw'};
+// swipe to the widgets view and scroll that widget's stack to it; false when it's hidden or on the iPhone dashboard
+function goToWidget(el) {
+  // Exactly to that card: the page it's on, then its place in that stack. (scrollIntoView moved StandBy's whole row
+  // of pages and left you on the big clock instead.)
+  if (!el || !el.offsetParent || document.body.classList.contains('dash')) return false;
+  const views = $('#views'), page = el.closest('.view'), stack = el.closest('.stack');
+  if (views && page) views.scrollTo({left: page.offsetLeft, behavior: 'smooth'});
+  if (stack) {
+    const top = el.getBoundingClientRect().top - stack.getBoundingClientRect().top + stack.scrollTop;
+    stack.scrollTo({top, behavior: 'smooth'});
+  }
+  return true;
+}
+let hotMark = null;  // {machine, until}: drawMachines keeps that temperature lit across refreshes
+function focusTemp(e) {
+  hotMark = {machine: e.machine, until: Date.now() + 20000};
+  if (!goToWidget($('#machines-w'))) { hotMark = null; return toast(e.text); }  // (hidden from StandBy: just a note)
+  $$('#machines-w .gauge.hot').forEach(g => g.classList.remove('hot'));
+  const g = $(`#machines-w .gauge[data-temp="${e.machine}"]`);
+  if (g) { g.classList.add('hot'); g.querySelector('b').textContent = e.temp + '°'; }
 }
 $('#takeover').addEventListener('click', closeTakeover);
 
@@ -426,37 +460,95 @@ function answered(d) {
   setTimeout(() => { mic.mute = false; }, Math.min(15000, 1500 + 70 * (d.say || '').length));
 }
 // hold to talk: the button in the Batsy widget, and the big round one that floats over every screen
-function holdToTalk(btn) {
+function holdToTalk(btn, movable = false) {
   const status = t => { $('#b-said').textContent = t; $('#fab-said').textContent = t; };
   btn.addEventListener('click', e => e.stopPropagation());
   btn.addEventListener('contextmenu', e => e.preventDefault());
-  btn.addEventListener('pointerdown', async e => {
-    e.stopPropagation(); e.preventDefault();
-    unlockAudio();
-    btn.setPointerCapture && btn.setPointerCapture(e.pointerId);
-    btn.dataset.down = '1';
+  // movable (the floating mic, like AssistiveTouch): moving your finger right away drags it; holding still talks
+  let wait = null, drag = null, start = null;
+  async function begin() {
+    wait = null;
+    if (!btn.dataset.down) return;
     try { await micStream(); } catch (err) { btn.dataset.down = ''; return toast(err.message); }
     if (!btn.dataset.down) return;  // let go while the permission prompt was up
     if (mic.ears) mic.mute = true;  // ears mode: this recording, not that one
     startRec(); btn.classList.add('rec'); document.body.classList.add('ptt'); chime(true);
     status('Listening… let go when you’re done');
+  }
+  btn.addEventListener('pointerdown', e => {
+    e.stopPropagation(); e.preventDefault();
+    unlockAudio();
+    btn.setPointerCapture && btn.setPointerCapture(e.pointerId);
+    btn.dataset.down = '1';
+    if (!movable) return begin();
+    const r = btn.getBoundingClientRect();
+    start = {x: e.clientX, y: e.clientY, dx: e.clientX - r.left, dy: e.clientY - r.top};
+    drag = null;
+    btn.classList.remove('rest');
+    wait = setTimeout(begin, 220);  // still after 0.2 s: you're talking, not moving it
+  });
+  if (movable) btn.addEventListener('pointermove', e => {
+    if (!start || btn.classList.contains('rec')) return;
+    if (!drag && Math.hypot(e.clientX - start.x, e.clientY - start.y) < 10) return;
+    if (wait) { clearTimeout(wait); wait = null; }
+    drag = true;
+    btn.classList.add('dragging');
+    placeFab(e.clientX - start.dx, e.clientY - start.dy);
   });
   ['pointerup', 'pointercancel'].forEach(ev => btn.addEventListener(ev, async e => {
     e.stopPropagation();
     btn.dataset.down = '';
-    if (!mic.rec || !btn.classList.contains('rec')) return;
+    start = null;
+    if (drag) { drag = null; btn.classList.remove('dragging'); snapFab(); return; }  // moved it: snap to a side
+    if (wait) { clearTimeout(wait); wait = null; }
+    if (!mic.rec || !btn.classList.contains('rec')) { if (movable) status('Hold the mic while you talk.'); restFab(); return; }
     btn.classList.remove('rec');
     const got = await stopRec();
-    if (!got || got.ms < 400) { status('Hold the mic while you talk.'); setTimeout(() => document.body.classList.remove('ptt'), 1200); return; }
+    if (!got || got.ms < 400) { status('Hold the mic while you talk.'); setTimeout(() => document.body.classList.remove('ptt'), 1200); restFab(); return; }
     status('Thinking…'); btn.classList.add('wait');
     try { answered(await sendVoice(got.blob, 'ptt')); } catch (err) { toast(err.message); }
     btn.classList.remove('wait');
     $('#fab-said').textContent = $('#b-said').textContent;  // the answer, under the big mic for a moment
     setTimeout(() => document.body.classList.remove('ptt'), 4000);
+    restFab();
   }));
 }
+// --- the floating mic's place: dragged anywhere, snapped to the nearest side, remembered (like AssistiveTouch) ----
+const FAB = () => $('#fab-mic');
+function placeFab(x, y) {
+  const b = FAB(), w = b.offsetWidth, h = b.offsetHeight;
+  b.style.left = Math.max(6, Math.min(innerWidth - w - 6, x)) + 'px';
+  b.style.top = Math.max(6, Math.min(innerHeight - h - 6, y)) + 'px';
+  b.style.right = b.style.bottom = 'auto';
+}
+function snapFab() {
+  const b = FAB(), r = b.getBoundingClientRect();
+  const side = r.left + r.width / 2 < innerWidth / 2 ? 'left' : 'right';
+  const y = Math.max(0, Math.min(1, r.top / Math.max(1, innerHeight - r.height)));
+  store.set('fabPos', {side, y});
+  b.classList.add('snapping');
+  applyFab();
+  setTimeout(() => b.classList.remove('snapping'), 260);
+  restFab();
+}
+function applyFab() {
+  const p = store.get('fabPos', null), b = FAB();
+  if (!p) return;  // never moved: its usual bottom-right corner
+  const w = b.offsetWidth, h = b.offsetHeight;
+  placeFab(p.side === 'left' ? 12 : innerWidth - w - 12, 6 + p.y * Math.max(0, innerHeight - h - 12));
+}
+let fabRest = null;
+function restFab() {  // after a few quiet seconds it fades back a little, out of the way
+  const b = FAB();
+  b.classList.remove('rest');
+  clearTimeout(fabRest);
+  fabRest = setTimeout(() => { if (!b.classList.contains('rec') && !b.classList.contains('wait')) b.classList.add('rest'); }, 3500);
+}
+addEventListener('resize', applyFab);
+addEventListener('orientationchange', () => setTimeout(applyFab, 300));
 holdToTalk($('#b-mic'));
-holdToTalk($('#fab-mic'));
+holdToTalk($('#fab-mic'), true);
+applyFab(); restFab();
 
 // the phone as Batsy's ears: it listens for "Batsy" (the laptop's mic stands down meanwhile)
 async function earsOn() {
@@ -525,8 +617,8 @@ $$('[data-act]').forEach(b => b.addEventListener('click', async () => {
 }));
 
 // --- computers ----------------------------------------------------------------------------------------------
-function gauge(label, value, pct, cls) {
-  return `<div class="gauge"><span>${label}<b>${value}</b></span><div class="bar"><i class="${cls}" style="width:${Math.min(100, pct || 0)}%"></i></div></div>`;
+function gauge(label, value, pct, cls, temp = '', hot = false) {  // temp: whose temperature, for the running-hot jump
+  return `<div class="gauge${hot ? ' hot' : ''}"${temp ? ` data-temp="${esc(temp)}"` : ''}><span>${label}<b>${value}</b></span><div class="bar"><i class="${cls}" style="width:${Math.min(100, pct || 0)}%"></i></div></div>`;
 }
 function drawMachines(ms) {
   pc = ms.find(m => m.kind === 'pc') || null;
@@ -541,7 +633,8 @@ function drawMachines(ms) {
       <p class="off-note">${m.online === false ? (m.kind === 'ai' ? 'Off · the laptop runs the AI' : 'Off or asleep') : 'Checking…'}</p>${m.kind === 'pc' ? '<button class="act" data-pc="wake">Wake up</button>' : ''}</div>`;
     return `<div class="m"><h4><i class="on"></i>${esc(m.name)}</h4>${m.kind === 'ai' ? aiLine(m.ai || {}) : ''}
       ${gauge('CPU', Math.round(m.cpu || 0) + '%', m.cpu, level(m.cpu, 70, 90))}
-      ${gauge('Temp', (m.temp ?? '–') + '°', m.temp, level(m.temp || 0, 80, 92))}
+      ${gauge('Temp', (m.temp ?? '–') + '°', m.temp, level(m.temp || 0, 80, 92),
+        m.kind, hotMark && hotMark.machine === m.kind && Date.now() < hotMark.until)}
       ${gauge('Memory', m.ram_used_gb != null ? `${m.ram_used_gb}/${m.ram_total_gb} GB` : Math.round(m.ram) + '%', m.ram, level(m.ram, 75, 90))}
       ${gauge('Disk', m.disk_free_gb + ' GB free', m.disk, level(m.disk, 80, 92))}
       ${m.kind === 'ai' ? '' : m.kind === 'pc' ? '<button class="act" data-pc="menu">Controls</button>'

@@ -161,8 +161,26 @@ QUESTION_ONLY = re.compile(r"^(?:(?:hey|ok|so|batsy|claude|ask claude|please)[ ,
                            r"when|where|which|is|are|does|do|can|should|explain|tell me|compare|difference)\b")
 
 
+# Shell commands the small local model may never run: it once answered "how's the print going" by running
+# git init / git pull / git config --global in a folder it made up.
+NO_LOCAL = re.compile(r"\b(?:git|rm|rmdir|mv|dd|mkfs|chmod|chown|shred|truncate|pip|dnf|flatpak (?:install|uninstall)|"
+                      r"gsettings set|systemctl|crontab|sed -i)\b|>\s*[~/]")
+
+# Changing Batsy's own screens ("show my to-dos under the clock in the phone app", "add a widget for X"): that's
+# code, for Claude; the small model can only say "Sorry, what was that?"
+APP_CHANGE = re.compile(r"\b(?:add|put|show|move|make|change|display|remove|hide|redesign|rearrange|resize|bigger|"
+                        r"smaller|colou?r)\b.*\b(?:phone app|the app|my app|app's|widget|dashboard|stand ?by|"
+                        r"overlay|side ?tab|home screen|lock screen)\b")
+
+
+# "When I ask how the print's going, tell me the actual status": changing how Batsy behaves is code, for Claude
+BEHAVIOUR = re.compile(r"^(?:uh |um |so |and |also )*(?:when(?:ever)?|every ?time|if) i (?:ask|say|tell you|type)\b|"
+                       r"\b(?:from now on|next time i ask|always (?:answer|reply|say|tell me)|stop (?:saying|answering))\b")
+
+
 def is_complex(text: str) -> bool:
-    return bool(COMPLEX.search(text.lower())) or len(text.split()) > 22
+    t = text.lower()
+    return bool(COMPLEX.search(t) or APP_CHANGE.search(t) or BEHAVIOUR.search(t)) or len(text.split()) > 22
 
 
 # Asking for code to be written: goes to Claude Code as a coding job, never to the skill learner (which would
@@ -606,13 +624,31 @@ class LocalBrain:
                 if on_tool:
                     on_tool(name)
                 self.status(f"Running {name.replace('_', ' ')}")
-                out, is_error = self.registry.execute(name, args) if name in LOCAL_TOOLS else (f"No tool {name}.", True)
+                if name == "run_shell" and NO_LOCAL.search(str(args.get("command", ""))):
+                    # the small model guessing at git ("git init ~/Batsy/repo", "git config --global url.repos ...")
+                    # or deleting things: never. Batsy's own git ("commit and push") or Claude do that properly.
+                    log.warning("local model tried %r: refused", args.get("command"))
+                    out, is_error = ("Refused: you may not run git, delete files or change settings. Tell the user "
+                                     "you can't do that yourself, in one short sentence.", True)
+                else:
+                    out, is_error = self.registry.execute(name, args) if name in LOCAL_TOOLS else (f"No tool {name}.", True)
                 out = out if isinstance(out, str) else "done"
                 actions.append(f"{name} {json.dumps(args)[:80]} -> {'ERROR ' if is_error else ''}{out.strip()[:60]}")
                 # every character here must be re-read by a slow CPU: keep it short
                 messages.append({"role": "tool", "tool_name": name, "content": truncate(out, m["tool_result_chars"])})
             if abort.is_set() or handed_off:
                 break
+        from batsy.learner import chatter, clear_request
+
+        if [x.strip() for x in spoken] == ["Sorry, what was that?"] and self.claude_ok and not abort.is_set() \
+                and clear_request(text) and not chatter(norm(text)):
+            # a clear request the small model couldn't do ("put that under the clock in the phone app"): not a
+            # mishearing, so hand it on instead of giving up
+            emit("Let me hand that to Claude.")
+            self.route = "claude"
+            self.last_claude_t = time.time()
+            self._claude(text, context, emit, on_marker, on_tool, actions)
+            return self._finish(source, text, spoken, actions, abort)
         self._maybe_learn_from(text, actions)
         return self._finish(source, text, spoken, actions, abort)
 

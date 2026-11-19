@@ -496,12 +496,16 @@ class Printer:
         if s["uploading"]:
             return f"I'm copying {s['job']} to the printer's card, {s['uploading']} percent done. Then it starts."
         if s["printing"] or s["paused"]:
-            left = ""
+            # short: how far, how long, when it's done (temperatures only while it's still heating up)
             secs = self.remaining()
-            if secs:
-                left = f", about {_dur(secs)} left"
-            return (f"{'Paused' if s['paused'] else 'Printing'} {s['job'] or 'a file'}: {s['progress'] or 0} percent{left}. "
-                    f"{temps[0].upper()}{temps[1:]}.")
+            pct = s["progress"] or 0
+            pct = f"{pct:.0f}" if pct >= 10 else f"{pct:.1f}".rstrip("0").rstrip(".")
+            left = f", about {_dur(secs)} left, done at {time.strftime('%-I:%M %p', time.localtime(time.time() + secs)).lower()}" \
+                if secs else ""
+            heating = s["hotend_target"] and abs((s["hotend"] or 0) - s["hotend_target"]) > 5
+            job = (s["job"] or "the print").split(" · ")[0]
+            return (f"{job} is {'paused at' if s['paused'] else ''} {pct} percent{' done' if not s['paused'] else ''}{left}."
+                    .replace("is  ", "is ") + (f" Still heating: {temps}." if heating else ""))
         return f"The printer is idle. {temps[0].upper()}{temps[1:]}."
 
     def _unstick(self) -> None:
@@ -774,7 +778,9 @@ def _dur(secs: float) -> str:
 
 # --- voice ---------------------------------------------------------------------------------------------------------
 P = r"(?:the |my )?(?:3d )?printer"
-STATUS = re.compile(rf"^(?:how'?s|how is|check(?: on)?|what'?s|what is) (?:the |my )?(?:3d )?(?:printer|print)(?: doing| status)?$|"
+STATUS = re.compile(rf"^(?:how'?s|how is|check(?: on)?|what'?s|what is) (?:the |my )?(?:3d )?(?:printer|print|printing)"
+                    rf"(?: doing| status| going| coming along| getting on| looking| progress)?$|"
+                    rf"^(?:how far (?:along )?is|how much (?:is )?(?:done|left) (?:on|in)) (?:the |my )?print$|"
                     rf"^{P} status$|^is the print (?:done|finished|going|ok)$|^how (?:long|much) (?:is )?left on the print$")
 PREHEAT = re.compile(rf"^(?:please )?(?:pre ?heat|warm up|heat up|heat)(?: up)? {P}(?: for (?P<mat>pla|petg|abs|tpu))?$")
 COOL = re.compile(rf"^(?:please )?(?:cool down|turn off the heaters? on|cool) {P}$|^cool down$")
