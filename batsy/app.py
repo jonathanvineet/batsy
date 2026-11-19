@@ -196,6 +196,12 @@ class Batsy:
             vault.start(self)  # Batsy Brain: the Obsidian vault in ~/Batsy/Brain
         except Exception:
             log.exception("brain didn't start")
+        try:
+            from batsy import research
+
+            research.configure(self.cfg)  # research topics: kept apart, written into the brain
+        except Exception:
+            log.exception("research didn't start")
         from batsy import discover
 
         discover.start(self)  # the weekly Batsy Discovery playlist
@@ -880,6 +886,13 @@ class Batsy:
             return True
         if self._self_command(n):
             return True
+        from batsy import research_talk
+
+        said = research_talk.handle(self, n, text)  # research words ("research", "papers", "notes"...): understood first
+        if said:
+            self._route = "instant"
+            self._reply(said)
+            return True
         from batsy import vault_talk
 
         said = vault_talk.handle(self, n, text)  # the brain: "note that…", "what did I do yesterday", "open my brain"
@@ -1114,6 +1127,14 @@ class Batsy:
         if hit:
             self._run_skill(hit[0], hit[1], text)
             return True
+        from batsy import research
+
+        if research.active():  # nothing else took it and a research is on: is it about the research? (local AI)
+            said = research_talk.handle(self, n, text, explicit=False)
+            if said:
+                self._route = "instant"
+                self._reply(said)
+                return True
         return False
 
     # --- voice loop -------------------------------------------------------

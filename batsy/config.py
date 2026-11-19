@@ -49,6 +49,10 @@ DEFAULTS = {
         "keep_tool_results": 3,        # ...but keep the most recent few
         "cache_ttl": "1h",             # voice use is bursty; a 1h cache survives the gaps between questions
     },
+    "research": {
+        "active_hours": 2,               # after "start / switch to a research", talk goes to it for this long
+        "embed_model": "nomic-embed-text",  # on the HP: filing notes and files into the right research
+    },
     "memory": {
         "recent_exchanges": 6,     # last N back-and-forths sent with each request
         "recent_minutes": 180,     # ...if they happened within this window

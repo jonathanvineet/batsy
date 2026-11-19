@@ -319,6 +319,23 @@ class Inbox:
         if first.suffix.lower() in docs.SUPPORTED:  # "summarise what I just sent" / "circle the dates in it"
             brain.last_doc = (first, time.time())
             threading.Thread(target=self._learn, args=(first,), daemon=True).start()
+        if any(p.suffix.lower() in docs.SUPPORTED for p in files):
+            # documents: read every one, work out what it is, file research material into the right research, and
+            # show back what was understood (instead of just "you sent X, want me to open it?")
+            self.app.projects.pending = {"kind": "open", "files": [str(p) for p in files], "until": time.time() + 300}
+            brain.note_announcement(self._describe(files))
+
+            def understand():
+                self._wait_quiet()
+                from batsy import research
+
+                try:
+                    research.understand_batch(self.app, files)
+                except Exception:
+                    log.exception("understanding the files")
+                    self.app.announce(self._describe(files, spoken=True) + ".")
+            threading.Thread(target=understand, daemon=True, name="understand-files").start()
+            return
         spoken = self._describe(files, spoken=True)
         question = spoken + (". Want me to open it?" if len(files) == 1 else ". Want me to open the first one?")
         brain.note_announcement(self._describe(files))  # full names, so the AI knows what you mean by "that file"

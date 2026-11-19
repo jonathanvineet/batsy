@@ -452,6 +452,11 @@ def main() -> None:
         Config.load()
         printagent.cli(sys.argv[2:])
         return
+    if len(sys.argv) > 1 and sys.argv[1] == "research":  # `batsy research fetch|add-finding|...`: the research tool
+        from batsy import research
+
+        research.cli(sys.argv[2:])
+        return
     if len(sys.argv) > 1 and sys.argv[1] == "3d":  # `batsy 3d ...`: drive the 3D viewer (used by Claude Code)
         import json
 

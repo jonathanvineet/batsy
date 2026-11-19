@@ -310,6 +310,72 @@ def _num(s: str) -> float | None:
         return None
 
 
+# --- money: "what is 35k euros in INR", "how much is 200 dollars in rupees" (live rates, no AI) ------------------------
+CURRENCY = {"eur": ("euro", "euros?|eur|€"), "usd": ("dollar", "(?:us |american )?dollars?|usd|bucks|\\$"),
+            "inr": ("rupee", "(?:indian )?rupees?|inr|rs|₹"), "gbp": ("pound", "pounds?(?: sterling)?|gbp|quid|£"),
+            "jpy": ("yen", "yen|jpy"), "aed": ("dirham", "dirhams?|aed"), "cny": ("yuan", "yuan|rmb|cny|renminbi"),
+            "sgd": ("Singapore dollar", "singapore dollars?|sgd"), "aud": ("Australian dollar", "australian dollars?|aud"),
+            "cad": ("Canadian dollar", "canadian dollars?|cad"), "chf": ("Swiss franc", "swiss francs?|francs?|chf"),
+            "sar": ("riyal", "riyals?|sar"), "myr": ("ringgit", "ringgits?|myr"), "krw": ("won", "won|krw"),
+            "lkr": ("Sri Lankan rupee", "sri lankan rupees?|lkr")}
+_CUR = "|".join(f"(?:{v[1]})" for v in sorted(CURRENCY.values(), key=lambda x: -len(x[1])))
+_rates: dict[str, tuple[float, dict]] = {}
+
+
+def _cur(word: str) -> str | None:
+    return next((code for code, (_, rx) in CURRENCY.items() if re.fullmatch(rx, word.strip())), None)
+
+
+def _amount(s: str) -> float | None:
+    """'35k', '35 k', 'thirty five thousand', '1.2 million', '2 lakh', '1.5 crore' -> the number."""
+    s = s.strip().replace(",", "")
+    mult = 1.0
+    for word, k in (("k", 1e3), ("thousand", 1e3), ("lakh", 1e5), ("lakhs", 1e5), ("lac", 1e5), ("million", 1e6),
+                    ("crore", 1e7), ("crores", 1e7), ("billion", 1e9), ("m", 1e6), ("bn", 1e9)):
+        if re.search(rf"(?<=[\d ]){word}$", s) or s.endswith(" " + word):
+            s, mult = s[: -len(word)].strip(), k
+            break
+    v = _num(s) if not re.fullmatch(r"[\d.]+", s) else float(s)
+    return v * mult if v is not None else None
+
+
+def _rate(src: str, dst: str) -> float | None:
+    cached = _rates.get(src)
+    if not cached or time.time() - cached[0] > 6 * 3600:
+        try:
+            with urllib.request.urlopen(f"https://open.er-api.com/v6/latest/{src.upper()}", timeout=8) as r:
+                _rates[src] = (time.time(), json.loads(r.read())["rates"])
+        except Exception as e:
+            log.info("exchange rate: %s", e)
+            return None
+    return _rates[src][1].get(dst.upper())
+
+
+def _money(v: float, code: str) -> str:
+    name = CURRENCY[code][0]
+    if code == "inr" and v >= 1e5:  # the way you'd say it: 35.9 lakh, 1.2 crore
+        big = f"{v / 1e7:.2f}".rstrip("0").rstrip(".") + " crore" if v >= 1e7 else f"{v / 1e5:.2f}".rstrip("0").rstrip(".") + " lakh"
+        return f"{big} rupees"
+    shown = f"{v:,.0f}" if v >= 100 or v == int(v) else f"{v:,.2f}"
+    return f"{shown} {name}{'' if shown in ('1', '1.00') or name.endswith('s') or code in ('jpy', 'krw') else 's'}"
+
+
+@handles(rf"(?:what(?:'s| is| are)|how much (?:is|are)|convert|change)? ?(?P<amt>[0-9a-z .]+?) ?(?P<src>{_CUR}) "
+         rf"(?:in|to|into|as) (?:(?:uh|um|er) )*(?P<dst>{_CUR})")
+def _currency(app, m, text):
+    src, dst = _cur(m["src"]), _cur(m["dst"])
+    amt = _amount(re.sub(r"\b(?:uh|um|er|about|around|like)\b", " ", m["amt"]).strip())
+    if not (src and dst and amt) or src == dst:
+        return None
+    rate = _rate(src, dst)
+    if rate is None:
+        return "I couldn't get today's exchange rate. Check your internet and ask again."
+    out = amt * rate
+    exact = f" ({out:,.0f} {dst.upper()})" if dst == "inr" and out >= 1e5 else ""
+    shown_rate = f"{rate:,.2f}" if rate >= 1 else f"{rate:.4g}"
+    return f"{_money(amt, src)} is about {_money(out, dst)}{exact}, at {shown_rate} per {CURRENCY[src][0]}."
+
+
 def _fmt(v: float) -> str:
     return f"{v:,.0f}" if abs(v) >= 1000 else f"{v:.3g}" if abs(v) < 10 else f"{v:.1f}".rstrip("0").rstrip(".")
 

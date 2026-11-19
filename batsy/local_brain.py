@@ -563,6 +563,14 @@ class LocalBrain:
                     actions.append(f"learned skill {out['name']}")
             return self._finish(source, text, spoken, actions, abort)
 
+        from batsy import research, research_talk
+
+        if research.active() and research_talk.is_talk(text) and not ASK_CLAUDE.match(text.strip(" .!?")):
+            self.route = "research"  # a research is on: think it through together (local AI; Claude when asked)
+            self.status("Thinking about your research")
+            if research_talk.talk(getattr(self, "app", None), text, emit, abort):
+                return self._finish(source, text, spoken, actions, abort)
+
         self.route = "claude"
         followup = time.time() - getattr(self, "last_claude_t", 0) < 180  # "not apache, the batsy folder": same job
         if self.claude_ok and (is_complex(text) or followup):

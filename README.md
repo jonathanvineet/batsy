@@ -351,6 +351,38 @@ The Android app (version 4.0+) asks for the microphone the first time. The iPhon
 
 `batsy vault seed | search WORDS | daily [DATE] | weekly [DATE] | sync | open` · settings under `[vault]` (`path`, `capture = "all" | "important" | "off"`, `git`, `git_remote`, `git_every_min`).
 
+## Research assistant
+
+Several research topics at once, kept apart, all written into your Obsidian brain by Batsy (`~/Batsy/Brain/08 Research/<Name>/`). You never write there yourself.
+
+- **Just say it.** The local AI works out what you mean, so there's no list of phrases to learn:
+  - "I want to start a research" (Batsy asks what it's about), "can we look into how bats fly"
+  - "switch to my drone research", "what research am I doing?"
+  - "note: …", "what did we find about cooling?", "what are the open questions?", "what should I read next?"
+  - "find papers on …", then "keep the second one"; "summarise it"
+- **While a research is on** (for 2 hours after you last touched it), anything you say that isn't a normal command is a conversation about it. The local AI acts as a thinking partner:
+  - it asks what you mean and points out assumptions
+  - it gives the strongest counter-argument, offers another angle, and suggests a next step
+  - it uses your own notes and sources, saying which one
+  - questions that aren't about the research ("what's 35k euros in INR?") still go to the normal commands.
+- **Files you send** (Tailscale or the upload page) are read and understood:
+  - Batsy reads every page: PDFs, docx, text, and photos and scans by OCR.
+  - It works out what each file is and files research material into the right research. If it can't tell, it asks which one; for a new topic it asks "start a research on it?".
+  - It tells you what it understood, out loud, on a laptop card and on the phone.
+- **Papers** come from OpenAlex (free, about 250M works, citation counts), arXiv, and Semantic Scholar as a backup. "Keep the second one" saves it, and Batsy downloads the open-access PDF and reads it.
+- **Claude only when you ask:** "think hard about this", "go deeper", "find other ways", "challenge this".
+  - Claude only *finds* the documents and hands them to Batsy (`batsy research fetch`).
+  - Batsy downloads them and **reads and understands every one itself** with the local AI, writing a Source note for each: what it is, key points, how it relates to your question. The full text is kept, so later questions use all of it.
+  - These deep dives are the only part that uses credits.
+- **In each research folder:**
+  - the hub note: question, living summary, findings, open questions, ideas, next steps, sources, log
+  - `Notes/`: your words plus a clean version
+  - `Sources/`: one note per paper or document
+  - `Files/`: the PDFs and pages themselves
+  - `Conversations/`: written after 5 quiet minutes, with what was discussed, ideas, decisions and new questions, which also go onto the hub
+- **Filing notes and files into the right research** uses `nomic-embed-text` on the HP (meaning, not just words). When the HP is off, it falls back to word matching.
+- `batsy research list|show|search|papers|fetch|add-finding|add-note`: the same, from a terminal. It's also Claude's tool.
+
 ## Reminders (no tokens)
 
 - "Remind me in 20 minutes to take the print off the bed" · "remind me at 5 pm to call mom" · "remind me tomorrow at 9 to submit the DBMS assignment" · "remind me on Friday at 4:30 to push the code" · "remind me tonight to charge the batteries" · "remind me at half past five to eat" · "set a reminder for 7 to go to the gym"
