@@ -253,7 +253,11 @@ def _weather(app, m, text):
 def _weather_anyhow(app, n: str) -> str | None:
     """Any sentence about the weather, however it came out of speech-to-text: "what will the we what will be the
     weather tomorrow", "do i need an umbrella in london"."""
-    if not re.search(r"\b(weather|forecast|rain|raining|rainy|umbrella|sunny|cloudy|snow|snowing)\b", n):
+    strong = re.search(r"\b(weather|forecast|umbrella)\b", n)
+    weak = re.search(r"\b(rain|raining|rainy|sunny|cloudy|snow|snowing)\b", n)
+    # "sunny" alone only in a short weather question ("is it sunny", "will it rain tomorrow"), not "how much does the
+    # panel heat up on a sunny day" (that's a question about panels)
+    if not strong and not (weak and len(n.split()) <= 7 and re.match(r"(?:is|will|does|do|should|gonna|going to|it'?s)\b", n)):
         return None
     if re.search(r"\b(screensaver|screen saver|widget|add|remove)\b", n):  # "add the weather to the screensaver"
         return None

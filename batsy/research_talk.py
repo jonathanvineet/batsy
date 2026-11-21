@@ -23,6 +23,10 @@ DEEP = re.compile(r"\b(?:think (?:hard|deeply|deeper|harder|it through properly)
                   r"(?:find|look for|other|different) (?:me )?(?:other |different )?(?:ways|angles|approaches)|"
                   r"research (?:this|that|it) (?:properly|thoroughly|in depth)|challenge (?:this|that|me|it)|"
                   r"ask claude|properly research)\b")
+ACKS = re.compile(r"(?:okay|ok|alright|all right|right|sure|cool|got it|thanks|thank you|hmm+|mm+|yeah|yes|no|nope|"
+                  r"fine|great|nice|good)(?: batsy)?")
+STARTY = re.compile(r"\b(?:start|begin|new|create|open up|set up|look into|dig into|investigate|explore|research|"
+                    r"study|learn about|find out about)\b")
 ORDINAL = re.compile(r"\b(?:first|second|third|fourth|fifth|1st|2nd|3rd|4th|5th|number (?:one|two|three|four|five|\d)|"
                      r"(?:the )?(?:one|two|three|four|five|\d)(?: one)?$|last one|top one)\b")
 ORD = {"first": 0, "1st": 0, "one": 0, "second": 1, "2nd": 1, "two": 1, "third": 2, "3rd": 2, "three": 2,
@@ -82,7 +86,8 @@ def intent(text: str) -> dict:
                                 if _found["items"] and time.time() - _found["t"] < 900 else "")
                              + (f"Just now: I asked him {pending.get('kind')}. " if pending else "")
                              + f"\nHe said: {text}")}],
-            "options": {"temperature": 0, "num_predict": 80, "num_ctx": 2048}}
+            "options": {"temperature": 0, "num_predict": 80, "num_ctx": 4096}}  # the same size as every other call:
+    # a different num_ctx makes Ollama reload the model
     try:
         with llm_hosts.live(), llm_hosts.open_chat(cfg, body, timeout=60) as r:
             j = json.loads(json.loads(r.read())["message"]["content"])
@@ -102,6 +107,9 @@ def handle(app, n: str, raw: str, explicit: bool = True) -> str | None:
     active = research.active()
     # explicit (early in Batsy's chain): only sentences with research words. Otherwise (the end of the chain, after
     # every instant command had its go): anything, while a research is on.
+    if ACKS.fullmatch(n.strip()):
+        last_intent.update(text=raw or n, action="none", t=time.time())  # "okay", "right": not a thought to discuss
+        return None
     picking = bool(_found["items"] and time.time() - _found["t"] < 900 and ORDINAL.search(n))
     if not (MAYBE.search(n) or picking):
         if explicit or not active:
@@ -115,6 +123,8 @@ def handle(app, n: str, raw: str, explicit: bool = True) -> str | None:
         a = "talk"  # "I think water cooling would help" is an idea, not "spend Claude credits on it"
     if a == "save_paper" and not picking:
         a = "talk"  # "would the pump use more power" is not "save number 2"
+    if a == "start" and not STARTY.search(n):
+        a = "talk" if active else "none"  # a stray "Okay." once started an (empty) duplicate research
     last_intent.update(text=raw or n, action=a, t=time.time())
     if a in ("none", "talk") or (a not in ("start", "list", "switch", "about", "find_papers") and not active
                                  and not research.all_research()):
@@ -126,6 +136,10 @@ def handle(app, n: str, raw: str, explicit: bool = True) -> str | None:
         if not topic:
             pending.update(kind="topic", t=time.time())
             return "Sure. What's the research about?"
+        same = research.find(topic)
+        if same and _close(topic, same["name"]):  # already have it: open that one instead of a second copy
+            research.set_active(same["id"])
+            return f"You already have {same['name']}, so I've opened it. " + _brief(same)
         r = research.create(topic)
         return f"Started your research on {r['name']}. Talk to me about it, or send me papers and notes."
     if a == "list":
@@ -261,9 +275,9 @@ with the research he's on, what it has so far, and his relevant notes and source
 don't lecture: in 2-4 short spoken sentences, do one or two of these, whichever \
 helps most right now: ask what exactly he means; point out an assumption; give the strongest counter-argument; offer \
 another angle or an analogy from a different field; say what evidence would change his mind; suggest a concrete next \
-step or experiment. Use his notes and sources below when they're relevant and say which one ("your note on…", "the \
-Vanderelst paper…"). Never invent sources, numbers or quotes; if you don't know, say so and suggest finding papers. \
-No lists or markdown."""
+step or experiment. Use his notes and sources from the brackets when they're relevant and say which one, by the title given \
+there. Only ever mention a note or source that is in the brackets; never invent sources, notes, authors, numbers or \
+quotes. If you don't know, say so and suggest finding papers. No lists or markdown."""
 
 
 def talk(app, text: str, emit, abort) -> bool:
@@ -276,8 +290,8 @@ def talk(app, text: str, emit, abort) -> bool:
     if not r:
         return False
     research.touch(r["id"])
-    hits = research.retrieve(r["id"], text, k=5)
-    items = "\n".join(f"- [{h['kind']}] {h['title']}: {(h['text'] or '')[:300]}" for h in hits) or "(nothing yet)"
+    hits = research.retrieve(r["id"], text, k=3)  # the 3 that matter most, kept short: the HP reads every word
+    items = "\n".join(f"- [{h['kind']}] {h['title']}: {(h['text'] or '')[:220]}" for h in hits) or "(nothing yet)"
     summary = (research.vault.get_block(research.hub(r), "summary") or "").strip() if research.hub(r).exists() else ""
     cfg = research._cfg
     recent = [t for t in _turns if t[1] == r["id"] and time.time() - t[0] < 1800][-4:]
@@ -286,7 +300,7 @@ def talk(app, text: str, emit, abort) -> bool:
         messages += [{"role": "user", "content": you}, {"role": "assistant", "content": said}]
     messages.append({"role": "user", "content": (
         f"[The research: \"{r['name']}\" (question: {r.get('question') or r['name']})\n"
-        f"So far: {summary[:1000] or '(no summary yet)'}\nRelevant notes and sources:\n{items[:2200]}]\n\n{text}")})
+        f"So far: {summary[:500] or '(no summary yet)'}\nRelevant notes and sources:\n{items[:900]}]\n\n{text}")})
     body = {"model": cfg.get("local.model"), "stream": True, "keep_alive": cfg.get("local.keep_alive"),
             "messages": messages, "options": {"num_ctx": 4096, "temperature": 0.7, "num_predict": 160}}
     out = []
@@ -463,6 +477,12 @@ def _from_block(r: dict, block: str, empty: str, label: str) -> str:
     body = (vault.get_block(research.hub(r), block) or "").strip() if research.hub(r).exists() else ""
     lines = [x.lstrip("- ").strip() for x in body.splitlines() if x.strip().startswith("-")]
     return f"{label}: " + "; ".join(lines[:4]) + "." if lines else empty
+
+
+def _close(a: str, b: str) -> bool:
+    from rapidfuzz import fuzz
+
+    return fuzz.token_set_ratio(a.lower(), b.lower()) >= 80
 
 
 def _first(text: str, n: int = 220) -> str:

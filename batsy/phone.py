@@ -229,6 +229,10 @@ class Hub:
             me = json.loads(out).get("Self", {})
             name = (me.get("DNSName") or "").rstrip(".")
             ip = (me.get("TailscaleIPs") or [""])[0]
+            serve = subprocess.run(["tailscale", "serve", "status", "--json"], capture_output=True, text=True,
+                                   timeout=5).stdout
+            if name and '"443"' in serve:  # `tailscale serve` gives Batsy a secure https address: the phone's mic
+                return f"https://{name}"   # only works on https (or USB), so that's the one to use away from home
             host = ip or name  # the address: a name needs Tailscale's DNS on the phone ("unknown host" without it)
             return f"http://{host}:{self.port}" if host else ""
         except (OSError, ValueError, subprocess.TimeoutExpired):
@@ -454,7 +458,9 @@ class Hub:
                 aloud = body.get("speak")  # said into the phone's mic: answered out loud from the laptop
                 self.app.run_turn(text, "phone", lambda s: (said.append(s), self.app.speaker.say(s) if aloud else None,
                                                             self.app.overlay.say(s)),
-                                  threading.Event(), lambda q: False)
+                                  threading.Event(), self.app.ask_from_background)
+                # (a check like "Just to check, you want me to …?" is asked on the phone, full screen, and out loud:
+                # answer yes / no from the phone or the laptop. It used to be "no" at once, so nothing happened.)
             return {"ok": True, "say": " ".join(said) or "Done."}
         return {"ok": False, "say": f"Unknown action {action}"}
 

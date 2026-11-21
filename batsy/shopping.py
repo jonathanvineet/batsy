@@ -547,8 +547,10 @@ SHOP = [re.compile(p) for p in (
     r"^(?:can you |please )?(?:compare|check) (?:the )?prices? (?:of|for|on) (?:an? |the )?(?P<q>.+)$",
     r"^(?:what(?:'s| is)|whats|find|check|get|tell me|show me) (?:the )?(?:best |lowest |cheapest |current )?"
     r"(?:price|prices|cost) (?:of|for) (?:an? |the )?(?P<q>.+)$",
-    r"^how much (?:is|are|does|do|for|would) (?:an? |the |one )?(?P<q>.+?)(?: cost| costs| go for| sell for)?"
+    r"^how much (?:is|are|for|would) (?:an? |the |one )?(?P<q>.+?)(?: cost| costs| go for| sell for)?"
     r"(?: online| in india| right now| now)?$",
+    # "how much does X cost" is a price; "how much does the panel heat up" is not
+    r"^how much (?:does|do) (?:an? |the |one )?(?P<q>.+?) (?:cost|costs|go for|sell for)(?: online| in india| right now| now)?$",
     r"^where (?:can i|should i|do i|to|could i) (?:buy|get|order) (?:an? |the |some )?(?P<q>.+?)(?: from| online| cheap| cheapest)?$",
     r"^(?:find|search|look) (?:for )?(?:me )?(?:an? |the |some )?(?P<q>.+?) (?:on|in|across|from) (?:amazon|flipkart|robu|"
     r"online|the internet|websites|shopping sites|all (?:the )?sites|every (?:site|website|store)|stores)(?: .*)?$",

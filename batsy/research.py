@@ -70,6 +70,24 @@ def _setup() -> None:
             _active.update(json.loads(row[0]))
         except ValueError:
             pass
+    threading.Thread(target=_warm, daemon=True, name="research-warm").start()
+
+
+def _warm() -> None:
+    """Read the research prompts into the HP's cache once, at start, in the background: the first "start a research"
+    after a restart took two minutes while the AI read them cold."""
+    from batsy import llm_hosts, research_talk
+    from batsy.local_brain import who
+
+    time.sleep(60)  # after Batsy's own start-up work
+    for system in (research_talk.INTENT, research_talk.PARTNER.format(**who(_cfg))):
+        try:
+            llm_hosts.background_chat(_cfg, {"model": _cfg.get("local.model"), "keep_alive": _cfg.get("local.keep_alive"),
+                                             "messages": [{"role": "system", "content": system},
+                                                          {"role": "user", "content": "hi"}],
+                                             "options": {"num_predict": 1, "num_ctx": 4096}})
+        except Exception as e:
+            log.debug("research warm-up: %s", e)
 
 
 def all_research() -> list[dict]:
