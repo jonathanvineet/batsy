@@ -758,9 +758,23 @@ def _handler(inbox: "Inbox"):
 
         def do_GET(self):
             who = self._sender()
-            if who:
-                page = PAGE.replace("{who}", html.escape("there" if who == inbox.mine else who))
-                self._reply(200, page.replace("{me}", html.escape(inbox.mine)), "text/html; charset=utf-8")
+            if not who:
+                return
+            from batsy import webdrive
+
+            if webdrive.handle(self, who, inbox, "GET"):  # Batsy Drive: their PC drive + what they sent, nobody else's
+                return
+            page = PAGE.replace("{who}", html.escape("there" if who == inbox.mine else who))
+            self._reply(200, page.replace("{me}", html.escape(inbox.mine)), "text/html; charset=utf-8")
+
+        def do_POST(self):
+            who = self._sender()
+            if not who:
+                return
+            from batsy import webdrive
+
+            if not webdrive.handle(self, who, inbox, "POST"):
+                self._reply(404, "No such thing.\n")
 
         def do_PUT(self):
             who = self._sender()

@@ -314,6 +314,31 @@ def _num(s: str) -> float | None:
         return None
 
 
+# --- "are you reading the PDF?", "what are you doing?": from what Batsy is actually doing right now -----------------
+@handles(r"(?:what are you|what're you|whatcha) (?:doing|working on|up to|busy with)(?: now| right now)?",
+         r"are you (?:still )?(?:reading|doing|working on|busy|done|finished|thinking|slicing|writing|done with)(?: .*)?",
+         r"(?:is|are) (?:it|that|the \w+(?: \w+)?) (?:done|finished|ready)(?: yet)?", r"how far (?:along )?are you(?: .*)?",
+         r"what'?s (?:taking|happening)(?: so long)?")
+def _what_im_doing(app, m, text):
+    from batsy import activity
+
+    snap = activity.snapshot()
+    busy = [a for a in snap["agents"] if a.get("kind") not in ("monitor",)]
+    if not busy:
+        done = snap.get("done") or []
+        return (f"Nothing right now. I last finished: {done[0]['result'] or done[0]['label']}." if done
+                else "Nothing right now.")
+    def one(a):
+        mins = a["secs"] // 60
+        took = f"{mins} minute{'s' if mins != 1 else ''}" if mins else f"{a['secs']} seconds"
+        step = f": {a['step'][0].lower() + a['step'][1:]}" if a.get("step") else ""
+        pct = f", about {int(a['pct'])} percent" if a.get("pct") else ""
+        return f"{a['label']}{step}{pct} ({took} so far)"
+    lead = "Not yet. " if re.search(r"\b(?:done|finished|ready)\b", m.string) else "Yes. " if re.match(r"are you", m.string) else ""
+    return lead + "I'm " + "; and ".join(
+        one(a)[0].lower() + one(a)[1:] for a in busy[:3]) + "."
+
+
 # --- money: "what is 35k euros in INR", "how much is 200 dollars in rupees" (live rates, no AI) ------------------------
 CURRENCY = {"eur": ("euro", "euros?|eur|€"), "usd": ("dollar", "(?:us |american )?dollars?|usd|bucks|\\$"),
             "inr": ("rupee", "(?:indian )?rupees?|inr|rs|₹"), "gbp": ("pound", "pounds?(?: sterling)?|gbp|quid|£"),
@@ -840,6 +865,27 @@ def _as_todo(what: str) -> tuple[dt.date, str] | None:
     day = dt.date.today() + dt.timedelta(days=1 if re.search(r"\btomorrow\b", what, re.I) else 0)
     task = DAYWORD.sub("", TASKY.sub("", what, count=1)).strip(" ,.")
     return (day, task[:1].upper() + task[1:]) if len(task.split()) >= 2 else None
+
+
+# "remind (me) that I have to add a mail connector to you" with no time: a to-do for today, under the clock.
+# (With a time, "remind me at 5 to…" / "in 10 minutes", it's a real reminder: left for the reminder handler.)
+@handles(r"(?:[a-z]+ )?remind(?: me)?(?: that| to| about| of)? (.{6,})")
+def _remind_todo(app, m, text):
+    what = m.group(1).strip()
+    if re.search(r"\b(?:at|in|after|before|by|on|every|tomorrow|tonight|morning|evening|afternoon)\b.*"
+                 r"\b(?:\d|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|half|o'?clock|pm|am|minutes?|"
+                 r"hours?|morning|evening|night)\b", what) or re.match(r"(?:me )?(?:at|in) ", what):
+        return None  # a time: the reminder handler sets a real reminder
+    raw = re.search(r"(?i)\bremind(?: me)?(?: that| to| about| of)?\s+(.+)", text)
+    what = _clean_note(raw.group(1).strip().rstrip(".") if raw else what)
+    task = DAYWORD.sub("", TASKY.sub("", what, count=1)).strip(" ,.")
+    task = (task[:1].upper() + task[1:]) or what
+    day = dt.date.today() + dt.timedelta(days=1 if re.search(r"\btomorrow\b", what, re.I) else 0)
+    from batsy.memory_store import get_store
+
+    get_store().add_agenda(day.isoformat(), task)
+    _last_note.update(text=what, t=time.time(), todo=True)
+    return f"Got it. It's under the clock for {'today' if day == dt.date.today() else 'tomorrow'}: {task}."
 
 
 # "put that under the clock" (heard as "under my timer, a chick clock" too), "add that to my to-do"

@@ -12,6 +12,7 @@ import datetime as dt
 import json
 import logging
 import re
+import subprocess
 import threading
 import time
 
@@ -22,10 +23,12 @@ log = logging.getLogger("batsy.research")
 DEEP = re.compile(r"\b(?:think (?:hard|deeply|deeper|harder|it through properly)|go deeper|dig deeper|deep dive|"
                   r"(?:find|look for|other|different) (?:me )?(?:other |different )?(?:ways|angles|approaches)|"
                   r"research (?:this|that|it) (?:properly|thoroughly|in depth)|challenge (?:this|that|me|it)|"
-                  r"ask claude|properly research)\b")
+                  r"ask claude|properly research|find out(?: more)?(?: about)?|look (?:it|this|that) up|learn (?:more )?about|"
+                  r"understand (?:it|this|that|the project)|ask (?:chatgpt|chat gpt|reddit|the internet)|search reddit)\b")
+REPORTY = re.compile(r"\b(?:report|write ?-?up|document|doc|summary|paper|essay|pdf|brief|overview|presentation)\b")
 ACKS = re.compile(r"(?:okay|ok|alright|all right|right|sure|cool|got it|thanks|thank you|hmm+|mm+|yeah|yes|no|nope|"
                   r"fine|great|nice|good)(?: batsy)?")
-STARTY = re.compile(r"\b(?:start|begin|new|create|open up|set up|look into|dig into|investigate|explore|research|"
+STARTY = re.compile(r"\b(?:start(?:ed)?|begin|new|create|open up|set up|look into|dig into|investigate|explore|research|"
                     r"study|learn about|find out about)\b")
 ORDINAL = re.compile(r"\b(?:first|second|third|fourth|fifth|1st|2nd|3rd|4th|5th|number (?:one|two|three|four|five|\d)|"
                      r"(?:the )?(?:one|two|three|four|five|\d)(?: one)?$|last one|top one)\b")
@@ -42,7 +45,7 @@ _closer = None
 # --- understanding what he means (the local AI, not a list of phrases) ----------------------------------------------
 # Only worth asking the AI when it could be about research at all; everything else goes straight on to the rest of
 # Batsy (lights, music, the printer...), so they stay instant.
-MAYBE = re.compile(r"\b(?:research\w*|stud(?:y|ies|ying)|papers?|articles?|literature|sources?|thesis|hypothes\w+|"
+MAYBE = re.compile(r"\b(?:research\w*|report|write ?-?up|stud(?:y|ies|ying)|papers?|articles?|literature|sources?|thesis|hypothes\w+|"
                    r"look into|dig into|investigat\w+|explor\w+|find out about|learn about|read up|deep dive|"
                    r"notes?|topic|summari[sz]e|open questions?|think (?:hard|deeper)|go deeper)\b")
 INTENT = """You understand what Jonathan says to his research assistant (speech-to-text: guess sensibly at misheard \
@@ -58,12 +61,15 @@ action is one of:
 - "know": what do we already know / what do the notes say about something. query = it.
 - "questions": the open questions.   - "next": what to do or read next.   - "summarise": a fresh summary.
 - "deep": think hard / go deeper / find other ways / research it properly / challenge it.
+- "report": write up the research as a report / document / write-up / summary to read or share. research = which.
+- "rename": give a research a new name. research = which one (its current name), text = the new name.
 - "stop": put the research away / done for now.
 - "talk": he's thinking aloud or discussing the research he's on (an idea, a question, a doubt).
 - "none": not about his research at all (music, lights, printer, time, weather, files, chat about something else).
 Examples: "I want to start a research" -> start, topic "". "can we look into how bats fly" -> start (or switch if he \
 has it). "keep the second one" / "save number 3" after papers were read out -> save_paper, n 2 / 3. "what did we find \
-about cooling" -> know. "maybe water cooling would help" while on a research -> talk. "play some music" -> none."""
+about cooling" -> know. "maybe water cooling would help" while on a research -> talk. "prepare a report on the gold project" -> report, \
+research = the gold one. "play some music" -> none."""
 
 
 def is_talk(text: str) -> bool:
@@ -114,8 +120,14 @@ def handle(app, n: str, raw: str, explicit: bool = True) -> str | None:
     if not (MAYBE.search(n) or picking):
         if explicit or not active:
             return None
-        last_intent.update(text=raw or n, action="talk", t=time.time())  # no research words: just talking it through
-        return None
+        rel = research.relevance(active["id"], raw or n)
+        if rel is not None and rel >= 0.62:  # by meaning, it's about the research: talk it through
+            last_intent.update(text=raw or n, action="talk", t=time.time())
+            return None
+        if rel is not None and rel < 0.40:  # clearly something else ("remind me…", "what's on tonight")
+            last_intent.update(text=raw or n, action="none", t=time.time())
+            return None
+        # in between (or the HP is off): let the local AI decide below
     j = intent(raw or n)
     a = str(j.get("action") or "none")
     # the local AI proposes; things that cost something need the words to back it up
@@ -177,6 +189,40 @@ def handle(app, n: str, raw: str, explicit: bool = True) -> str | None:
         said: list[str] = []
         deep(app, r, raw or n, said.append)
         return " ".join(said) or "Okay."
+    if a == "report" and not REPORTY.search(n):
+        a = "talk"
+    if a == "report":
+        research.set_active(r["id"])
+
+        def run():
+            try:
+                out = research.write_report(r["id"], raw or n)
+                app.show_visual("card", f"Report ready | {r['name']}\n{out.name}\nIn your brain: 08 Research → Reports")
+                subprocess.Popen(["xdg-open", str(out)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                 start_new_session=True)
+                app.announce(f"Your report on {r['name']} is ready. I've opened it, and it's in your brain under "
+                             "Reports, with a PDF.")
+            except Exception as e:
+                log.warning("report: %s", e)
+                app.announce(f"I couldn't finish the report on {r['name']}.")
+        if research.needs_context(r["id"]):  # too little to write from: find out first, then write
+            said: list[str] = []
+            deep(app, r, f"Find out what this research is really about and the background needed to write a good "
+                         f"report on it ({raw or n})", said.append, then=run)
+            return ("There isn't enough in it yet to write a good report, so I'm finding out first: Claude is looking "
+                    "for papers, application notes and discussions, then I'll read them all and write the report. "
+                    "You can watch it in the cockpit.")
+        threading.Thread(target=run, daemon=True, name="research-report").start()
+        n_src = len(research.items(r["id"], "source"))
+        return (f"Writing a report on {r['name']} from its {n_src} source{'s' if n_src != 1 else ''} and your notes. "
+                "It takes a few minutes; you can watch it in the cockpit.")
+    if a == "rename":
+        m = NAME_IT.search(raw or n)
+        new = _clean_name(j.get("text") or (m.group("name") if m else ""))
+        if not new:
+            return "What should I call it?"
+        r2 = research.rename(r["id"], new)
+        return f"Renamed it to {r2['name']}."
     if a == "stop":
         research.set_active(None)
         close_session(force=True)
@@ -238,16 +284,18 @@ def _answer_pending(n: str, raw: str = "") -> str | None:
         r = research.create(topic)
         return f"Started your research on {r['name']}. Talk to me about it, or send me papers and notes."
     if pending["kind"] == "new":
-        yes = safety.answer(n)
+        named = NAME_IT.search(raw or n)
+        yes = True if (named or YESISH.match(n)) else safety.answer(n)
         if yes is None:
             return None
         meta, topic = pending["meta"], pending["topic"]
         pending.clear()
         if not yes:
             return "Okay, I'll leave it in your inbox."
-        r = research.create(topic)
-        research.add_source(r["id"], meta, meta.get("text", ""))
-        return f"Started {r['name']} with it."
+        name = _clean_name(named.group("name")) if named else topic
+        r = research.create(name, topic if named else "")
+        _read_in_full(r, meta)
+        return f"Started {r['name']}. I'm reading the whole document now and I'll tell you when I've understood it."
     if pending["kind"] == "which":
         options = [research.get(i) for i in pending["options"]]
         pick = None
@@ -264,9 +312,36 @@ def _answer_pending(n: str, raw: str = "") -> str | None:
             return None
         meta = pending["meta"]
         pending.clear()
-        research.add_source(pick["id"], meta, meta.get("text", ""))
-        return f"Filed under {pick['name']}."
+        _read_in_full(pick, meta)
+        return f"Filed under {pick['name']}. I'm reading it in full now."
     return None
+
+
+YESISH = re.compile(r"(?:yeah|yes|yep|yup|sure|ok|okay|go ahead|do it|start(?:ed)?(?: it)?|please|why not|of course)\b")
+NAME_IT = re.compile(r"(?i)\b(?:name|call|title)(?: the| this| that)?(?: research| it)?(?: as| to)?\s+(?P<name>[^.?!]{3,80})")
+
+
+def _clean_name(name: str) -> str:
+    name = re.sub(r"(?i)\b(?:uh+|um+|er+)\b[ ,]*", "", name)
+    return re.sub(r"\s+", " ", name).strip(" ,.'\"")
+
+
+def _read_in_full(r: dict, meta: dict) -> None:
+    """A file joining a research: read the WHOLE document (not just its first page), understand it against the
+    research question, keep its full text, then say what it's about."""
+    from pathlib import Path
+
+    def run():
+        app = research._app
+        try:
+            what = research.read_document(r, Path(meta["file"]), title=meta.get("title", ""), why=meta.get("what", ""))
+            if app:
+                app.announce(f"I've read {Path(meta['file']).name} in full for {r['name']}: {what}. "
+                             "Ask me anything about it.")
+        except Exception as e:
+            log.warning("reading %s in full: %s", meta.get("file"), e)
+            research.add_source(r["id"], meta, meta.get("text", ""))  # at least what was understood at first
+    threading.Thread(target=run, daemon=True, name="research-read").start()
 
 
 # --- the thinking partner (local AI) ---------------------------------------------------------------------------------
@@ -326,7 +401,7 @@ def talk(app, text: str, emit, abort) -> bool:
     return True
 
 
-def deep(app, r: dict, text: str, emit) -> None:
+def deep(app, r: dict, text: str, emit, then=None) -> None:
     """Claude (credits): reads the whole research, searches papers and the web, writes back into the research."""
     from batsy import claude_code
 
@@ -355,6 +430,9 @@ def deep(app, r: dict, text: str, emit) -> None:
         if read:
             app.announce(f"I've read {len(read)} document{'s' if len(read) != 1 else ''} for {r['name']}: "
                          + "; ".join(read[:5]) + ". They're in your brain with their key points.")
+            refresh_summary(app, r["id"], quiet=True)  # what it all adds up to, now that there's more
+        if then is not None:
+            then()
     threading.Thread(target=run, daemon=True, name="research-deep").start()
 
 
@@ -367,10 +445,15 @@ The talk so far:
 {recent}
 
 Your job is to FIND the documents, not to read them for him: Batsy reads and understands every document itself, on \
-his own computer. Search well (Google Scholar, Semantic Scholar, arXiv, OpenAlex, university pages, good technical \
-articles; WebSearch, and WebFetch only to check a page is the right one and to find its PDF link). Pick the 3-6 best \
-documents for his question: different angles, including the strongest counter-view, favouring PDFs and primary \
-sources. Hand each one to Batsy:
+his own computer. If it isn't clear what the research is really about (a project name and a datasheet, say), first \
+work out the most likely subject and context from what's there (what is that device used for? in what field?), and \
+find material that explains it. Search everywhere useful: papers (Google Scholar, Semantic Scholar, arXiv, \
+OpenAlex), manufacturer application notes and manuals, university and lab pages, good technical articles, forums \
+and Reddit threads where practitioners discuss it. (Batsy usually can't open Reddit itself, as Reddit blocks it: \
+if `batsy research fetch` refuses a Reddit link, read the thread yourself and add its useful points with \
+`batsy research add-finding "{name}" --kind finding "(Reddit, r/...) ..."`.) Use WebSearch, and WebFetch only to check a page is the right one and to find its PDF link. Pick the 3-6 best \
+documents for his question: the background he needs, different angles, the strongest counter-view, and what \
+practitioners actually say. Favour PDFs and primary sources, plus 1-2 good discussions. Hand each one to Batsy:
   batsy research fetch "{name}" "https://...pdf-or-page" --title "..." --why "one line: why this one"
 Then add the 2-5 most useful open questions or other approaches you noticed while searching:
   batsy research add-finding "{name}" --kind question|idea|next "one clear sentence"
@@ -433,7 +516,7 @@ def _write_conversation(rid: int, ts: list) -> None:
             research.add_finding(rid, kind, str(x))
 
 
-def refresh_summary(app, rid: int) -> None:
+def refresh_summary(app, rid: int, quiet: bool = False) -> None:
     """A fresh living summary from everything in the research (local AI)."""
     from batsy import vault
 
@@ -441,14 +524,16 @@ def refresh_summary(app, rid: int) -> None:
     its = research.items(rid, limit=40)
     material = "\n".join(f"- [{i['kind']}] {i['title']}: {(i['text'] or '')[:300]}" for i in its)
     if not material:
-        app.announce(f"{r['name']} is empty so far: there's nothing to summarise yet.")
+        if not quiet:
+            app.announce(f"{r['name']} is empty so far: there's nothing to summarise yet.")
         return
     text = research._ask(f"Write the living summary of Jonathan's research \"{r['name']}\" (question: {r.get('question')}): "
                          "one paragraph of 3-6 sentences on what's known so far, then a line 'Biggest gap:' with the most "
                          f"important open question. Only use this material:\n{material[:6000]}", 350)
     vault.submit(vault.set_block, research.hub(r), "summary", text.strip(), "Summary")
     threading.Thread(target=research._embed_research, args=(rid,), daemon=True).start()
-    app.announce(f"The {r['name']} summary is updated. " + text.strip().split("\n")[0][:300])
+    if not quiet:
+        app.announce(f"The {r['name']} summary is updated. " + text.strip().split("\n")[0][:300])
 
 
 # --- small helpers ----------------------------------------------------------------------------------------------------

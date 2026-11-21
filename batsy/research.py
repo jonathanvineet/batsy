@@ -32,6 +32,7 @@ EMBED_MODEL = "nomic-embed-text"
 _cfg = None
 _lock = threading.Lock()
 _active: dict = {"rid": None, "t": 0.0}
+_app = None  # set on the first batch of files (for announcing what was read)
 
 
 def configure(cfg) -> None:
@@ -386,6 +387,26 @@ def classify(text: str) -> tuple[dict | None, float, list[dict]]:
     return best, conf, runners
 
 
+def relevance(rid: int, text: str) -> float | None:
+    """How much is this sentence about that research? (0..1 cosine against the research and its closest items;
+    None when the HP's embeddings aren't there.)"""
+    import numpy as np
+
+    e = _embed([text])
+    if not e:
+        return None
+    q = np.frombuffer(_pack(e[0]), dtype="float32")
+    r = get(rid)
+    st = _store()
+    with st.lock:
+        vecs = [np.frombuffer(r["emb"], dtype="float32")] if r and r.get("emb") else []
+        vecs += [np.frombuffer(x[0], dtype="float32") for x in st.db.execute(
+            "SELECT emb FROM research_items WHERE rid = ? AND emb IS NOT NULL ORDER BY t DESC LIMIT 60", (rid,))]
+    if not vecs:
+        return None
+    return max(float(q @ v) for v in vecs)
+
+
 def retrieve(rid: int, query: str, k: int = 6) -> list[dict]:
     """The notes and sources of this research that matter for the question (embeddings + full text)."""
     import numpy as np
@@ -455,14 +476,50 @@ def understand(path: Path) -> dict:
     return out
 
 
+def rename(rid: int, name: str) -> dict:
+    """A new name: the record, the folder and the hub note (its links inside the research follow)."""
+    r = get(rid)
+    new = _title(name)
+    old_folder, old_hub = folder(r), hub(r)
+    st = _store()
+    with st.lock, st.db:
+        st.db.execute("UPDATE research SET name = ? WHERE id = ?", (new, rid))
+    r2 = get(rid)
+
+    def move():
+        if old_hub.exists():
+            old_hub.rename(old_folder / f"{vault.safe(new)}.md")
+        if old_folder.exists():
+            old_folder.rename(folder(r2))
+        for note in folder(r2).rglob("*.md"):  # research: "[[Old name]]" -> "[[New name]]"
+            text = vault.read(note)
+            fixed = text.replace(f"[[{vault.safe(r['name'])}]]", f"[[{vault.safe(new)}]]")
+            if note == hub(r2):
+                fixed = fixed.replace(f"# {r['name']}\n", f"# {new}\n", 1)
+            if fixed != text:
+                vault.write(note, fixed)
+    vault.submit(move)
+    return r2
+
+
 def understand_batch(app, files: list[Path]) -> None:
     """Read every file that arrived, file the research ones, and show what was understood (spoken, a laptop card,
     the phone's full-screen card). Asks when it can't tell which research, or when it looks like a new topic."""
     from batsy import research_talk
 
+    from batsy import activity
+
+    global _app
+    _app = app
     lines, cards, ask = [], [], None
-    for p in files:
-        u = understand(p)
+    with activity.agent(f"Looking at {len(files)} file{'s' if len(files) != 1 else ''} you sent", "batsy") as job:
+        us = []
+        for k, p in enumerate(files):
+            job.step(f"Reading {p.name}", 100 * k / max(1, len(files)))
+            us.append(understand(p))
+    for p, u in zip(files, us):
+        if re.match(r"(?:A|An|The|Your) ", u.get("what") or ""):  # "You sent a 2021 paper…", not "You sent A …"
+            u["what"] = u["what"][0].lower() + u["what"][1:]
         name = p.name
         if u["kind"] != "research":
             lines.append(f"{u['what'] or name}")
@@ -511,10 +568,21 @@ def fetch(r: dict, url: str, title: str = "", why: str = "") -> str:
 
     d = folder(r) / "Files"
     d.mkdir(parents=True, exist_ok=True)
+    name = vault.safe(title or Path(url.split("?")[0]).stem or "document")[:80]
+    if re.search(r"(?:^|\.)reddit\.com/", url):  # a Reddit thread: the post and its best comments, as text
+        try:
+            text = _reddit(url)
+        except Exception as e:  # Reddit blocks most automated reading without its API keys
+            raise SystemExit(f"Batsy can't open Reddit links ({e}). Read the thread yourself and add its useful points "
+                             f"with: batsy research add-finding \"{r['name']}\" --kind finding \"(Reddit, r/...) ...\"")
+        p = d / f"{name}.md"
+        p.write_text(f"Source: {url}\n\n" + text)
+        with open(_queue_file(), "a") as f:
+            f.write(json.dumps({"rid": r["id"], "path": str(p), "url": url, "title": title, "why": why}) + "\n")
+        return str(p)
     req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 (Batsy research assistant)"})
     with urllib.request.urlopen(req, timeout=45) as resp:
         data, ctype = resp.read(25_000_000), resp.headers.get("Content-Type", "")
-    name = vault.safe(title or Path(url.split("?")[0]).stem or "document")[:80]
     if data[:5] == b"%PDF-" or "pdf" in ctype:
         p = d / f"{name}.pdf"
         p.write_bytes(data)
@@ -524,6 +592,37 @@ def fetch(r: dict, url: str, title: str = "", why: str = "") -> str:
     with open(_queue_file(), "a") as f:
         f.write(json.dumps({"rid": r["id"], "path": str(p), "url": url, "title": title, "why": why}) + "\n")
     return str(p)
+
+
+def _reddit(url: str) -> str:
+    """A Reddit thread as text: the post, then the top comments (with their scores), from Reddit's JSON."""
+    import urllib.request
+
+    j_url = re.sub(r"[?#].*$", "", url).rstrip("/") + ".json?limit=60&sort=top"
+    req = urllib.request.Request(j_url, headers={"User-Agent": "linux:batsy-research:1.0 (personal assistant)"})
+    with urllib.request.urlopen(req, timeout=30) as resp:
+        data = json.loads(resp.read())
+    post = data[0]["data"]["children"][0]["data"]
+    out = [f"# {post.get('title', '')}", f"r/{post.get('subreddit', '')} · {post.get('score', 0)} points", "",
+           post.get("selftext", "") or "", "", "## Top comments"]
+
+    def walk(children, depth=0):
+        for c in children:
+            d = c.get("data", {})
+            if c.get("kind") != "t1" or not d.get("body") or len(out) > 400:
+                continue
+            out.append(f"{'  ' * depth}- ({d.get('score', 0)} points) {d['body'].strip()}")
+            if depth < 2 and isinstance(d.get("replies"), dict):
+                walk(d["replies"]["data"]["children"][:4], depth + 1)
+    walk(data[1]["data"]["children"][:25])
+    return "\n".join(out)[:120_000]
+
+
+def needs_context(rid: int) -> bool:
+    """Too little to go on (fewer than 3 sources, no summary yet): learn the background before writing about it."""
+    r = get(rid)
+    summary = (vault.get_block(hub(r), "summary") or "").strip() if hub(r).exists() else ""
+    return len(items(rid, "source")) < 3 or not summary or summary.startswith("_")
 
 
 def _readable(html: str) -> str:
@@ -558,11 +657,21 @@ def read_fetched(rid: int) -> list[str]:
 
 
 def read_document(r: dict, p: Path, url: str = "", title: str = "", why: str = "") -> str:
-    """Batsy reads a whole document and understands it against the research question (local AI)."""
+    """Batsy reads a whole document and understands it against the research question (local AI). Shown as it goes
+    (side tab, phone, "what are you doing?"): reading the pages, understanding, writing the notes."""
+    from batsy import activity
+
+    with activity.agent(f"Reading {p.name}", "batsy") as job:
+        return _read_document(job, r, p, url, title, why)
+
+
+def _read_document(job, r: dict, p: Path, url: str, title: str, why: str) -> str:
     from batsy import docs
 
+    job.step("Reading the pages", 5)
     pages = docs.extract_text(p, max_chars=60000) if p.suffix.lower() != ".md" else [(1, p.read_text()[:60000])]
     text = "\n".join(t for _, t in pages)
+    job.step(f"Understanding it ({len(pages)} page{'s' if len(pages) != 1 else ''}, about {len(text.split())} words)", 20)
     raw = _ask(
         f"Jonathan's research: \"{r['name']}\" (question: {r.get('question')}). Read this document and answer in JSON only: "
         "{\"title\": \"its real title\", \"authors\": \"\", \"year\": \"\", \"what\": \"what it is in one line\", "
@@ -579,9 +688,12 @@ def read_document(r: dict, p: Path, url: str = "", title: str = "", why: str = "
             "authors": str(j.get("authors") or "")[:120], "year": str(j.get("year") or "")[:4],
             "what": str(j.get("what") or why or "")[:160], "points": [str(x)[:220] for x in (j.get("points") or [])][:5],
             "relates": str(j.get("relates") or why or "")[:400]}
+    job.step("Writing its notes into your brain", 80)
     add_source(r["id"], meta, text)
+    job.step("Keeping the full text for your questions", 90)
     for i in range(0, min(len(text), 30000), 2500):  # the full text in pieces: "what do we know about…" finds it
         _add_item(r["id"], "excerpt", f"{meta['title'][:60]} (part {i // 2500 + 1})", text[i:i + 2500], str(p))
+    job.result(f"Read {p.name}: {meta['what'] or meta['title']}")
     return meta["what"] or meta["title"]
 
 
@@ -604,6 +716,7 @@ def cli(argv: list[str]) -> None:
     s.add_argument("--kind", choices=["finding", "question", "idea", "next"], default="finding")
     s = sub.add_parser("add-note"); s.add_argument("name"); s.add_argument("text")
     s = sub.add_parser("search"); s.add_argument("name"); s.add_argument("query")
+    s = sub.add_parser("read"); s.add_argument("name"); s.add_argument("file")
     s = sub.add_parser("papers"); s.add_argument("query")
     a = ap.parse_args(argv)
     if a.cmd == "list":
@@ -627,9 +740,101 @@ def cli(argv: list[str]) -> None:
     elif a.cmd == "add-note":
         add_note(r["id"], a.text, "claude")
         print("added")
+    elif a.cmd == "read":
+        print("read:", read_document(r, Path(a.file).expanduser()))
     elif a.cmd == "search":
         print(json.dumps([{k: h[k] for k in ("kind", "title", "text")} for h in retrieve(r["id"], a.query)], indent=1))
     vault.flush()
+
+
+# --- a report, written by Batsy (local AI), section by section -------------------------------------------------------
+def write_report(rid: int, request: str = "") -> Path:
+    """Everything the research has, turned into a report: Batsy gathers the material, then has the local AI write
+    one short section at a time (a 3B model writes well in small pieces, badly in one long go). Saved as a note in
+    Reports/ and as a PDF next to it."""
+    from batsy import activity
+
+    r = get(rid)
+    with activity.agent(f"Writing a report on {r['name']}", "batsy") as job:
+        job.step("Gathering everything in the research", 5)
+        srcs = items(rid, "source", 30)
+        notes = items(rid, "note", 30)
+        hub_text = vault.read(hub(r)) if hub(r).exists() else ""
+        block = lambda name: (vault.get_block(hub(r), name) or "").strip() if hub_text else ""  # noqa: E731
+        material = "\n".join(f"- SOURCE {s_['title']}: {(s_['text'] or '')[:900]}" for s_ in srcs[:8]) + "\n" + \
+                   "\n".join(f"- NOTE: {(n_['text'] or '')[:300]}" for n_ in notes[:12])
+        extra = "\n".join(f"{h}: {block(b)}" for b, h in (("findings", "Findings"), ("open-questions", "Open questions"),
+                                                            ("ideas", "Ideas")) if block(b))
+        ask = f" He asked: \"{request}\"." if request else ""
+        base = (f"You are writing part of a report for Jonathan (an engineering student) on his research "
+                f"\"{r['name']}\" (question: {r.get('question')}).{ask} Use ONLY the material below; never invent "
+                f"facts, numbers or sources; if something isn't known, say it plainly. Plain, clear English, no "
+                f"filler.\n\nMATERIAL:\n{material[:5500]}\n{extra[:1200]}\n\n")
+        parts = []
+        job.step("Writing the overview", 15)
+        parts.append(("Overview", _ask(base + "Write the overview: 1 paragraph (4-6 sentences) on what this research "
+                                              "is about and what the material covers.", 260)))
+        for i, s_ in enumerate(srcs[:6]):
+            job.step(f"Writing about {s_['title'][:40]}", 20 + 50 * i / max(1, min(6, len(srcs))))
+            parts.append((s_["title"], _ask(base + f"Write the section on the source \"{s_['title']}\": what it is, its "
+                                                    f"key facts and numbers (from the material), and what it means for "
+                                                    f"the research. 1-2 short paragraphs.", 320)))
+        job.step("Writing what it all means", 75)
+        parts.append(("What it means", _ask(base + "Write 'What it means': bring the sources together for the research "
+                                                    "question in 1 paragraph, then 3-5 bullet points ('- ') of the main "
+                                                    "takeaways.", 320)))
+        job.step("Writing open questions and next steps", 85)
+        parts.append(("Open questions and next steps", _ask(base + "Write 3-5 open questions and 3-5 concrete next "
+                                                                   "steps, as two '- ' bullet lists with a bold label "
+                                                                   "line each.", 300)))
+        job.step("Saving the report and the PDF", 95)
+        title = f"{dt.date.today():%Y-%m-%d} Report on {r['name']}"
+        refs = "\n".join(f"- {s_['title']}" + (f" ({s_['path']})" if s_.get("path") else "") for s_ in srcs)
+        md = (vault.frontmatter(type="research-report", research=f"[[{vault.safe(r['name'])}]]",
+                                date=dt.date.today().isoformat(), written_by="Batsy (local AI)")
+              + f"# Report: {r['name']}\n\n*{dt.date.today():%d %B %Y} · question: {r.get('question')}*\n\n"
+              + "\n\n".join(f"## {h}\n\n{_tidy(t)}" for h, t in parts) + f"\n\n## Sources\n\n{refs or '_none yet_'}\n")
+        p = folder(r) / "Reports" / f"{vault.safe(title)}.md"
+        p.parent.mkdir(parents=True, exist_ok=True)
+        vault.write(p, md)
+        vault.add_to_block(hub(r), "log", f"- {dt.datetime.now():%Y-%m-%d %H:%M} report: {vault.link(title)}", "Log",
+                           newest_first=True)
+        pdf = _pdf(p, md)
+        job.result(f"Report written: {p.name}" + (" (+ PDF)" if pdf else ""))
+    return pdf or p
+
+
+def _tidy(text: str) -> str:
+    """The model's section without its chatter ("Here is the overview:") or a repeated heading."""
+    lines = [x for x in (text or "").strip().splitlines()
+             if not re.match(r"(?i)\s*(?:here(?:'s| is)|sure|certainly|below is)\b.*:\s*$", x) and not x.startswith("#")]
+    return "\n".join(lines).strip() or "_Nothing to say yet._"
+
+
+def _pdf(p: Path, md: str) -> Path | None:
+    """The report as a PDF (Markdown -> HTML -> LibreOffice), for printing or sending."""
+    import shutil
+    import subprocess
+
+    import markdown
+
+    soffice = shutil.which("soffice") or shutil.which("libreoffice")
+    if not soffice:
+        return None
+    body = markdown.markdown(re.sub(r"\A---.*?---\n", "", md, flags=re.S), extensions=["extra"])
+    html = p.with_suffix(".html")
+    html.write_text("<html><head><meta charset='utf-8'><style>body{font-family:'DejaVu Sans',sans-serif;font-size:11pt;"
+                    "line-height:1.45;margin:2cm;color:#111}h1{font-size:20pt}h2{font-size:14pt;margin-top:18pt;"
+                    "border-bottom:1px solid #ccc}</style></head><body>" + body + "</body></html>")
+    try:
+        subprocess.run([soffice, "--headless", "--convert-to", "pdf", "--outdir", str(p.parent), str(html)],
+                       capture_output=True, timeout=120)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    finally:
+        html.unlink(missing_ok=True)
+    pdf = p.with_suffix(".pdf")
+    return pdf if pdf.exists() else None
 
 
 # --- the local AI -----------------------------------------------------------------------------------------------------

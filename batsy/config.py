@@ -115,6 +115,7 @@ DEFAULTS = {
         "linger_media_seconds": 30,   # ...or after showing a picture / card
         "live_words": True,           # show your words as you speak (local Vosk, no tokens)
         "screensaver_minutes": 3,     # token-usage screensaver after this long idle (0 = off)
+        "cockpit_seconds": 5,  # the cockpit after this long without mouse or keyboard (0: off; replaces the screensaver)
         "qt_platform": "",            # e.g. "xcb" to force XWayland if the window won't come to the front
         "dock": True,                 # a small Batman bat in the top-right corner while the overlay is closed
         "sidetab": True,           # the side tab on the right edge: what Batsy is doing right now (sidetab.py)

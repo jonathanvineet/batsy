@@ -179,7 +179,7 @@ def handle(app, n: str) -> str | None:
         from batsy import cloud
 
         return "I've opened a terminal. Type the PC's password there, just this once, and the Batman drive shows up " \
-            "in the iPhone app." if _terminal(cloud.setup_command(app.cfg), "Batman drive") else "I couldn't open a terminal."
+            "in the iPhone app." if _terminal(cloud.setup_command(app.cfg, ("Jonathan", "Karan", "Rehaan")), "Batman drive") else "I couldn't open a terminal."
     if not ON_PC.search(n):
         return None
     pc = getattr(app, "pc", None) or Remote(app.cfg)

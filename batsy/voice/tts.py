@@ -25,6 +25,20 @@ def _player() -> list[str] | None:
     return next((p for p in PLAYERS if shutil.which(p[0])), None)
 
 
+def _envelope(path: str, step: float = 0.04) -> list[float]:
+    """How loud the sentence is every 40 ms, 0..1 (scaled to its own loudest part): what the wave moves with."""
+    import numpy as np
+
+    with wave.open(path, "rb") as w:
+        rate, data = w.getframerate(), w.readframes(w.getnframes())
+    a = np.frombuffer(data, dtype="<i2").astype(np.float32)
+    n = max(1, int(rate * step))
+    blocks = a[: len(a) // n * n].reshape(-1, n)
+    rms = np.sqrt((blocks ** 2).mean(axis=1)) if len(blocks) else np.zeros(1)
+    top = max(float(np.percentile(rms, 95)), 1.0)
+    return [round(min(1.0, float(x) / top), 3) for x in rms]
+
+
 def _write_chime(path: Path) -> None:
     rate = 22050
     tones = []
@@ -54,6 +68,7 @@ class Speaker:
         self._lock = threading.Lock()  # stop() and starting the next sentence never interleave
         self.hushed_until = 0.0  # the kill switch: nothing is spoken until then (or until you ask something new)
         self.on_idle = None  # called when the last queued sentence has finished playing (or speech was stopped)
+        self.on_play = None  # called with (loudness every 40 ms, 0.04) as each sentence starts: the cockpit's wave
         if enabled:
             self._init_engine()
             if not self.chime_path.exists():
@@ -168,6 +183,11 @@ class Speaker:
         while True:
             gen, path = self.pq.get()
             try:
+                if self.on_play is not None and gen == self.generation:
+                    try:
+                        self.on_play(_envelope(path), 0.04)
+                    except Exception:
+                        pass
                 self._run([*self.player, path], gen)
             except Exception as e:
                 log.error("audio playback failed: %s", e)

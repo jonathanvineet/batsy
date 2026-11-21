@@ -351,6 +351,22 @@ The Android app (version 4.0+) asks for the microphone the first time. The iPhon
 
 `batsy vault seed | search WORDS | daily [DATE] | weekly [DATE] | sync | open` · settings under `[vault]` (`path`, `capture = "all" | "important" | "off"`, `git`, `git_remote`, `git_every_min`).
 
+## Cockpit
+
+Leave the mouse and keyboard alone for **5 seconds** (`[overlay] cockpit_seconds`) and the laptop shows the cockpit: everything at a glance, full screen. Touch anything and it's gone within a quarter second. It never takes the keyboard, so nothing you type is lost. It doesn't open over a video or a call (anything holding the screen awake), while Batsy is showing you a picture or card, or on a locked screen. It replaces the old screensaver.
+
+- **Batsy live:** a waveform in the middle.
+  - Calm grey when idle, cyan following your voice when listening, a slow gold shimmer when thinking, and gold moving with Batsy's actual voice when it speaks (each sentence's loudness is measured just before it plays).
+  - What you said and what Batsy is saying show underneath.
+  - While the cockpit is open, talking to Batsy happens *in* it, rather than the overlay popping up over it.
+- **Happening now:** running jobs with their current step, progress bar and time (reading a PDF, slicing, a Claude deep dive, a commit), plus questions waiting for you and what just finished.
+- **Machines and connected things:**
+  - laptop, PC and the HP (CPU, temperature in red when hot, RAM), and the HP's AI model and speed
+  - the printer, your phones, the Mac and the lights: online or off. Devices gone for weeks are hidden.
+- **Widgets:** 3D printer, music with album art, research, today's to-dos (the ones under the phone's clock), recent files, and your Claude usage rings.
+
+It draws only as fast as it needs to (12 frames a second when calm, 30 when you or Batsy talk), so it costs about 20% CPU on this laptop. Set `cockpit_seconds = 0` to turn it off.
+
 ## Research assistant
 
 Several research topics at once, kept apart, all written into your Obsidian brain by Batsy (`~/Batsy/Brain/08 Research/<Name>/`). You never write there yourself.

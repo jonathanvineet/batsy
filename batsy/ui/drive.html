@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#08090b">
+<title>Drive · Batsy</title>
+<link rel="stylesheet" href="/drive.css">
+</head>
+<body>
+<div class="app">
+  <aside class="rail">
+    <a class="logo" href="/" aria-label="Batsy Drive"><svg viewBox="0 0 64 32"><path d="M32 6c-1.5 2.5-3 3.5-4.5 3.5L26 4l-2 5c-6-1-12-3-17-8 1 7 4 12 9 14-3 1-6 4-7 8 4-3 9-3 13-1 3 1 6 4 10 10 4-6 7-9 10-10 4-2 9-2 13 1-1-4-4-7-7-8 5-2 8-7 9-14-5 5-11 7-17 8l-2-5-1.5 5.5C35 9.5 33.5 8.5 32 6z"/></svg><span>DRIVE</span></a>
+    <p class="who"><span class="k">signed in by device</span><b id="who">…</b></p>
+    <nav id="spaces"></nav>
+    <button class="nav" id="nav-recent" data-view="recent"><i>◷</i>Recent<kbd>R</kbd></button>
+    <div class="meter" id="meter"><div class="k">storage</div><div class="bar"><i></i></div><p></p></div>
+    <p class="foot">Only you see your files.<br>Tailscale knows it's you.</p>
+  </aside>
+
+  <main class="main" id="main">
+    <header class="bar-top">
+      <button class="menu" id="menu" aria-label="Spaces">☰</button>
+      <ol class="crumbs" id="crumbs"></ol>
+      <label class="search"><span>⌕</span><input id="q" type="search" placeholder="Search" autocomplete="off" spellcheck="false"><kbd>/</kbd></label>
+      <div class="tools">
+        <button id="b-view" title="Grid / list (V)">▦</button>
+        <button id="b-folder" title="New folder (N)">＋ Folder</button>
+        <label class="primary" title="Upload (U)">↑ Upload<input id="pick" type="file" multiple hidden></label>
+      </div>
+    </header>
+    <div class="cols" id="cols"><span class="c-name" data-sort="name">Name</span><span class="c-size" data-sort="size">Size</span><span class="c-time" data-sort="t">Modified</span></div>
+    <section class="list" id="list" tabindex="0"></section>
+    <p class="status" id="status"></p>
+  </main>
+</div>
+
+<div class="drop" id="drop"><div><b>Drop to upload</b><span id="drop-to"></span></div></div>
+<ul class="uploads" id="uploads"></ul>
+
+<div class="viewer" id="viewer" hidden>
+  <header><b id="v-name"></b><span id="v-meta"></span><a id="v-dl" class="btn">↓ Download</a><button id="v-close" class="btn">✕</button></header>
+  <div class="v-body" id="v-body"></div>
+  <button class="v-nav prev" id="v-prev" aria-label="Previous">‹</button><button class="v-nav next" id="v-next" aria-label="Next">›</button>
+</div>
+<script src="/drive.js" type="module"></script>
+</body>
+</html>

@@ -13,7 +13,7 @@ def idle_ms() -> int | None:
                  "--object-path", "/org/gnome/Mutter/IdleMonitor/Core",
                  "--method", "org.gnome.Mutter.IdleMonitor.GetIdletime"],
                 capture_output=True, text=True, timeout=3).stdout
-            m = re.search(r"(\d+)", out)
+            m = re.search(r"uint64 (\d+)", out)  # (not the "64" of "uint64": that read as 64 ms, always)
             if m:
                 return int(m.group(1))
         except (subprocess.SubprocessError, OSError):

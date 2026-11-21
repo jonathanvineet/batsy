@@ -248,6 +248,15 @@ class Overlay:
         elif self.muted and cmd in MUTED_CMDS:
             return  # what the request you cancelled is still sending: it must not reopen the screen
         self._live(cmd, kw)
+        ck = getattr(self, "cockpit", None)
+        if ck is not None and ck.visible:
+            from batsy.cockpit import LIVE, MEDIA
+
+            if cmd in LIVE:  # Batsy talking while the cockpit is up: it's shown there, not over it
+                ck.send(cmd, **kw)
+                return
+            if cmd in MEDIA:  # a picture, a card, the 3D view: the normal overlay
+                ck.close()
         if not self.enabled:
             return
         self._track(cmd, kw)

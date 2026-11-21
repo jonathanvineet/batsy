@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Batsy cockpit</title>
+<link rel="stylesheet" href="cockpit.css">
+</head>
+<body>
+<main id="cockpit">
+  <header class="top">
+    <div class="brand"><svg class="mark" viewBox="0 0 64 32" aria-hidden="true"><path d="M32 6c-1.5 2.5-3 3.5-4.5 3.5L26 4l-2 5c-6-1-12-3-17-8 1 7 4 12 9 14-3 1-6 4-7 8 4-3 9-3 13-1 3 1 6 4 10 10 4-6 7-9 10-10 4-2 9-2 13 1-1-4-4-7-7-8 5-2 8-7 9-14-5 5-11 7-17 8l-2-5-1.5 5.5C35 9.5 33.5 8.5 32 6z"/></svg><div><b>BATSY</b><span id="health">Checking everything…</span></div></div>
+    <div class="clock"><time id="hm">--:--</time><span id="date"></span></div>
+    <div class="claude" id="claude"></div>
+  </header>
+
+  <section class="col left">
+    <article class="panel" id="now"><h2>Happening now</h2><ol class="jobs"></ol></article>
+    <article class="panel" id="asks" hidden><h2>Waiting for you</h2><ol></ol></article>
+    <article class="panel" id="done"><h2>Just finished</h2><ol></ol></article>
+  </section>
+
+  <section class="live" id="live">
+    <canvas id="wave"></canvas>
+    <div class="state"><i></i><span id="state">Idle</span><em id="status"></em></div>
+    <div class="talk">
+      <p class="you" id="you"></p>
+      <p class="said" id="said"></p>
+    </div>
+  </section>
+
+  <section class="col right">
+    <article class="panel" id="machines"><h2>Machines</h2><div class="rows"></div></article>
+    <article class="panel" id="devices"><h2>Connected</h2><ul></ul></article>
+  </section>
+
+  <footer class="widgets">
+    <article class="w" id="w-printer"><h3>3D printer</h3><div class="body"></div></article>
+    <article class="w" id="w-music"><h3>Music</h3><div class="body"></div></article>
+    <article class="w" id="w-research"><h3>Research</h3><div class="body"></div></article>
+    <article class="w" id="w-today"><h3>Today</h3><div class="body"></div></article>
+    <article class="w" id="w-files"><h3>Files</h3><div class="body"></div></article>
+  </footer>
+  <p class="hint">Move the mouse or press a key to close · Say “Batsy” any time</p>
+</main>
+<script type="module" src="cockpit.js"></script>
+</body>
+</html>

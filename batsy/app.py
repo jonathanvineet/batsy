@@ -185,7 +185,15 @@ class Batsy:
         self._saver_dirty = False
         self._saver_wake = threading.Event()
         self.overlay.on_saver_exit = self._saver_exited
-        if self.overlay.enabled and cfg.get("overlay.screensaver_minutes") > 0:
+        self.cockpit = None
+        if self.overlay.enabled and float(cfg.get("overlay.cockpit_seconds") or 0) > 0:
+            from batsy.cockpit import Cockpit
+
+            self.cockpit = Cockpit(self)  # everything at a glance after a few seconds without mouse or keyboard
+            self.overlay.cockpit = self.cockpit
+            self.speaker.on_play = lambda env, step: self.cockpit.visible and self.cockpit.send("speakwave", env=env,
+                                                                                                 dt=step)
+        elif self.overlay.enabled and cfg.get("overlay.screensaver_minutes") > 0:
             threading.Thread(target=self._saver_loop, daemon=True, name="screensaver").start()
         self.last_raw_text = ""
         monitor.start_background(self.ctx)
@@ -200,6 +208,7 @@ class Batsy:
             from batsy import research
 
             research.configure(self.cfg)  # research topics: kept apart, written into the brain
+            research._app = self
         except Exception:
             log.exception("research didn't start")
         from batsy import discover

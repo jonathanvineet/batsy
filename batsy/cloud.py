@@ -67,12 +67,21 @@ print(json.dumps(out))
 '''
 
 
+HOMES = {"batman": "/batman"}  # PC accounts whose home isn't /home/<name>
+
+
 class Drive:
-    def __init__(self, cfg):
+    """One person's drive: their home on the PC (Jonathan -> batman -> /batman, Karan -> nightwing, Rehaan ->
+    superman), signed in to as that account with Batsy's SSH key."""
+
+    def __init__(self, cfg, person: str = "Jonathan"):
         pc = cfg.get("pc") or {}
         host = pc.get("host", "").split("@")[-1]
-        self.user = (cfg.get("files.pc_users") or {}).get("Jonathan", "batman")
-        self.host = f"{self.user}@{host}" if host else ""
+        self.person = person
+        self.user = (cfg.get("files.pc_users") or {}).get(person, "batman" if person == "Jonathan" else "")
+        files = cfg.get("files") or {}  # (cfg.get("files.pc_homes") raises when it isn't set)
+        self.root = (files.get("pc_homes") or {}).get(self.user) or HOMES.get(self.user) or f"/home/{self.user}"
+        self.host = f"{self.user}@{host}" if host and self.user else ""
         self.lock = threading.Lock()
         THUMBS.mkdir(parents=True, exist_ok=True)
 
@@ -84,10 +93,11 @@ class Drive:
         """Only paths inside the drive (no ../ tricks, no hidden folders like .ssh)."""
         import posixpath
 
-        p = posixpath.normpath(posixpath.join(ROOT, (path or "").removeprefix(ROOT).lstrip("/")))
-        if p != ROOT and not p.startswith(ROOT + "/"):
+        root = self.root
+        p = posixpath.normpath(posixpath.join(root, (path or "").removeprefix(root).lstrip("/")))
+        if p != root and not p.startswith(root + "/"):
             raise ValueError("outside the drive")
-        if any(part in SKIP or part.startswith(".") for part in p[len(ROOT):].split("/") if part):
+        if any(part in SKIP or part.startswith(".") for part in p[len(root):].split("/") if part):
             raise ValueError("not shared")
         return p
 
@@ -100,14 +110,14 @@ class Drive:
             return {"error": "no PC set up"}
         if mode == "list":
             arg = self.safe(arg)
-        cmd = f"python3 -c {shlex.quote(LISTER)} {ROOT} {mode} {shlex.quote(arg)} {shlex.quote('/'.join(SKIP))}"
+        cmd = f"python3 -c {shlex.quote(LISTER)} {shlex.quote(self.root)} {mode} {shlex.quote(arg)} {shlex.quote('/'.join(SKIP))}"
         try:
             r = self._run(cmd, timeout=30)
         except subprocess.TimeoutExpired:
             return {"error": "The PC took too long."}
         if r.returncode == 255:
             err = r.stderr.decode(errors="replace")
-            return {"error": "Batsy can't sign in to the Batman drive yet: say “set up the batman drive”."
+            return {"error": f"Batsy can't sign in to {self.person}'s drive on the PC yet (its key isn't set up)."
                     if "denied" in err else "The PC is off or asleep.", "offline": "denied" not in err,
                     "setup": "denied" in err}
         if r.returncode:
@@ -157,7 +167,7 @@ class Drive:
         out, err = p.stdout.read().decode().strip(), p.stderr.read().decode()
         if p.wait() or left:
             raise OSError(err[-200:] or "the upload stopped")
-        log.info("uploaded %s to the Batman drive", out)
+        log.info("uploaded %s to %s's drive", out, self.person)
         return out
 
     def mkdir(self, folder: str, name: str) -> str:
@@ -201,20 +211,21 @@ class Drive:
             return None
 
 
-SETUP = """set -e
+SETUP = """
 home=$(getent passwd {user} | cut -d: -f6)
 install -d -m 700 -o {user} -g {user} "$home/.ssh"
 touch "$home/.ssh/authorized_keys"
 grep -qxF {key} "$home/.ssh/authorized_keys" || echo {key} >> "$home/.ssh/authorized_keys"
 chown {user}:{user} "$home/.ssh/authorized_keys"; chmod 600 "$home/.ssh/authorized_keys"
-echo; echo "Done: Batsy can open the Batman drive now. You can close this window."
+echo "  {user}: ready"
 """
 
 
-def setup_command(cfg) -> str:
-    """The one-time terminal command: lets the laptop's SSH key sign in as batman (asks for the PC's password)."""
-    d = Drive(cfg)
+def setup_command(cfg, people: tuple = ("Jonathan",)) -> str:
+    """The one-time terminal command: lets the laptop's SSH key sign in as each person's PC account (asks once for
+    the PC's password)."""
     pub = (Path.home() / ".ssh/id_ed25519.pub").read_text().strip()
     host = (cfg.get("pc") or {}).get("host", "")
-    script = SETUP.format(user=shlex.quote(d.user), key=shlex.quote(pub))
+    script = "".join(SETUP.format(user=shlex.quote(Drive(cfg, p).user), key=shlex.quote(pub)) for p in people
+                     if Drive(cfg, p).user) + 'echo; echo "Done: Batsy can open their drives now. You can close this window."'
     return f"ssh -t {shlex.quote(host)} {shlex.quote('sudo bash -c ' + shlex.quote(script))}; read -p 'Press Enter to close'"
