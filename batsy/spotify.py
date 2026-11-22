@@ -220,9 +220,16 @@ class Spotify:
         devs = self.devices()
         if not devs:
             raise SpotifyError("No Spotify devices are online. Open Spotify on the iPad.")
-        hinted = [d for d in devs if self.device_hint and self.device_hint in d["name"].lower()]
+        # spotify.device: where you like it, in order ("ipad, phone": the iPad, or else your phone). A word matches a
+        # device's name ("ipad", "a50") or its kind ("phone", "computer").
+        kinds = {"phone": "smartphone", "mobile": "smartphone", "laptop": "computer", "computer": "computer",
+                 "speaker": "speaker", "tv": "tv"}
+        for want in [w.strip() for w in self.device_hint.split(",") if w.strip()]:
+            hit = [d for d in devs if want in d["name"].lower() or kinds.get(want) == d.get("type", "").lower()]
+            if hit:
+                return sorted(hit, key=lambda d: not d.get("is_active"))[0]
         active = [d for d in devs if d.get("is_active")]
-        return (hinted or active or devs)[0]
+        return (active or devs)[0]
 
     def _dev_params(self) -> dict:
         return {"device_id": self.device()["id"]}

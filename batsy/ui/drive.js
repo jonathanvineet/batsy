@@ -16,6 +16,7 @@ const api = async (path, opts) => {
   return j;
 };
 const q = o => new URLSearchParams(o).toString();
+const previewUrl = it => `/api/preview?${q({space: S.space, path: it.path, t: it.t, size: it.size})}`;
 const fileUrl = (it, dl) => `/api/file?${q({space: S.space, path: it.path, ...(dl ? {dl: 1} : {})})}`;
 const size = n => n == null ? '' : n < 1024 ? `${n} B` : n < 1048576 ? `${(n / 1024).toFixed(0)} KB` : n < 1073741824 ?
   `${(n / 1048576).toFixed(1)} MB` : `${(n / 1073741824).toFixed(2)} GB`;
@@ -46,20 +47,27 @@ addEventListener('hashchange', fromHash);
 
 // --- loading -------------------------------------------------------------------------------------------------------
 let token = 0;
+const seenLists = new Map();  // folders already opened: shown at once, then quietly refreshed
+const listKey = () => `${S.space}|${S.mode}|${S.path}|${S.q}`;
 async function load() {
-  const my = ++token;
+  const my = ++token, key = listKey();
   renderChrome();
-  $('#list').innerHTML = '<div class="skeleton"></div>'.repeat(6);
+  const had = seenLists.get(key);
+  if (had) { S.items = had.items || []; S.sel = -1; meter(had); render(); }
+  else $('#list').innerHTML = '<div class="skeleton"></div>'.repeat(6);
   try {
     const j = S.q ? await api(`/api/search?${q({space: S.space, q: S.q})}`)
       : S.mode === 'recent' ? await api(`/api/recent?${q({space: S.space, n: 60})}`)
       : await api(`/api/list?${q({space: S.space, path: S.path})}`);
     if (my !== token) return;
+    seenLists.set(key, j);
+    if (had && JSON.stringify(had.items) === JSON.stringify(j.items)) return;  // nothing changed: leave it be
     S.items = j.items || []; S.sel = -1;
     meter(j);
     render();
+    preload(S.items.filter(it => !it.dir && PICS.test(it.name) && !/\.gif$/i.test(it.name)).slice(0, 6));
   } catch (e) {
-    if (my !== token) return;
+    if (my !== token || had) return;  // offline for a moment: keep showing what we had
     S.items = [];
     $('#list').innerHTML = `<div class="empty"><b>Can't open this</b>${esc(e.message)}</div>`;
   }
@@ -147,7 +155,11 @@ function view(i) {
   $('#v-meta').textContent = `${size(it.size)} · ${when(it.t)}`;
   $('#v-dl').href = fileUrl(it, true);
   body.innerHTML = '';
-  if (PICS.test(it.name) && !/\.heic$/i.test(it.name)) body.innerHTML = `<img src="${url}" alt="">`;
+  if (PICS.test(it.name) && !/\.gif$/i.test(it.name)) {  // a screen-sized preview (~200 KB), not the 3 MB original
+    body.innerHTML = `<img src="${previewUrl(it)}" alt="">`;
+    body.firstChild.onerror = () => { if (!/\.heic$/i.test(it.name)) body.firstChild.src = url; };
+    preload([S.items[i + 1], S.items[i + 2], S.items[i - 1]].filter(x => x && !x.dir && PICS.test(x.name)));
+  } else if (/\.gif$/i.test(it.name)) body.innerHTML = `<img src="${url}" alt="">`;
   else if (PDF.test(it.name)) body.innerHTML = `<iframe src="${url}" title="${esc(it.name)}"></iframe>`;
   else if (VIDEO.test(it.name)) body.innerHTML = `<video src="${url}" controls autoplay></video>`;
   else if (AUDIO.test(it.name)) body.innerHTML = `<audio src="${url}" controls autoplay></audio>`;
@@ -157,6 +169,14 @@ function view(i) {
   } else body.innerHTML = `<div class="none"><b>${esc(ext(it.name) || 'File')}</b>No preview for this kind of file.<br><br>
     <a class="btn" href="${fileUrl(it, true)}">↓ Download ${size(it.size)}</a></div>`;
   v.hidden = false;
+}
+const preloaded = new Set();
+function preload(items) {  // fetched while you look at something else; the browser keeps them (they never change)
+  const go = () => items.forEach(it => {
+    const u = previewUrl(it);
+    if (!preloaded.has(u)) { preloaded.add(u); new Image().src = u; }
+  });
+  'requestIdleCallback' in window ? requestIdleCallback(go, {timeout: 1500}) : setTimeout(go, 300);
 }
 function closeView() { $('#viewer').hidden = true; $('#v-body').innerHTML = ''; S.viewing = -1; }
 function step(d) {
@@ -186,7 +206,7 @@ function upload(files) {
       li.classList.add(ok ? 'done' : 'fail');
       li.querySelector('.n span:last-child').textContent = ok ? 'done' : msg;
       setTimeout(() => li.remove(), ok ? 2500 : 8000);
-      if (--left === 0) load();
+      if (--left === 0) { seenLists.clear(); load(); }
     };
     x.onload = () => { let j = {}; try { j = JSON.parse(x.responseText); } catch {} end(x.status < 300 && !j.error, j.error || `error ${x.status}`); };
     x.onerror = () => end(false, 'failed');
@@ -204,7 +224,7 @@ async function newFolder() {
   if (S.mode !== 'folder' || S.q) return flash('Open a folder first');
   const name = prompt('New folder');
   if (!name) return;
-  try { await api('/api/mkdir', {method: 'POST', body: JSON.stringify({space: S.space, path: S.path, name})}); load(); }
+  try { await api('/api/mkdir', {method: 'POST', body: JSON.stringify({space: S.space, path: S.path, name})}); seenLists.clear(); load(); }
   catch (e) { flash(e.message); }
 }
 

@@ -276,6 +276,9 @@ class Inbox:
                     key = self._key(p)
                     if key in self._known:
                         continue
+                    if str(p.resolve()) in _MADE:
+                        self._known.add(key)
+                        continue
                     size = p.stat().st_size
                     was = self._growing.get(key)
                     if was and was[0] == size and now - was[1] >= 2:
@@ -701,6 +704,14 @@ def _place(src: Path, folder: Path, name: str | None = None) -> Path:
         os.unlink(src)
         return dest
     raise OSError(f"too many files called {base.name}")
+
+
+_MADE: set[str] = set()  # files Batsy wrote into the inbox itself (a resized or laid-down model): not "arrivals"
+
+
+def made(p) -> None:
+    """Tell the watcher Batsy made this file itself, so it isn't announced or auto-sliced as something you sent."""
+    _MADE.add(str(Path(p).resolve()))
 
 
 PAGE = """<!doctype html><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1">

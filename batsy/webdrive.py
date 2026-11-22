@@ -120,8 +120,10 @@ def handle(h, who: str, inbox, method: str) -> bool:
                     it["path"] = "/" + it["path"].removeprefix(pc.root).lstrip("/")
                 if "path" in out:
                     out["path"] = "/" + out["path"].removeprefix(pc.root).lstrip("/")
-                return _json(h, out)
-            return _json(h, _local_query(root, mode, arg))
+            else:
+                out = _local_query(root, mode, arg)
+            _warm(who, space, pc, root, out.get("items", []))
+            return _json(h, out, gzip_ok="gzip" in (h.headers.get("Accept-Encoding") or ""))
         if method == "GET" and route == "/api/file":
             path = q.get("path", "")
             name = posixpath.basename(path)
@@ -145,9 +147,11 @@ def handle(h, who: str, inbox, method: str) -> bool:
             with open(p, "rb") as f:
                 shutil.copyfileobj(f, h.wfile, 256 * 1024)
             return True
-        if method == "GET" and route == "/api/thumb":
+        if method == "GET" and route in ("/api/thumb", "/api/preview"):  # a tile, or a picture sized for a screen
             path, size = q.get("path", ""), int(q.get("size", "0") or 0)
-            data = pc.thumb(pc.root + path, int(q.get("t", "0") or 0), size) if pc is not None else _local_thumb(_local(root, path))
+            px = 360 if route == "/api/thumb" else 1600
+            data = pc.thumb(pc.root + path, int(q.get("t", "0") or 0), size, px) if pc is not None \
+                else _local_thumb(_local(root, path), px)
             return _send(h, 200, data, "image/jpeg") if data else _send(h, 404, b"", "text/plain")
         if method == "POST" and route == "/api/upload":
             name = Path(urllib.parse.unquote(q.get("name", "upload"))).name
@@ -195,35 +199,88 @@ def handle(h, who: str, inbox, method: str) -> bool:
         return _json(h, {"error": f"something went wrong: {e}"}, 500)
 
 
-def _local_thumb(p: Path) -> bytes | None:
+PICS = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".heic", ".tif", ".tiff"}
+_warming: set = set()
+
+
+def _warm(who: str, space: str, pc, root: Path, items: list) -> None:
+    """Make a folder's tiles and screen-sized previews now, in the background, so opening them is instant: the PC is
+    a cable away, the person may be on slow Wi-Fi. One worker per person and space; newest files first."""
+    key = (who, space)
+    if key in _warming:
+        return
+    todo = [it for it in sorted(items, key=lambda x: -x.get("t", 0)) if not it.get("dir")
+            and Path(it["name"]).suffix.lower() in PICS | {".pdf"} and it.get("size", 0) < 60e6][:80]
+    if not todo:
+        return
+
+    def run():
+        _warming.add(key)
+        try:
+            for px in (360, 1600):  # every tile first, then the previews
+                for it in todo[:80 if px == 360 else 30]:
+                    if px == 1600 and Path(it["name"]).suffix.lower() == ".pdf":
+                        continue  # PDFs open in the viewer itself
+                    try:
+                        if pc is not None:
+                            pc.thumb(pc.root + it["path"], it.get("t", 0), it.get("size", 0), px)
+                        else:
+                            _local_thumb(_local(root, it["path"]), px)
+                    except Exception:
+                        pass
+        finally:
+            _warming.discard(key)
+
+    threading.Thread(target=run, daemon=True, name="drive-warm").start()
+
+
+def _local_thumb(p: Path, px: int = 360) -> bytes | None:
+    import hashlib
+
     from PIL import Image, ImageOps
 
+    from batsy.cloud import THUMBS
+
+    st = p.stat()
+    key = THUMBS / (hashlib.sha1(f"local|{p}|{int(st.st_mtime)}|{st.st_size}|{px}".encode()).hexdigest() + ".jpg")
+    if key.exists():
+        return key.read_bytes()
     try:
         if p.suffix.lower() == ".pdf":
             import fitz
 
             with fitz.open(p) as d:
-                pix = d[0].get_pixmap(dpi=48)
+                pix = d[0].get_pixmap(dpi=48 if px <= 360 else 150)
                 im = Image.frombytes("RGB", (pix.width, pix.height), pix.samples)
         else:
             im = ImageOps.exif_transpose(Image.open(p))
-        im.thumbnail((360, 360))
+        im.thumbnail((px, px))
         buf = io.BytesIO()
-        im.convert("RGB").save(buf, "JPEG", quality=78)
+        im.convert("RGB").save(buf, "JPEG", quality=78 if px <= 360 else 82, progressive=px > 360)
+        key.write_bytes(buf.getvalue())
         return buf.getvalue()
     except Exception:
         return None
 
 
-def _json(h, obj, code: int = 200) -> bool:
-    return _send(h, code, json.dumps(obj).encode(), "application/json")
+def _json(h, obj, code: int = 200, gzip_ok: bool = False) -> bool:
+    body = json.dumps(obj).encode()
+    if gzip_ok and len(body) > 1400:  # big listings: a fifth of the size over slow Wi-Fi
+        import gzip
+
+        return _send(h, code, gzip.compress(body, 5), "application/json", encoding="gzip")
+    return _send(h, code, body, "application/json")
 
 
-def _send(h, code: int, body: bytes, kind: str, cache: bool = True) -> bool:
+def _send(h, code: int, body: bytes, kind: str, cache: bool = True, encoding: str = "") -> bool:
     h.send_response(code)
     h.send_header("Content-Type", kind)
     h.send_header("Content-Length", str(len(body)))
-    h.send_header("Cache-Control", "private, max-age=3600" if cache and code == 200 and kind.startswith("image") else "no-store")
+    if encoding:
+        h.send_header("Content-Encoding", encoding)
+    # tiles and previews are keyed by the file's time and size in their URL: a changed file is a new URL
+    h.send_header("Cache-Control", "private, max-age=2592000, immutable" if cache and code == 200
+                  and kind.startswith("image") else "no-store")
     h.end_headers()
     h.wfile.write(body)
     return True

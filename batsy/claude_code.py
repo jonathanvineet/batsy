@@ -224,6 +224,19 @@ def _stream(exe, prompt, args, cwd, timeout, env, on_text) -> dict | str:
     return result
 
 
+LIMIT = re.compile(r"hit your (?:session |usage |weekly )?limit|usage limit reached|limit reached", re.I)
+
+
+def limited(text: str) -> bool:
+    """Is this Claude's out-of-credits reply (not an answer)?"""
+    return bool(text) and text.startswith("Claude is out of credits")
+
+
+def _limit_text(raw: str) -> str:
+    m = re.search(r"resets (?:at )?([0-9:apm ]+)", raw, re.I)
+    return "Claude is out of credits" + (f" until {m.group(1).strip()}." if m else " for now.")
+
+
 def run(prompt: str, label: str, args: list[str] | None = None, cwd=WORKSPACE, timeout: int = 300,
         force: bool = False, cfg=None, on_text=None) -> str:
     """Run `claude -p` and return its text answer. Logs exact usage and respects budgets.
@@ -259,7 +272,8 @@ def run(prompt: str, label: str, args: list[str] | None = None, cwd=WORKSPACE, t
             try:
                 data = json.loads(out)
             except ValueError:
-                return (out.strip() or err.strip() or "Claude didn't answer.")[:3000]
+                raw = out.strip() or err.strip() or "Claude didn't answer."
+                return _limit_text(raw) if LIMIT.search(raw[:300]) else raw[:3000]
     u = data.get("usage") or {}
     row = {"t": int(time.time()), "model": "claude-code", "label": label,
            "in": int(u.get("input_tokens", 0)), "out": int(u.get("output_tokens", 0)),
@@ -271,4 +285,7 @@ def run(prompt: str, label: str, args: list[str] | None = None, cwd=WORKSPACE, t
     log.info("claude-code %s: %s", label, row)
     if cfg is not None:
         _warn(cfg)
-    return str(data.get("result") or "").strip() or "Claude didn't answer."
+    res = str(data.get("result") or "").strip()
+    if LIMIT.search(res[:300]) and (data.get("is_error") or not row["out"]):
+        return _limit_text(res)  # "You've hit your session limit · resets 8pm": not an answer to speak as one
+    return res or "Claude didn't answer."

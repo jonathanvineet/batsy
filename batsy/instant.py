@@ -569,7 +569,8 @@ _PRONOUNS = {"my": "your", "me": "you", "i": "you", "i'm": "you're", "im": "you'
 
 def _yours(what: str | None) -> str:
     """'call my mom' -> 'call your mom' (it's said back to you)."""
-    return " ".join(_PRONOUNS.get(w, w) for w in (what or "").split())
+    return " ".join(_PRONOUNS.get(w.lower(), w) if w.lower() in _PRONOUNS and (w.islower() or w in ("I", "My", "Me"))
+                    else w for w in (what or "").split())
 
 
 def _span(secs: float) -> str:
@@ -640,12 +641,13 @@ def _when(rest: str) -> tuple[dt.datetime, list[tuple[int, int]]] | None:
                 ahead = 7
             day, explicit_day = now.date() + dt.timedelta(days=ahead), True
         elif m.group("rel"):
-            day = now.date() + dt.timedelta(days={"today": 0, "tomorrow": 1, "day after tomorrow": 2}[m.group("rel")])
+            late = 1 if now.hour < 4 else 0  # said at 12:30 am, "tomorrow" is the day that's just begun
+            day = now.date() + dt.timedelta(days=max(0, {"today": 0, "tomorrow": 1, "day after tomorrow": 2}[m.group("rel")] - late))
             explicit_day = True
         elif m.group("part"):
             part = m.group("part")
             if m.group(0).startswith("tomorrow"):
-                day, explicit_day = now.date() + dt.timedelta(days=1), True
+                day, explicit_day = now.date() + dt.timedelta(days=0 if now.hour < 4 else 1), True
         elif m.group("date"):
             d = _parse_day(m.group("date").replace("the ", ""))
             if d is None:
@@ -684,6 +686,8 @@ def _when(rest: str) -> tuple[dt.datetime, list[tuple[int, int]]] | None:
 def _say_when(when: dt.datetime) -> str:
     t = when.strftime("%-I:%M %p").replace(":00", "")
     days = (when.date() - dt.date.today()).days
+    if dt.datetime.now().hour < 4 and days in (0, 1):  # after midnight "tomorrow" is ambiguous: name the day
+        return f"on {when.strftime('%A')} at {t}"
     if days == 0:
         return f"at {t}" if when.hour < 18 or when.hour >= 22 else f"tonight at {t}" if when.hour >= 20 else f"at {t}"
     if days == 1:
@@ -727,6 +731,9 @@ def _remind(app, m, text):
             what = _as_said(what, text)
             monitor.add_reminder(time.time() + secs, what)
             return f"Okay, I'll remind you to {_yours(what)} {_span(secs)}."
+    if not _HAS_CLOCK.search(rest) and not re.search(r"\b(?:morning|afternoon|evening|night|tonight)\b", rest) \
+            and _day_in(rest)[0] is not None:
+        return None  # a day but no time ("on the 25th", "in 5 days"): a to-do under the clock for that day
     found = _when(rest)
     if found is None:
         return None
@@ -743,12 +750,82 @@ def _remind(app, m, text):
     about = bool(re.match(r"(?:about|of)\s", what)) or bool(re.search(r"\b(?:about|of) " + re.escape(what) + "$", rest))
     what = re.sub(r"^(?:to|about|that)\s+", "", what).strip()
     what = _as_said(what, text)
-    monitor.add_reminder(when.timestamp(), (f"about {what}" if about else what) or None,
-                         None if what else when.strftime("This is your %-I:%M %p reminder.").replace(":00", ""))
+    full = (f"about {what}" if about else what) or None
+    mid = monitor.add_reminder(when.timestamp(), full,
+                               None if what else when.strftime("This is your %-I:%M %p reminder.").replace(":00", ""))
+    _last_set.update(mid=mid, what=full, when=when, t=time.time())
     said = _say_when(when)
     if not what:
         return f"Okay, reminder set for {said[3:] if said.startswith('at ') else said}."
-    return f"Okay, I'll remind you {'about' if about else 'to'} {_yours(what)} {said}."
+    yours = _yours(what)
+    link = "about" if about else "that" if re.match(r"(?:you|your|we|there|it)\b", yours) else "to"
+    return f"Okay, I'll remind you {link} {yours} {said}."
+
+
+_last_set: dict = {}
+_DAYWORD = r"(?:on )?(?P<d>monday|tuesday|wednesday|thursday|friday|saturday|sunday|tomorrow|today|tonight)\b"
+
+
+# "I have an interview on Tuesday at 7:30, so remind me at 7 pm that I have a meeting": the remind-me can come
+# after other words, and the day can be in them
+@handles(r"(.+?)[ ,]+(?:so |and |then |also |just |please |can you |could you )*remind me (.+)")
+def _remind_in_sentence(app, m, text):
+    before, rest = m.group(1), m.group(2)
+    fixing = re.match(r"(?:no|nope|not|actually|sorry|wait)\b", before)
+    if fixing and not _undo_last():  # "not 5 days, on the 25th…": replaces what was just made…
+        fixing = None
+    if not re.search(_DAYWORD, rest) and _day_in(rest)[0] is None:
+        d = re.search(_DAYWORD, before)
+        if d:  # its time is on the day mentioned before it
+            rest = f"{rest} on {d.group('d')}" if d.group("d") not in ("today", "tonight", "tomorrow") else f"{rest} {d.group('d')}"
+        else:
+            day, _ = _day_in(re.sub(r"^(?:no|nope|not|actually|sorry|wait)\b.*?(?=\bon\b|\bfor\b|$)", "", before))
+            if day:  # "…on 25th November, whole day, remind me to go to Polar Bear"
+                rest = f"{rest} on {day.day} {day.strftime('%B').lower()}"
+    said = _remind(app, re.match(r"(.+)", rest), text) or _remind_todo(app, re.match(r"(.+)", rest), text)
+    return ("Changed it. " + said.removeprefix("Okay, ").removeprefix("Got it. ")) if said and fixing else said
+
+
+# right after setting one: "not tomorrow evening, on Monday evening", "no, make it 8", "move it to Friday"
+@handles(r"(?:no|nope|actually|wait|sorry)?[ ,]*(?:not [a-z0-9 ]+?[ ,]+)?(?:make it|change it to|move it to|i meant|i mean|"
+         r"on|at|for) (.+)")
+def _fix_reminder(app, m, text):
+    last = _last_set
+    note = _last_note
+    if note.get("id") and time.time() - note.get("t", 0) < 300 and note.get("t", 0) > last.get("t", 0):
+        day, _ = _day_in(m.group(1))  # the last thing was a to-do: move it to the day you said
+        if not day:
+            return None
+        from batsy.memory_store import get_store
+
+        st = get_store()
+        row = next((r for r in st.agenda_for(note["day"].isoformat()) if r["id"] == note["id"]), None)
+        if not row:
+            return None
+        st.remove_agenda(note["id"])
+        note.update(id=st.add_agenda(day.isoformat(), row["text"]), day=day, t=time.time())
+        return f"Moved it: {row['text']} is under the clock for {_when_word(day)}."
+    if not last or time.time() - last.get("t", 0) > 300:
+        return None
+    from batsy.tools import monitor
+
+    new = m.group(1)
+    found = _when(new)
+    if found is None:
+        return None
+    when = found[0]
+    if not re.search(rf"\b(?:at|by|around|for)? ?{_CLOCK}\b", new) or re.fullmatch(
+            r"(?:on )?(?:[a-z]+day|tomorrow|today)(?: (?:morning|afternoon|evening|night))?", new):
+        old = last["when"]  # only a day: keep the time it had
+        if not re.search(r"\b(?:morning|afternoon|night)\b", new) or old.hour >= 17:
+            when = when.replace(hour=old.hour, minute=old.minute)
+    if when.timestamp() <= time.time():
+        return None
+    monitor.cancel(last["mid"])
+    mid = monitor.add_reminder(when.timestamp(), last.get("what"))
+    _last_set.update(mid=mid, when=when, t=time.time())
+    what = _yours(last.get("what") or "")
+    return f"Moved it: I'll remind you {'' if what.startswith('about ') else 'that ' if re.match(r'(?:you|your)\b', what) else 'to '}{what} {_say_when(when)}."
 
 
 def _as_said(words: str, text: str) -> str:
@@ -867,25 +944,95 @@ def _as_todo(what: str) -> tuple[dt.date, str] | None:
     return (day, task[:1].upper() + task[1:]) if len(task.split()) >= 2 else None
 
 
+_WORDNUM = {"one": 1, "a": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6, "seven": 7, "eight": 8, "nine": 9,
+            "ten": 10, "a couple of": 2, "couple of": 2, "a few": 3, "few": 3}
+_WEEKDAYS = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
+_HAS_CLOCK = re.compile(r"\b(?:at|by|around) (?:\d|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|noon|midnight)|"
+                        r"\d{1,2}(?::\d{2})? ?(?:am|pm|a m|p m)\b|\b\d{3,4}\b|o'?clock|\bnoon\b|\bmidnight\b|half past|"
+                        r"quarter (?:past|to)|\bin \S+ (?:minutes?|hours?)\b|\b(?:minutes?|hours?)\b")
+
+
+def _day_in(s: str) -> tuple[dt.date | None, str]:
+    """The day a to-do is for, and the words without it: "in 5 days", "5 days", "on Friday", "on the 25th",
+    "25th November whole day", "tomorrow" (after midnight: the day just begun). (None, s) when no day is said."""
+    now = dt.datetime.now()
+    today = now.date()
+    late = now.hour < 4
+    pats = [
+        (rf"\b(?:in|after|within)? ?(\d+|{'|'.join(_WORDNUM)}) days?(?: from (?:now|today))?\b",
+         lambda m: today + dt.timedelta(days=int(m.group(1)) if m.group(1).isdigit() else _WORDNUM[m.group(1)])),
+        (r"\b(?:on )?(?:the )?day after tomorrow\b", lambda m: today + dt.timedelta(days=1 if late else 2)),
+        (r"\b(?:on |for )?tomorrow\b", lambda m: today + dt.timedelta(days=0 if late else 1)),
+        (r"\b(?:for |on )?(?:today|tonight)\b", lambda m: today),
+        (rf"\b(?:on |this |next |for )?({'|'.join(_WEEKDAYS)})\b",
+         lambda m: today + dt.timedelta(days=(_WEEKDAYS.index(m.group(1)) - today.weekday()) % 7 or 7)),
+        (rf"\b(?:on |for )?(?:the )?(\d{{1,2}})(?:st|nd|rd|th)?(?: of)? ({'|'.join(MONTHS)})\b",
+         lambda m: _parse_day(f"{m.group(1)} {m.group(2)}")),
+        (rf"\b(?:on |for )?({'|'.join(MONTHS)}) (?:the )?(\d{{1,2}})(?:st|nd|rd|th)?\b",
+         lambda m: _parse_day(f"{m.group(1)} {m.group(2)}")),
+        (r"\b(?:on |for )?the (\d{1,2})(?:st|nd|rd|th)\b",
+         lambda m: (lambda d: d if d >= today else (d.replace(month=d.month % 12 + 1, year=d.year + (d.month == 12))))(
+             today.replace(day=int(m.group(1))))),
+    ]
+    for rx, fn in pats:
+        m = re.search(rx, s)
+        if m:
+            try:
+                d = fn(m)
+            except (ValueError, KeyError):
+                d = None
+            if d:
+                rest = (s[:m.start()] + " " + s[m.end():])
+                rest = re.sub(r"\b(?:the )?(?:whole|all|full|entire) day\b", " ", rest)
+                return d, re.sub(r"\s+", " ", rest).strip(" ,.")
+    return None, s
+
+
+def _when_word(day: dt.date) -> str:
+    n = (day - dt.date.today()).days
+    return "today" if n == 0 else "tomorrow" if n == 1 and dt.datetime.now().hour >= 4 else \
+        day.strftime("%A") if n < 7 else day.strftime("%A, %B %-d")
+
+
+def _undo_last(within: float = 300) -> str | None:
+    """The reminder or to-do Batsy made in the last few minutes, taken back (you're correcting it). What it was."""
+    from batsy.memory_store import get_store
+    from batsy.tools import monitor
+
+    r, n = _last_set, _last_note
+    if r.get("mid") and time.time() - r.get("t", 0) < within and r.get("t", 0) >= n.get("t", 0):
+        monitor.cancel(r["mid"])
+        r.clear()
+        return "reminder"
+    if n.get("id") and time.time() - n.get("t", 0) < within:
+        get_store().remove_agenda(n["id"])
+        n.update(id=None, todo=False)
+        return "to-do"
+    return None
+
+
 # "remind (me) that I have to add a mail connector to you" with no time: a to-do for today, under the clock.
 # (With a time, "remind me at 5 to…" / "in 10 minutes", it's a real reminder: left for the reminder handler.)
 @handles(r"(?:[a-z]+ )?remind(?: me)?(?: that| to| about| of)? (.{6,})")
 def _remind_todo(app, m, text):
     what = m.group(1).strip()
-    if re.search(r"\b(?:at|in|after|before|by|on|every|tomorrow|tonight|morning|evening|afternoon)\b.*"
-                 r"\b(?:\d|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|half|o'?clock|pm|am|minutes?|"
-                 r"hours?|morning|evening|night)\b", what) or re.match(r"(?:me )?(?:at|in) ", what):
+    if _HAS_CLOCK.search(what) or re.search(r"\b(?:every|morning|evening|afternoon|night)\b", what) \
+            or re.match(r"(?:me )?(?:at|in) (?!\S+ days?\b)", what):
         return None  # a time: the reminder handler sets a real reminder
+    given_day = _day_in(what)[0]  # the day can come from words before "remind me" (handed in with `what`)
     raw = re.search(r"(?i)\bremind(?: me)?(?: that| to| about| of)?\s+(.+)", text)
     what = _clean_note(raw.group(1).strip().rstrip(".") if raw else what)
+    day, what = _day_in(what.lower()) if _day_in(what.lower())[0] else (None, what)
+    day = day or given_day or dt.date.today()
+    what = re.sub(r"^(?:me )?(?:that |to |about |of )?(?:something )?(?:that )?", "", what)  # "of something five days that…"
     task = DAYWORD.sub("", TASKY.sub("", what, count=1)).strip(" ,.")
     task = (task[:1].upper() + task[1:]) or what
-    day = dt.date.today() + dt.timedelta(days=1 if re.search(r"\btomorrow\b", what, re.I) else 0)
+    task = _as_said(task, text)[:1].upper() + _as_said(task, text)[1:]
     from batsy.memory_store import get_store
 
-    get_store().add_agenda(day.isoformat(), task)
-    _last_note.update(text=what, t=time.time(), todo=True)
-    return f"Got it. It's under the clock for {'today' if day == dt.date.today() else 'tomorrow'}: {task}."
+    rid = get_store().add_agenda(day.isoformat(), task)
+    _last_note.update(text=what, t=time.time(), todo=True, id=rid, day=day)
+    return f"Got it. It's under the clock for {_when_word(day)}: {task}."
 
 
 # "put that under the clock" (heard as "under my timer, a chick clock" too), "add that to my to-do"

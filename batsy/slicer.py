@@ -225,7 +225,7 @@ NEG = r"(?:no|without|don'?t (?:use|want|add|do)|do not (?:use|want|add)|remove|
 AGAIN = re.compile(r"^(?P<wish>(?:don'?t|do not|no|without|remove|turn off|disable|use|add|keep|change|reduce|increase|"
                    r"lower|raise|set|put|make|switch|go|try|only)\b.*?)[ ,]+(?:and |but |so )?(?:then )?(?:re ?slice|slice)"
                    r"(?: (?:it|that|this|the model|the print|[\w-]+))?(?: again)?$")
-FILLERS = re.compile(r"\b(?:uh+|um+|er+|mm+|hmm+|like|you know|i mean)\b")
+FILLERS = re.compile(r"\b(?:uh+|um+|er+|(?<![0-9] )(?<![0-9])mm+|hmm+|like|you know|i mean)\b")
 # infill patterns you might name -> OrcaSlicer's value
 PATTERNS = {"gyroid": "gyroid", "grid": "grid", "honeycomb": "honeycomb", "3d honeycomb": "3dhoneycomb",
             "lightning": "lightning", "cubic": "cubic", "adaptive cubic": "adaptivecubic", "triangles": "triangles",
@@ -252,10 +252,53 @@ def canonical(n: str) -> tuple[str, bool]:
     return n, bool(re.match(r"(?:please )?(?:re ?slice|slice) (?:it|that|this|the model|[\w-]+) again\b", n))
 
 
+# "scale it down to 50 mm and slice it", "i'll resize the mask to 8 cm tall", "make it 80 percent": plain arithmetic
+RESIZE = re.compile(r"^(?:[a-z]{1,2} |i'?ll |i will |can you |could you |please |now |just )*(?:scale|resize|shrink|"
+                    r"enlarge|make)\s+(?P<what>it|this|that|the model|the last one|.+?)?\s*(?:down |up )?"
+                    r"(?:to|by|at)?\s*(?P<num>\d+(?:\.\d+)?)\s*(?P<unit>mm|millimet\w*|cm|centimet\w*|percent|%)"
+                    r"(?:\s+(?P<axis>tall|high|height|wide|width|long|length|across|big|size))?(?P<rest>.*)$")
+
+
+def resize(model: Path, num: float, unit: str, axis: str | None) -> tuple[Path, str]:
+    """A scaled copy next to the model ("mask small 50mm.stl"): its biggest side (or its height/width) becomes the
+    size you said, or N percent. Returns (the copy, what was done to say)."""
+    import trimesh
+
+    m = trimesh.load(str(model), force="mesh")
+    ext = [float(v) for v in m.extents]
+    if unit.startswith(("percent", "%")):
+        f, tag = num / 100, f"{num:g}pct"
+    else:
+        mm = num * (10 if unit.startswith("c") else 1)
+        i = 2 if axis in ("tall", "high", "height") else 0 if axis in ("wide", "width") else \
+            1 if axis in ("long", "length") else ext.index(max(ext))
+        f, tag = mm / ext[i], f"{mm:g}mm"
+    if not 0.01 < f < 100:
+        raise ValueError(f"That would make it {f:g} times its size; say it again?")
+    m.apply_scale(f)
+    out = model.with_name(f"{model.stem} {tag}{'.stl' if model.suffix.lower() == '.obj' else model.suffix}")
+    from batsy import inbox
+
+    inbox.made(out)  # ours, not something you sent
+    m.export(str(out))
+    x, y, z = (round(float(v), 1) for v in m.extents)
+    log.info("resized %s x%.3f -> %s (%s x %s x %s mm)", model.name, f, out.name, x, y, z)
+    return out, f"Scaled {model.stem.replace('_', ' ')} to {x:g} by {y:g} by {z:g} millimetres"
+
+
 def explicit(n: str) -> bool:
     """Is this a plain "slice it with <settings>" (or "with <preset>") that needs no thinking? Then Batsy does it
     itself, in seconds, without asking Claude."""
+    if RESIZE.match(canonical(n)[0]):
+        return True
     t, _ = canonical(n)
+    if LAY.search(t):  # "slice the mask lying down", "lay it flat and slice it with 0.16 layer height"
+        t = re.sub(r"^(?:and|then|,)\s+(?:then\s+)?", "", re.sub(r"\s+", " ", LAY.sub(" ", t)).strip(" ,"))
+        t = re.sub(r"\s+(?:in|with|on)(?: the| its)?$", "", t)
+        if re.match(r"(?:please )?(?:re ?slice|slice|print) (?:the |my )?[\w-]+(?: [\w-]+)?$", t) or not t:
+            return True
+        if not re.match(r"(?:please )?(?:re ?slice|slice|print)\b", t):
+            t = "slice it " + t
     t = re.sub(r"\b(?:again|keep|all|other|the|changes?|settings?|rest|same|but|do|don'?t|not|use|reduce|increase|"
                r"lower|raise|change|remove|turn|disable|get|rid|stop|using|want|everything|else)\b", " ", t)
     m = re.match(r"\s*(?:[a-z]{1,2}\s+)?(?:please\s+)?(?:re ?slice|slice|print)\s+(?:it|this|that|the model|the last one|again)\b(?P<w>.*)$", t)
@@ -570,10 +613,16 @@ SAVE = re.compile(r"^(?:please )?(?:save|keep|store) (?:it|this|that|these setti
 KICK = re.compile(r"^(?:please )?(?:slice|re ?slice|make|print)\b")
 
 
-def handle(app, n: str) -> str | None:
+def handle(app, n: str, model_override: Path | None = None) -> str | None:
     # "s uh slice it with 0.16 uh layer height" -> "slice it with 0.16 layer height";
     # "don't use fuzzy skin and slice it again" -> "slice it again don't use fuzzy skin" (on top of the last slice)
     n, again = canonical(n)
+    lay = bool(LAY.search(n))
+    if lay:  # "slice it lying down": an orientation, not a setting for the slicer to plan
+        n = re.sub(r"^(?:and|then|,)\s+(?:then\s+)?", "", re.sub(r"\s+", " ", LAY.sub(" ", n)).strip(" ,")) or "slice it"
+        n = re.sub(r"\s+(?:in|with|on)(?: the| its)?$", "", n)
+        if not KICK.match(n):
+            n = "slice it " + n
     if SHOW.match(n):
         return "Opening the slice in 3D." if show_3d(app) else "I couldn't open the browser."
     if PROFILES.match(n):
@@ -583,6 +632,22 @@ def handle(app, n: str) -> str | None:
         return f"I have {len(names)} print profiles: {', '.join(names)}. {settings().get('default', DEFAULT_PROCESS)} " \
                f"is the default, with {settings().get('filament', 'PLA')}."
     last = getattr(app, "slice_last", None)
+    m = RESIZE.match(n)
+    if m and (m["what"] or "").strip() in ("", "it", "this", "that", "the model", "the last one") or m and _named_model(m["what"]):
+        what = (m["what"] or "").strip()
+        model = (_named_model(what) if what not in ("", "it", "this", "that", "the model", "the last one") else None) \
+            or _target(app, None)  # the newest model you sent (mask small, which didn't fit), or the copy made last time
+        if model is None or model.suffix.lower() not in (".stl", ".obj"):
+            return "Which model? Send me an STL first." if model is None else "I can only resize STL or OBJ files."
+        try:
+            out, said = resize(model, float(m["num"]), m["unit"], m["axis"])
+        except Exception as e:
+            return f"I couldn't resize it: {e}"
+        app.last_file = out
+        if re.search(r"\b(?:slice|print)\b", m["rest"] or "") or not re.search(r"\bdon'?t slice|no slicing|just\b", n):
+            app._reply(said + ".")
+            return handle(app, "slice it", out)  # the resized copy, sliced with your default preset
+        return said + "."
     m = SAVE.match(n)
     if m and last and last.get("overrides"):
         name = save_process(m["name"].strip(), last["process"], last["overrides"])
@@ -601,7 +666,7 @@ def handle(app, n: str) -> str | None:
         return None  # you named something I don't have ("print a calibration test"): not the last model instead
     # "slice it finer" after "put five on the bed": the arrangement you sliced last, not the single original
     last_model = Path(last["model"]) if last and last.get("model") else None
-    model = named or (last_model if last_model and (n.startswith("make") or (generic and last_model.exists()))
+    model = model_override or named or (last_model if last_model and (n.startswith("make") or (generic and last_model.exists()))
                       else None) or _target(app, None)
     if n.startswith("make") and not (last or model):
         return None  # "make it louder": not about printing
@@ -611,6 +676,9 @@ def handle(app, n: str) -> str | None:
     base_name = proc or (last["process"] if relative else None) or settings().get("default", DEFAULT_PROCESS)
     if model is None:
         return "Which model? Send me an STL or a 3MF first."
+    model, prepared = prepare(model, force=lay)  # broken mesh closed; laid down when it stands badly
+    if prepared:
+        app._reply(prepared)
     try:
         base_name, pfile = _process_file(base_name)
     except ValueError as e:
@@ -655,10 +723,17 @@ def _named_model(n: str) -> Path | None:
 
     from batsy import received
 
+    # just the name you said: "slice the mask lying down" -> "mask" (matched inside "mask small 50mm")
+    m = re.match(r"(?:please )?(?:re ?slice|slice|print|make)\s+(?:the |my |that |this )?(?P<name>.+?)"
+                 r"(?:\s+(?:with|using|at|on|in|and|but|again|without)\b.*)?$", n)
+    said = m["name"] if m else n
+    if said in ("it", "this", "that", "the model", "the last one", "again"):
+        return None
     best, score = None, 0
-    for r in received.all_rows(limit=300):
+    for r in received.all_rows(limit=300):  # newest first: ties go to the newest
         if Path(r["path"]).suffix.lower() in MODELS and Path(r["path"]).exists():
-            sc = fuzz.partial_ratio(received.title(r["name"]), n)
+            sc = max(fuzz.partial_ratio(received.title(r["name"]), n), fuzz.partial_ratio(said, received.title(r["name"]))
+                     if len(said) >= 3 else 0)
             if sc > score:
                 best, score = Path(r["path"]), sc
     return best if score >= 88 else None
@@ -705,6 +780,82 @@ def fix_units(model: Path) -> str | None:
     return f"{model.stem} was drawn in metres, so I scaled it up: it's {x} by {y} by {z} millimetres."
 
 
+# "slice it lying down", "lay it flat", "best orientation": pick the orientation for it
+LAY = re.compile(r"\b(?:(?:lying|lie|lay|laid|put) (?:it |this |that )?(?:down|flat|on (?:its|the) (?:back|side|face|front))|"
+                 r"(?:in |with )?(?:the )?best orientation|orient(?:ed|ate)? (?:it|this|that)?\s*(?:properly|better|right)?|"
+                 r"flat on the bed)\b")
+
+
+def _placed(m):
+    """The mesh sitting on the bed (lowest point at z=0)."""
+    m = m.copy()
+    m.apply_translation([0, 0, -m.bounds[0][2]])
+    return m
+
+
+def _cost(m) -> tuple[float, float, float]:
+    """(how bad, support needed, footprint mm²) for a mesh already on the bed. Support ~ overhang area x its height
+    above the bed (works for hollow shells too, whose inside faces point down whichever way up); a tiny footprint
+    (standing on spikes) wobbles and gets knocked."""
+    from scipy.spatial import ConvexHull
+
+    n, a, c = m.face_normals, m.area_faces, m.triangles_center
+    down = (n[:, 2] < -0.707) & (c[:, 2] > 0.5)
+    support = float((a[down] * -n[down, 2] * c[down, 2]).sum())
+    v = m.vertices[m.vertices[:, 2] < 0.6][:, :2]
+    try:
+        foot = float(ConvexHull(v).volume) if len(v) >= 3 else 0.0  # (a 2-D hull's "volume" is its area)
+    except Exception:
+        foot = 0.0
+    return support * (1.6 if foot < 20 else 1.0), support, foot
+
+
+def prepare(model: Path, force: bool = False) -> tuple[Path, str | None]:
+    """If the model stands badly (on a tiny footprint, or another way up needs far less support), lay it the best way
+    up (mesh tidied on the way). Returns (the model to slice, what was done to say): the original when it's fine."""
+    if model.suffix.lower() not in (".stl", ".obj") or (model.stem.endswith(" laid") and not force):
+        return model, None
+    try:
+        import numpy as np
+        import trimesh
+
+        m = trimesh.load(str(model), force="mesh")
+        if not len(m.faces) or len(m.faces) > 600000:
+            return model, None
+        c0, s0, f0 = _cost(_placed(m))
+        tries = []
+        for axis in ([1, 0, 0], [0, 1, 0]):  # the six ways up of its box...
+            for ang in (np.pi / 2, np.pi, -np.pi / 2):
+                tries.append(trimesh.transformations.rotation_matrix(ang, axis))
+        try:  # ...and the ways it can rest on its own hull
+            poses, _ = trimesh.poses.compute_stable_poses(m, n_samples=1, threshold=0.02)
+            tries += list(poses[:10])
+        except Exception:
+            pass
+        (c1, s1, f1), t = min(((_cost(_placed(m.copy().apply_transform(t))), t) for t in tries), key=lambda x: x[0][0])
+        if not (c1 < 0.6 * c0 or (f0 < 20 and f1 >= 40 and c1 < c0)):
+            return model, "It's already about the best way up." if force else None
+        m.apply_transform(t)
+        if not m.is_watertight:  # tidy what can be tidied (OrcaSlicer repairs the rest)
+            m.merge_vertices()
+            trimesh.repair.fix_normals(m)
+            trimesh.repair.fill_holes(m)
+        m = _placed(m)
+        out = model.with_name(f"{model.stem} laid.stl")
+        from batsy import inbox
+
+        inbox.made(out)  # ours, not something you sent
+        m.export(str(out))
+        log.info("laid %s down -> %s: support %.0f -> %.0f, footprint %.0f -> %.0f mm²", model.name, out.name, s0, s1, f0, f1)
+        why = f"stood on a {f0:.0f} square millimetre footprint" if f0 < 20 else "needed a lot of support"
+        less = round(100 * (1 - s1 / s0)) if s0 > 0 else 0
+        return out, (f"{model.stem.replace('_', ' ')} {why}, so I turned it the best way up: {less} percent less "
+                     f"support, standing on {f1:.0f} square millimetres.")
+    except Exception as e:
+        log.warning("orienting %s: %s", model.name, e)
+        return model, None
+
+
 def on_arrival(app, files: list[Path]) -> None:
     """Called for every batch that arrives: printer bundles become your presets, models get sliced."""
     for f in files:
@@ -726,6 +877,9 @@ def on_arrival(app, files: list[Path]) -> None:
     def run():
         for model in models:
             try:
+                model, said = prepare(model)
+                if said:
+                    app.announce(said)
                 r = slice_model(model)
                 app.slice_last = {"model": str(model), "process": r["process"], "overrides": {}, "result": r}
                 from batsy import vault_capture

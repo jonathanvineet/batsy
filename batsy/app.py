@@ -211,6 +211,10 @@ class Batsy:
             research._app = self
         except Exception:
             log.exception("research didn't start")
+        from batsy.router import Decision, Router
+
+        self.router = Router(self.cfg)  # what each sentence is about, before any handler can grab it (router.py)
+        self._topic = Decision(None)
         from batsy import discover
 
         discover.start(self)  # the weekly Batsy Discovery playlist
@@ -277,7 +281,12 @@ class Batsy:
         if not req or req["done"].is_set():
             return False
         if req.get("parked") and safety.answer(text) is None:
-            return False  # a question still waiting, but this isn't a yes or a no: it's a new request
+            # not a yes or a no: you've moved on to something new, so the waiting question is dropped (a no)
+            req["answer"] = False
+            req["done"].set()
+            self.confirm_request = None
+            log.info("dropped the waiting question (%s): a new request came", req.get("question", "")[:60])
+            return False
         req["typed_answer"] = text
         if self.ears is not None:
             self.ears.cancel.set()  # stop listening for a spoken answer: this one counts
@@ -880,6 +889,20 @@ class Batsy:
                 get_store().add_exchange("voice", text, reply, [f"handled instantly ({self._route})"])
         return handled
 
+    def _may(self, *topics: str) -> bool:
+        """May a handler for one of these topics take this sentence? Yes, unless the router is sure it's about
+        something else ("next song" is music, never the research's "next steps")."""
+        t = getattr(self, "_topic", None)
+        return t is None or t.topic is None or t.topic in topics
+
+    def _took(self, topic: str) -> bool:
+        """A handler for `topic` took the sentence: the router learns from it (unless you correct it next)."""
+        try:
+            self.router.handled(getattr(self, "last_raw_text", ""), topic)
+        except Exception:
+            log.exception("router")
+        return True
+
     def _local_command(self, text: str) -> bool:
         from batsy.tools import screen
 
@@ -895,44 +918,69 @@ class Batsy:
             return True
         if self._self_command(n):
             return True
+        fixed = self.router.correction(n)  # "no, I meant the printer": the last sentence, done the right way
+        if fixed:
+            from batsy.router import Decision
+
+            old, topic = fixed
+            self._topic = Decision(topic, 1.0, "you said so")
+            self.last_raw_text = old
+            if self._local_command_routed(old):
+                return True
+            self._reply(f"Got it, that was about {topic}. I'll remember that. Say it once more?")
+            return True
+        self._topic = self.router.route(n)
+        return self._local_command_routed(text)
+
+    def _local_command_routed(self, text: str) -> bool:
+        """The handlers, each tagged with its topic (`_may`): when the router is sure, only that topic's handlers and
+        the general ones get a go."""
+        from batsy.tools import screen
+
+        n = _strip_fillers(_norm(text))
         from batsy import research_talk
 
-        said = research_talk.handle(self, n, text)  # research words ("research", "papers", "notes"...): understood first
+        said = research_talk.handle(self, n, text) if self._may("research") else None  # research words, understood first
         if said:
             self._route = "instant"
+            self._took("research")
             self._reply(said)
             return True
         from batsy import vault_talk
 
-        said = vault_talk.handle(self, n, text)  # the brain: "note that…", "what did I do yesterday", "open my brain"
+        said = vault_talk.handle(self, n, text) if self._may("brain", "todo") else None  # "note that…", "open my brain"
         if said:
             self._route = "instant"
+            self._took("brain")
             self._reply(said)
             return True
         from batsy import printagent
 
-        if printagent.wants(_norm(text), self):  # planning a print: talked through by the print expert, not by rules
+        if self._may("print") and printagent.wants(_norm(text), self):  # planning a print: talked through by the print expert, not by rules
             self.print_talk_t = time.time()
             return False
         from batsy import printsearch
 
-        said = printsearch.handle(self, n)  # "find me a phone stand to print", then "the second one"
+        said = printsearch.handle(self, n) if self._may("print") else None  # "find me a phone stand to print"
         if said:
             self._route = "instant"
+            self._took("print")
             self._reply(said)
             return True
         from batsy import gitops
 
-        said = gitops.handle(self, n)  # "commit and push the batsy folder": Batsy does git itself, never Claude
+        said = gitops.handle(self, n) if self._may("git") else None  # "commit and push the batsy folder": never Claude
         if said:
             self._route = "instant"
+            self._took("git")
             self._reply(said)
             return True
         from batsy import discover
 
-        said = discover.handle(self, n)  # "make my discovery playlist", "play something new" (before the slicer's "make")
+        said = discover.handle(self, n) if self._may("music") else None  # "make my discovery playlist"
         if said:
             self._route = "instant"
+            self._took("music")
             self._reply(said)
             return True
         from batsy import showcase
@@ -940,39 +988,45 @@ class Batsy:
         if showcase.handle(self, n):  # "show what you can do": the narrated tour on a live dashboard
             self._route = "command"
             return True
-        said = home.handle(self, n)  # "turn on the light", "night mode": the ESP32 on the network, instantly
+        said = home.handle(self, n) if self._may("home") else None  # "turn on the light", "night mode": the ESP32
         if said is not None:
             self._route = "instant"
+            self._took("home")
             self._reply(said)
             return True
         from batsy import phone
 
-        said = phone.handle(self, n)  # "install the widget app on my phone", "pair my phone"
+        said = phone.handle(self, n) if self._may("phone") else None  # "install the widget app on my phone"
         if said is not None:
             self._route = "command"
+            self._took("phone")
             self._reply(said)
             return True
-        said = calib.handle(self, n)  # "print a temperature tower": calibration prints
+        said = calib.handle(self, n) if self._may("print") else None  # "print a temperature tower": calibration prints
         if said is not None:
             self._route = "command"
+            self._took("print")
             if said:
                 self._reply(said)
             return True
-        said = printer3d.handle(self, n)  # the 3D printer on USB: "print it", "how's the printer", "preheat"
+        said = printer3d.handle(self, n) if self._may("print") else None  # the 3D printer on USB: "print it", "how's the printer", "preheat"
         if said is not None:
             self._route = "command"
+            self._took("print")
             if said:
                 self._reply(said)
             return True
-        said = slicer.handle(self, n)  # "slice it with fast", "how long will it take to print"
+        said = slicer.handle(self, n) if self._may("print") else None  # "slice it with fast", "how long will it take to print"
         if said is not None:
             self._route = "command"
+            self._took("print")
             if said:
                 self._reply(said)
             return True
-        said = pc.handle(self, n)  # the desktop PC over SSH: "open YouTube on the PC", "shut down the PC"
+        said = pc.handle(self, n) if self._may("pc", "system") else None  # the desktop PC over SSH
         if said is not None:
             self._route = "instant"
+            self._took("pc")
             if said:
                 self._reply(said)
             return True
@@ -985,7 +1039,7 @@ class Batsy:
                 self._reply(said)
             return True
         sp = music.get_spotify(self.cfg)
-        if sp.ready() and (sp.pending or sp.last):  # Batsy just asked "Is it X, or Y?", or just played something
+        if self._may("music") and sp.ready() and (sp.pending or sp.last):  # it just asked "Is it X, or Y?"
             try:
                 said = sp.choose(n)  # "yes", "the second one", "no", "not that one"
             except spotify.SpotifyError as e:
@@ -998,8 +1052,8 @@ class Batsy:
             return True
         if self._voiceprint_command(n) or self._wake_training(n):
             return True
-        said = calc.answer(text) or instant.answer(self, n, text)  # maths, time, weather, small talk...: no AI
-        if said:
+        said = (calc.answer(text) or instant.answer(self, n, text)) if self._may("info", "todo", "system") else None
+        if said:  # maths, time, weather, to-dos, small talk...: no AI
             self._route = "instant"
             self._reply(said)
             return True
@@ -1017,7 +1071,7 @@ class Batsy:
             return True
         from batsy import saver
 
-        said = saver.handle(n, self)  # "add the weather to the screensaver", "make it minimal"... (no AI)
+        said = saver.handle(n, self) if self._may("system") else None  # "add the weather to the screensaver"
         if said is not None:
             if said:
                 self._reply(said)
@@ -1029,27 +1083,27 @@ class Batsy:
         except Exception:
             log.exception("inbox")
         try:
-            if self.shop.handle(n, text):  # prices across Amazon, Flipkart, Robu, Croma...
+            if self._may("shopping") and self.shop.handle(n, text):  # prices across Amazon, Flipkart, Robu, Croma...
                 self._route = "command"
-                return True
+                return self._took("shopping")
         except Exception:
             log.exception("shopping")
             self._reply("Something went wrong checking prices. It's in the log.")
             return True
         try:
-            if self.projects.handle(n, text):  # "I'm doing a project on...", "update on my robot project", "find my notes"
+            if self._may("research", "brain", "todo") and self.projects.handle(n, text):  # "I'm doing a project on..."
                 self._route = "command"
                 return True
         except Exception:
             log.exception("projects")
-        if self.tasks.handle(n, text):  # chores/projects: check-in answers, "I do laundry every Sunday"...
-            return True
+        if self._may("todo") and self.tasks.handle(n, text):  # chores: check-in answers, "I do laundry every Sunday"
+            return self._took("todo")
         if self._skill_feedback(n, text):
             return True
         if self.routines.handle(n):
             return True
         try:
-            said = model3d.handle(n)  # 3D viewer: open models, rotate, views, dimensions... (no AI)
+            said = model3d.handle(n) if self._may("print") else None  # 3D viewer: open models, rotate, views...
         except Exception as e:
             log.exception("3d viewer")
             said = f"The 3D viewer had a problem: {e}"
@@ -1112,7 +1166,7 @@ class Batsy:
             self._tool(["wpctl", "set-mute", "@DEFAULT_AUDIO_SINK@", "toggle"])
             return True
         sp = music.get_spotify(self.cfg)
-        if sp.ready():
+        if sp.ready() and self._may("music"):
             try:
                 reply = spotify.handle_local(sp, n)
             except spotify.SpotifyError as e:
@@ -1138,10 +1192,11 @@ class Batsy:
             return True
         from batsy import research
 
-        if research.active():  # nothing else took it and a research is on: is it about the research? (local AI)
+        if research.active() and self._may("research"):  # nothing else took it and a research is on: about it?
             said = research_talk.handle(self, n, text, explicit=False)
             if said:
                 self._route = "instant"
+                self._took("research")
                 self._reply(said)
                 return True
         return False
@@ -1546,7 +1601,8 @@ class Batsy:
         self.ears.drain()
         barge_in = self.cfg.get("voice.barge_in")
         while not (done.is_set() and self.speaker.idle()):
-            if self.confirm_request:
+            req = self.confirm_request
+            if req and not req.get("parked") and not req.get("asking"):  # asked once, then it waits quietly
                 self._serve_voice_confirm()
                 self.ears.drain()
                 continue

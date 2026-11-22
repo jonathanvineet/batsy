@@ -110,6 +110,8 @@ def handle(app, n: str, raw: str, explicit: bool = True) -> str | None:
     said = _answer_pending(n, raw)
     if said:
         return said
+    if re.match(r"(?:please |can you |could you )?(?:re ?slice|slice|print|scale|resize|lay|orient)\b", n):
+        return None  # a print command the slicer didn't take: never "talk about the research" instead
     active = research.active()
     # explicit (early in Batsy's chain): only sentences with research words. Otherwise (the end of the chain, after
     # every instant command had its go): anything, while a research is on.
@@ -423,6 +425,9 @@ def deep(app, r: dict, text: str, emit, then=None) -> None:
             app.announce(f"Claude couldn't finish the deep dive on {r['name']}.")
             return
         out = (out or "").strip()
+        if claude_code.limited(out):  # no scouting happened: don't pretend, and don't write a thin report from nothing new
+            app.announce(f"{out} I'll do it properly when it's back: just ask me again then.")
+            return
         if out:
             research.add_finding(r["id"], "next", f"Deep dive ({dt.date.today():%d %b}): {out[:400]}")
         app.announce((out[:400] + " I'm reading them now.") if out else "Claude found some documents. I'm reading them now.")

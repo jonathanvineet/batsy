@@ -643,14 +643,22 @@ def read_fetched(rid: int) -> list[str]:
     try:
         rows = [json.loads(x) for x in q.read_text().splitlines() if x.strip()]
     except OSError:
-        return []
+        rows = []
     mine, rest = [x for x in rows if x["rid"] == rid], [x for x in rows if x["rid"] != rid]
     q.write_text("".join(json.dumps(x) + "\n" for x in rest))
     r, done = get(rid), []
+    # anything in Files/ that was fetched but never read (a restart mid-run): read it too
+    have = {str(s_.get("path")) for s_ in items(rid, "source", 500)} | {x["path"] for x in mine}
+    files = folder(r) / "Files"
+    if files.is_dir():
+        mine += [{"path": str(f), "title": f.stem} for f in sorted(files.iterdir())
+                 if f.is_file() and not f.name.startswith(".") and str(f) not in have]
     for x in mine:
         p = Path(x["path"])
         try:
-            done.append(read_document(r, p, url=x.get("url", ""), title=x.get("title", ""), why=x.get("why", "")))
+            what = read_document(r, p, url=x.get("url", ""), title=x.get("title", ""), why=x.get("why", ""))
+            if what:
+                done.append(what)
         except Exception as e:
             log.warning("reading %s: %s", p.name, e)
     return done
@@ -665,22 +673,45 @@ def read_document(r: dict, p: Path, url: str = "", title: str = "", why: str = "
         return _read_document(job, r, p, url, title, why)
 
 
+def _set_aside(p: Path) -> None:
+    """A fetched file that turned out to be junk: hidden (".skipped-…") so it isn't read again."""
+    if p.parent.name == "Files":
+        try:
+            p.rename(p.with_name(".skipped-" + p.name))
+        except OSError:
+            pass
+
+
 def _read_document(job, r: dict, p: Path, url: str, title: str, why: str) -> str:
     from batsy import docs
 
     job.step("Reading the pages", 5)
     pages = docs.extract_text(p, max_chars=60000) if p.suffix.lower() != ".md" else [(1, p.read_text()[:60000])]
     text = "\n".join(t for _, t in pages)
+    if len(text.split()) < 120:  # a failed download / an empty page: nothing to read, so nothing to make up
+        job.result(f"Skipped {p.name}: there's hardly any text in it")
+        log.info("research: skipped %s (%d words)", p.name, len(text.split()))
+        _set_aside(p)
+        return ""
     job.step(f"Understanding it ({len(pages)} page{'s' if len(pages) != 1 else ''}, about {len(text.split())} words)", 20)
     raw = _ask(
         f"Jonathan's research: \"{r['name']}\" (question: {r.get('question')}). Read this document and answer in JSON only: "
-        "{\"title\": \"its real title\", \"authors\": \"\", \"year\": \"\", \"what\": \"what it is in one line\", "
+        + (f"It should be: \"{title}\"" + (f" ({why})" if why else "") + ". " if title else "")
+        + "Use ONLY what this text says; never add general knowledge. "
+        "{\"matches\": true or false (false if this text is a homepage, menu, news list, login or error page rather "
+        "than that document), \"title\": \"its real title\", \"authors\": \"\", \"year\": \"\", "
+        "\"what\": \"what it is in one line\", "
         "\"points\": [\"its 3-5 key points, one line each, with numbers when it gives them\"], "
         "\"relates\": \"1-2 sentences: how it helps or challenges his question\"}\n\n" + text[:7000], 500, json_mode=True)
     try:
         j = json.loads(raw)
     except ValueError:
         j = {}
+    if j.get("matches") is False or not j.get("points"):
+        job.result(f"Skipped {p.name}: it isn't the document (the page was something else)")
+        log.info("research: %s isn't the document it should be: skipped", p.name)
+        _set_aside(p)
+        return ""
     guess = str(j.get("title") or "").strip()
     if not guess or guess.lower() == r["name"].lower() or guess.lower() == (r.get("question") or "").lower():
         guess = title or p.stem  # the AI gave the research's own name: use the document's (Claude's title / file name)
@@ -755,14 +786,19 @@ def write_report(rid: int, request: str = "") -> Path:
     from batsy import activity
 
     r = get(rid)
+    read_fetched(rid)  # anything fetched but not read yet (a run cut short) goes in first
     with activity.agent(f"Writing a report on {r['name']}", "batsy") as job:
         job.step("Gathering everything in the research", 5)
         srcs = items(rid, "source", 30)
         notes = items(rid, "note", 30)
         hub_text = vault.read(hub(r)) if hub(r).exists() else ""
         block = lambda name: (vault.get_block(hub(r), name) or "").strip() if hub_text else ""  # noqa: E731
-        material = "\n".join(f"- SOURCE {s_['title']}: {(s_['text'] or '')[:900]}" for s_ in srcs[:8]) + "\n" + \
-                   "\n".join(f"- NOTE: {(n_['text'] or '')[:300]}" for n_ in notes[:12])
+        # his own notes first (what the project is to him, "my part is the UI"): they must never be the bit cut off
+        mine = "\n".join(f"- NOTE: {(n_['text'] or '')[:300]}" for n_ in notes[:12])
+        summary = block("summary")[:900]
+        material = (f"WHAT JONATHAN SAYS (his notes; this is what matters to him):\n{mine or '- none'}\n"
+                    + (f"\nSUMMARY SO FAR:\n{summary}\n" if summary else "") + "\nSOURCES:\n"
+                    + "\n".join(f"- SOURCE {s_['title']}: {(s_['text'] or '')[:700]}" for s_ in srcs[:8]))
         extra = "\n".join(f"{h}: {block(b)}" for b, h in (("findings", "Findings"), ("open-questions", "Open questions"),
                                                             ("ideas", "Ideas")) if block(b))
         ask = f" He asked: \"{request}\"." if request else ""
@@ -780,9 +816,14 @@ def write_report(rid: int, request: str = "") -> Path:
                                                     f"key facts and numbers (from the material), and what it means for "
                                                     f"the research. 1-2 short paragraphs.", 320)))
         job.step("Writing what it all means", 75)
-        parts.append(("What it means", _ask(base + "Write 'What it means': bring the sources together for the research "
-                                                    "question in 1 paragraph, then 3-5 bullet points ('- ') of the main "
-                                                    "takeaways.", 320)))
+        written = "\n\n".join(f"{h}:\n{t[:700]}" for h, t in parts)  # the sections above: small enough to see whole
+        parts.append(("What it means", _ask(
+            f"You are finishing a report for Jonathan (an engineering student) on \"{r['name']}\".{ask} Use ONLY what is "
+            f"below; never invent facts.\n\nHIS NOTES (his role and what he needs):\n{mine[:1200] or '- none'}\n\n"
+            f"THE REPORT SO FAR (for reference only; don't repeat it):\n{written[:4500]}\n\nWrite ONLY the new "
+            f"section, without a heading. 'What it means' FOR HIM: what this tells him for his part "
+            f"of the project, in 1 paragraph, then 3-5 bullet points ('- ') of practical takeaways. No generic "
+            f"textbook definitions.", 320)))
         job.step("Writing open questions and next steps", 85)
         parts.append(("Open questions and next steps", _ask(base + "Write 3-5 open questions and 3-5 concrete next "
                                                                    "steps, as two '- ' bullet lists with a bold label "

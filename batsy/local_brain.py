@@ -502,7 +502,8 @@ class LocalBrain:
 
         from batsy import printagent
 
-        if self.claude_ok and printagent.wants(norm(text), getattr(self, "app", None)):  # planning a print: the print expert
+        may = getattr(getattr(self, "app", None), "_may", lambda *t: True)  # the topic router: about something else?
+        if self.claude_ok and may("print") and printagent.wants(norm(text), getattr(self, "app", None)):  # planning a print: the print expert
             self.route = "print"
             if getattr(self, "app", None) is not None:
                 self.app.print_talk_t = time.time()
@@ -565,7 +566,8 @@ class LocalBrain:
 
         from batsy import research, research_talk
 
-        if research.active() and research_talk.is_talk(text) and not ASK_CLAUDE.match(text.strip(" .!?")):
+        if research.active() and getattr(getattr(self, "app", None), "_may", lambda *t: True)("research") \
+                and research_talk.is_talk(text) and not ASK_CLAUDE.match(text.strip(" .!?")):
             self.route = "research"  # a research is on: think it through together (local AI; Claude when asked)
             self.status("Thinking about your research")
             if research_talk.talk(getattr(self, "app", None), text, emit, abort):

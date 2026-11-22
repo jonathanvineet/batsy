@@ -176,16 +176,17 @@ class Drive:
             raise OSError("couldn't make the folder")
         return p
 
-    def thumb(self, path: str, t: int, size: int) -> bytes | None:
-        """A small JPEG preview of a picture or a PDF's first page (made once per version, kept on the laptop)."""
+    def thumb(self, path: str, t: int, size: int, px: int = 360) -> bytes | None:
+        """A JPEG preview of a picture or a PDF's first page, at most px across (360: a tile; 1600: to view on a
+        phone without fetching a 3 MB original). Made once per version, kept on the laptop."""
         path = self.safe(path)
         ext = Path(path).suffix.lower()
-        key = THUMBS / (hashlib.sha1(f"{path}|{t}|{size}".encode()).hexdigest() + ".jpg")
+        key = THUMBS / (hashlib.sha1(f"{path}|{t}|{size}{'|' + str(px) if px != 360 else ''}".encode()).hexdigest() + ".jpg")
         if key.exists():
             return key.read_bytes()
         try:
             if ext == ".pdf":
-                r = self._run(f"pdftoppm -f 1 -l 1 -scale-to 360 -jpeg -- {shlex.quote(path)}", timeout=30)
+                r = self._run(f"pdftoppm -f 1 -l 1 -scale-to {px} -jpeg -- {shlex.quote(path)}", timeout=30)
                 raw = r.stdout if not r.returncode else b""
             elif ext in IMAGES and size < 40e6:
                 raw = self._run(f"cat -- {shlex.quote(path)}", timeout=60).stdout
@@ -201,9 +202,9 @@ class Drive:
                 except ImportError:
                     return None
             im = ImageOps.exif_transpose(Image.open(io.BytesIO(raw)))
-            im.thumbnail((360, 360))
+            im.thumbnail((px, px))
             buf = io.BytesIO()
-            im.convert("RGB").save(buf, "JPEG", quality=78)
+            im.convert("RGB").save(buf, "JPEG", quality=78 if px <= 360 else 82, progressive=px > 360)
             key.write_bytes(buf.getvalue())
             return buf.getvalue()
         except Exception as e:
