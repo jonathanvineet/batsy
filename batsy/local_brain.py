@@ -462,8 +462,10 @@ class LocalBrain:
         from batsy import model3d
 
         explicit = ASK_CLAUDE.match(text.strip(" .!?"))
-        if explicit and self._claude_installed:  # "ask Claude to ...": straight to Claude Code, nothing local
-            request = re.sub(r"\banyway\b", "", explicit.group(1), flags=re.I).strip()
+        tail = None if explicit else ASK_CLAUDE_AFTER.search(text.strip(" .!?"))  # "…do X. Ask Claude."
+        if (explicit or tail) and self._claude_installed:  # straight to Claude Code, nothing local
+            request = explicit.group(1) if explicit else ASK_CLAUDE_AFTER.sub("", text).strip(" .,")
+            request = re.sub(r"\banyway\b", "", request, flags=re.I).strip()
             emit("Asking Claude.")
             self._claude(request, context, emit, on_marker, on_tool, actions,
                          force=bool(re.search(r"\banyway\b", text, re.I)))  # "anyway" ignores Batsy's budget
@@ -770,6 +772,9 @@ class LocalBrain:
             self.memory.new_session()
 
 
+ASK_CLAUDE_AFTER = re.compile(r"[,.;]?\s*\b(?:(?:and |just |please )?(?:ask|use|get|with|via|using|through) "
+                              r"(?:claude|cloud|clawed|claud)(?: (?:for|about|on) (?:this|it|that|all this|all of this))?)"
+                              r"[.!?]?\s*$", re.I)
 ASK_CLAUDE = re.compile(r"(?:hey |ok )?ask (?:claude|cloud|clawed|claud)(?: to| about| if| whether)?[,\s]+(.+)", re.I | re.S)
 CLAUDE_BRIEF = """You are the expert brain behind Batsy, a voice assistant on the user's Fedora laptop. Your reply is \
 spoken aloud. The user, {user}, is {about}: talk to them at that level, in their vocabulary.{github} You can work anywhere on this laptop: read, edit and create files in any folder (use absolute paths; \

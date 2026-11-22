@@ -222,7 +222,7 @@ $('#ask').addEventListener('submit', async e => {
 });
 
 // --- Android StandBy: something Batsy announces takes over the whole screen for a few seconds ---------------------
-const TO_ICONS = {slice: '🧊', print: '🖨', reminder: '⏰', file: '📥', music: '🎵', warn: '⚠️', ask: '❓', batsy: '🦇'};
+const TO_ICONS = {slice: '🧊', print: '🖨', reminder: '⏰', file: '📥', music: '🎵', warn: '⚠️', ask: '❓', batsy: '🦇', open: '🔗'};
 const TO_COLORS = {slice: '124, 92, 255', print: '255, 194, 14', reminder: '255, 122, 122', file: '122, 167, 255',
   music: '60, 207, 110', warn: '255, 92, 77', ask: '255, 194, 14', batsy: '255, 194, 14'};
 let toQueue = [], toBusy = false;
@@ -251,7 +251,8 @@ async function nextTakeover() {
   $('#to-title').textContent = e.kind === 'slice' ? 'Slice done' : e.kind === 'print' && /\bdone\b/i.test(e.text) ? 'Print done' : e.title;
   to.ev = e;
   $('#to-text').textContent = e.text.replace(new RegExp('^' + e.title + ':\\s*', 'i'), '');  // not "Reminder: Reminder: …"
-  $('#to-hint').textContent = e.kind === 'ask' ? 'Answer out loud, or hold the mic' : '';
+  $('#to-hint').textContent = e.kind === 'ask' ? 'Answer out loud, or hold the mic' : e.url ? 'Tap to open' : '';
+  to.onclick = e.url ? () => { window.open(e.url, '_blank'); closeTakeover(); } : null;  // an app Batsy opened for you
   to.style.setProperty('--to', TO_COLORS[e.kind] || TO_COLORS.batsy);
   const img = $('#to-img');
   img.hidden = true;
@@ -260,7 +261,7 @@ async function nextTakeover() {
     if ($('#sw-img').src) { img.src = $('#sw-img').src; img.hidden = false; }
   }
   to.classList.toggle('long', e.text.length > 110);
-  const ms = Math.min(14000, 5000 + e.text.length * 45);
+  const ms = e.url ? 20000 : Math.min(14000, 5000 + e.text.length * 45);  // a link: time to tap it
   const bar = $('#to-bar');
   bar.style.transition = 'none'; bar.style.transform = 'scaleX(1)';
   to.hidden = false;

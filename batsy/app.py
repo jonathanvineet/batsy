@@ -680,7 +680,7 @@ class Batsy:
                 self.music_on = False
             time.sleep(30)
 
-    def phone_event(self, text: str, question: bool = False) -> None:
+    def phone_event(self, text: str, question: bool = False, url: str | None = None) -> None:
         """Something Batsy announced or asked: the Android app shows it full screen for a few seconds."""
         low = text.lower()
         kind, title = next(((k, t) for k, t, words in (
@@ -695,7 +695,9 @@ class Batsy:
             kind, title = "ask", "Batsy asks"
         elif re.match(r"I found \d+ .* models\.", text):
             return  # a model search: the phone shows the cards themselves, not this sentence
-        extra = {}
+        extra = {"url": url, "kind_hint": "open"} if url else {}
+        if url:
+            kind, title = "open", "Open"
         if hot := re.search(r"\bthe (laptop|pc) is running hot at (\d+)", low):  # the phone jumps to that temperature
             kind, extra = "temp", {"machine": hot[1], "temp": int(hot[2])}
         self.events = (self.events + [{"id": (self.events[-1]["id"] + 1) if self.events else int(time.time()),
@@ -938,6 +940,13 @@ class Batsy:
         from batsy.tools import screen
 
         n = _strip_fillers(_norm(text))
+        from batsy import built_apps
+
+        said = built_apps.handle(self, n)  # "show me the UI for the gold project": an app Batsy built, started + opened
+        if said:
+            self._route = "command"
+            self._reply(said)
+            return True
         from batsy import research_talk
 
         said = research_talk.handle(self, n, text) if self._may("research") else None  # research words, understood first

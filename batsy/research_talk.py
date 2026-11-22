@@ -145,6 +145,14 @@ def handle(app, n: str, raw: str, explicit: bool = True) -> str | None:
         return None  # not research, or talk: the local brain carries the conversation
     named = research.find(j.get("research") or "") if j.get("research") else None
     r = named or active
+    if WANTS_CLAUDE.search(raw or n) and r and a not in ("start", "list", "rename", "stop", "note", "find_papers",
+                                                          "save_paper"):
+        # "use the latest report and the one I gave, see if that's how the device outputs its data, ask Claude":
+        # Claude reads the research (reports, the files you sent, the code) and writes the answer up
+        research.set_active(r["id"])
+        question = WANTS_CLAUDE.sub("", raw or n).strip(" .,")
+        threading.Thread(target=focused_report, args=(app, r, question, True), daemon=True, name="research-report").start()
+        return f"Asking Claude to check that against everything in {r['name']}. I'll open the answer when it's ready."
     if a == "start":
         topic = (j.get("topic") or "").strip()
         if not topic:
@@ -195,6 +203,15 @@ def handle(app, n: str, raw: str, explicit: bool = True) -> str | None:
         a = "talk"
     if a == "report":
         research.set_active(r["id"])
+        focus = str(j.get("text") or "").strip(" .")
+        if WANTS_CLAUDE.search(raw or n) or len(focus.split()) >= 4:
+            # "a small report on how to connect the device to the laptop, ask Claude": that question, not the project
+            question = focus if len(focus.split()) >= 4 else re.sub(WANTS_CLAUDE, "", raw or n).strip(" .,")
+            threading.Thread(target=focused_report, args=(app, r, question, bool(WANTS_CLAUDE.search(raw or n))),
+                             daemon=True, name="research-report").start()
+            return (f"Asking Claude for a short report on {_about(question)}. I'll open it when it's ready."
+                    if WANTS_CLAUDE.search(raw or n) else
+                    f"Writing a short report on {_about(question)}. I'll open it when it's ready.")
 
         def run():
             try:
@@ -439,6 +456,82 @@ def deep(app, r: dict, text: str, emit, then=None) -> None:
         if then is not None:
             then()
     threading.Thread(target=run, daemon=True, name="research-deep").start()
+
+
+WANTS_CLAUDE = re.compile(r"[,.]?\s*\b(?:ask|use|get|with|via|using|have|let|through) (?:claude|cloud|clawed|claud|clod|"
+                          r"lord|laude|clade)\b(?: about all (?:this|of this|that))?"
+                          r"(?: (?:for|about|on) (?:this|it|that|all this|all of this))?|\bclaude (?:should|can|could|will)\b",
+                          re.I)
+
+REPORT_BRIEF = """You are writing a short, practical report for Jonathan (an engineering student) in his research \
+"{name}". The question he wants answered (it may ask you to check one document against another: "the report you \
+generated" is the newest file in Reports/, "the report / document I gave" is what he sent, in Files/ or Sources/; \
+say clearly what matches, what doesn't, and what can't be confirmed from them):
+
+    {question}
+
+Everything Batsy has on this research is in {folder} (the hub note, Notes/, Sources/, Files/ with the documents, \
+Reports/). Code Batsy built for it may be in ~/Batsy (read its README). Read what's relevant first; search the web \
+only for what's missing (manufacturer manuals, drivers, protocols). Be concrete: parts, cables, settings, steps, \
+commands, and what to check when it doesn't work. Say plainly what is not known yet.
+
+Keep it short: about one page. Reply with ONLY the report in Markdown: the first line is "# <title>", then short \
+sections with steps and bullet points. No preamble, no closing remarks."""
+
+
+def _about(q: str) -> str:
+    """'How to connect the original device to the laptop…' -> said in a sentence: 'how to connect the original…'."""
+    words = q.strip(" .").split()
+    out = " ".join(words[:12]) + ("…" if len(words) > 12 else "")
+    return out[:1].lower() + out[1:] if out[:2] != out[:2].upper() else out
+
+
+def focused_report(app, r: dict, question: str, claude: bool) -> None:
+    """A short report answering one question (by Claude when you asked for Claude, else the local AI from the
+    research's material), saved in Reports/ with a PDF, opened and announced."""
+    import datetime as dt
+
+    from batsy import activity, claude_code, vault
+
+    folder = research.folder(r)
+    try:
+        with activity.agent(f"Short report: {_about(question)}", "claude" if claude else "batsy") as job:
+            if claude:
+                job.step("Claude is reading the research and writing", 20)
+                md = claude_code.run(REPORT_BRIEF.format(name=r["name"], question=question, folder=folder),
+                                     f"report: {question[:30]}", cwd=folder, timeout=900, cfg=app.cfg, args=[
+                                         "--add-dir", str(folder), "--add-dir", str(research.Path.home() / "Batsy"),
+                                         "--allowedTools", "Read,Glob,Grep,WebSearch,WebFetch"])
+                if claude_code.limited(md):
+                    app.announce(f"{md} I'll write that report when it's back.")
+                    return
+            else:
+                job.step("Reading what the research has on it", 20)
+                hits = research.retrieve(r["id"], question, k=8)
+                material = "\n".join(f"- {h['title']}: {(h['text'] or '')[:700]}" for h in hits)
+                job.step("Writing", 50)
+                md = research._ask(f"Write a short practical report (about one page, Markdown, first line '# <title>') "
+                                   f"answering: {question}\nUse ONLY this material; say plainly what isn't known.\n\n"
+                                   f"{material[:6000]}", 900)
+            md = (md or "").strip()
+            if not md.startswith("#"):
+                md = f"# {question[:1].upper() + question[1:]}\n\n{md}"
+            title = md.splitlines()[0].lstrip("# ").strip()[:90] or question[:90]
+            job.step("Saving it and the PDF", 90)
+            name = f"{dt.date.today():%Y-%m-%d} {title}"
+            p = folder / "Reports" / f"{vault.safe(name)}.md"
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_text(vault.frontmatter(type="research-report", research=f"[[{vault.safe(r['name'])}]]",
+                                           date=dt.date.today().isoformat(),
+                                           written_by="Claude" if claude else "Batsy (local AI)") + md + "\n")
+            pdf = research._pdf(p, md)
+            job.result(f"Report ready: {title}")
+        subprocess.Popen(["xdg-open", str(pdf or p)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                         start_new_session=True)
+        app.announce(f"Ready: {title}. I've opened it; it's in {r['name']}'s Reports, with a PDF.")
+    except Exception as e:
+        log.warning("focused report: %s", e)
+        app.announce(f"I couldn't finish the report on {_about(question)}.")
 
 
 DEEP_BRIEF = """You are the research scout behind Batsy, Jonathan's voice assistant. He's an engineering student. His \

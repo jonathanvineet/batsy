@@ -860,8 +860,11 @@ def _handler(hub: Hub):
             self.send_header("Content-Type", ctype)
             self.send_header("Content-Length", str(len(data)))
             self.send_header("Cache-Control", "no-store")
-            self.end_headers()
-            self.wfile.write(data)
+            try:
+                self.end_headers()
+                self.wfile.write(data)
+            except (BrokenPipeError, ConnectionResetError):  # the phone stopped waiting (a slow answer): nothing to do
+                self.close_connection = True
 
         def _authed(self) -> bool:
             got = self.headers.get("Authorization", "").removeprefix("Bearer ").strip()
