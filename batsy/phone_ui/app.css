@@ -311,9 +311,40 @@ dialog .ghost { background: var(--w2); } dialog .danger { background: var(--bad)
 .g-yes.danger { background: rgba(255, 92, 77, .92); color: #fff; }
 
 /* --- the newest slice ------------------------------------------------------------------------------------- */
-.sw { display: grid; grid-template-columns: 55% 1fr; gap: clamp(10px, 3vmin, 18px); }
+.sw { display: grid; grid-template-columns: 55% 1fr; gap: clamp(10px, 3vmin, 18px); position: relative; }
+/* models waiting to be sliced, and "how should it sit?": over the card, tap an option */
+.sw-plate { position: absolute; inset: 0; z-index: 2; border-radius: inherit; background: var(--card, #111318);
+  padding: clamp(10px, 3vmin, 16px); display: flex; flex-direction: column; gap: 8px; }
+.sw-plate[hidden] { display: none; }
+/* only waiting (not asking): a compact bar along the bottom, so the last slice stays visible above it */
+.sw-plate.waiting { inset: auto 0 0 0; padding: 10px 12px 12px; border-radius: 0 0 var(--r) var(--r);
+  background: color-mix(in srgb, var(--card, #111318) 94%, transparent); box-shadow: 0 -12px 28px rgba(0, 0, 0, .55); gap: 8px; }
+.sw-plate.waiting .sp-head h3 { font-size: clamp(14px, 4vmin, 18px); }
+.sw-plate.waiting .sp-btns { flex-wrap: nowrap; }
+.sw-plate.waiting .sp-btns button { flex: 1; min-width: 0; flex-basis: auto; height: 38px; font-size: 14px; }
+.sp-head { display: flex; align-items: center; gap: 8px; }
+.sp-head h3 { flex: 1; margin: 0; font: 700 clamp(15px, 4.6vmin, 21px)/1.1 var(--display); color: var(--text); text-transform: none;
+  letter-spacing: .01em; }
+.sp-head button { width: 30px; height: 30px; border-radius: 50%; background: var(--w2); color: var(--muted); border: 0; }
+.sp-opts { flex: 1; min-height: 0; display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
+.sp-opts:empty { display: none; }
+.sp-opt { position: relative; border: 2px solid transparent; border-radius: 12px; background: #0b0d12; padding: 0;
+  overflow: hidden; display: flex; flex-direction: column; color: var(--text); min-height: 0; }
+.sp-opt img { width: 100%; flex: 1; min-height: 0; object-fit: contain; display: block; }
+.sp-opt b { position: absolute; top: 4px; left: 7px; font: 700 18px var(--display); }
+.sp-opt small { font-size: 12px; padding: 3px 4px 6px; color: var(--text); line-height: 1.15; text-align: center;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sp-opt.best { border-color: var(--signal); }
+.sp-opt.best b::after { content: " ★"; color: var(--signal); font-size: 13px; }
+.sp-opt:active { transform: scale(.97); }
+.sp-btns { display: flex; gap: 8px; flex-wrap: wrap; }
+.sp-btns[hidden] { display: none; }
+.sp-btns button { flex: 1; min-width: 30%; height: clamp(36px, 10vmin, 44px); border-radius: 999px; border: 0;
+  background: var(--w2); color: var(--text); font-weight: 600; }
+.sp-btns button.go { flex-basis: 100%; background: var(--signal); color: var(--ink); }
+.sp-note { color: var(--muted); font-size: 13px; }
 .sw-img { min-width: 0; min-height: 0; border-radius: calc(var(--r) * .6); overflow: hidden; background: #0b0d12; }
-.sw-img img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.sw-img img { width: 100%; height: 100%; object-fit: contain; display: block; }  /* the whole plate, title too */
 .sw-info { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 6px; }
 .sw-info b { font: 700 clamp(18px, 5.6vmin, 28px)/1.05 var(--display); display: -webkit-box; -webkit-line-clamp: 3;
   -webkit-box-orient: vertical; overflow: hidden; }

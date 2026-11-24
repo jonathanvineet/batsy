@@ -452,6 +452,11 @@ def main() -> None:
         Config.load()
         printagent.cli(sys.argv[2:])
         return
+    if len(sys.argv) > 1 and sys.argv[1] == "mail":  # `batsy mail login|check|list`: your Gmail (read-only)
+        from batsy import mail
+
+        mail.cli(sys.argv[2:])
+        return
     if len(sys.argv) > 1 and sys.argv[1] == "research":  # `batsy research fetch|add-finding|...`: the research tool
         from batsy import research
 

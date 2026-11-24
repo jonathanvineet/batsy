@@ -568,7 +568,7 @@ class LocalBrain:
 
         from batsy import research, research_talk
 
-        if research.active() and getattr(getattr(self, "app", None), "_may", lambda *t: True)("research") \
+        if research.active() and getattr(getattr(self, "app", None), "_leans", lambda *t: True)("research") \
                 and research_talk.is_talk(text) and not ASK_CLAUDE.match(text.strip(" .!?")):
             self.route = "research"  # a research is on: think it through together (local AI; Claude when asked)
             self.status("Thinking about your research")

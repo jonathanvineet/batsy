@@ -63,6 +63,9 @@ TOPICS: dict[str, Topic] = {
                    r"shuffle|discover weekly|volume|pause|resume)\b",
                    ["play some lo-fi", "next song", "play songs by Lionel Richie", "make my discovery playlist",
                     "pause the music", "what's playing", "skip this one", "turn the volume up"]),
+    "mail": Topic(r"\b(?:e ?mails?|inbox|gmail|mail from|unread|reply to)\b",
+                  ["check my email", "any important emails today", "read the email from Karan",
+                   "what's due from my email", "prepare the report for that email"]),
     "home": Topic(r"\b(?:lights?|lamp|fan|night mode|bedroom|esp ?32|switch (?:on|off))\b",
                   ["turn on the light", "night mode", "switch off the lamp"]),
     "pc": Topic(r"\b(?:the pc|my pc|desktop pc|batman drive|nightwing|superman|on the pc)\b",
@@ -91,6 +94,7 @@ class Decision:
     topic: str | None    # None: not sure, let every handler try as before
     score: float = 0.0
     why: str = ""
+    lean: str | None = None  # the likeliest topic even when not sure ("upright with the head down": print)
 
 
 class Router:
@@ -125,7 +129,7 @@ class Router:
         sure = s1 >= 0.42 and s1 - s2 >= 0.14
         why = ", ".join(f"{k} {v:.2f}" for k, v in ranked[:3])
         log.info("topic %r -> %s (%s)", n[:60], top if sure else "unsure", why)
-        return Decision(top if sure else None, s1, why)
+        return Decision(top if sure else None, s1, why, top if s1 >= 0.3 else None)
 
     def _research_names(self, n: str) -> int:
         """Words that name one of your researches ("gold", "dp5", "echolocation") count as research words."""

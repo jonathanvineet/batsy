@@ -211,6 +211,12 @@ class Batsy:
             research._app = self
         except Exception:
             log.exception("research didn't start")
+        try:
+            from batsy import mail
+
+            mail.start(self)  # Gmail, read every 10 minutes once connected (read-only): mail.py
+        except Exception:
+            log.exception("mail didn't start")
         from batsy.router import Decision, Router
 
         self.router = Router(self.cfg)  # what each sentence is about, before any handler can grab it (router.py)
@@ -547,6 +553,15 @@ class Batsy:
             claude_code.set_limit(which, int(float(m.group(2)) * mult))
             self._reply(f"Your {which} Claude budget is now {float(m.group(2)):g} {m.group(3) or ''} tokens.".replace("  ", " "))
             return True
+        # "my claude session is at 23 percent and the week at 3 percent": the real numbers, read off claude.ai
+        if re.search(r"\bclaude\b", n) and re.search(r"\b(?:session|week|weekly|five hour|5 hour)\b", n) and \
+                re.search(r"\d+(?:\.\d+)? ?(?:percent|%)", n) and not n.startswith(("what", "how")):
+            sm = re.search(r"(?:session|five hour|5 hour)\D{0,30}?(\d+(?:\.\d+)?) ?(?:percent|%)", n)
+            wm = re.search(r"week(?:ly)?\D{0,30}?(\d+(?:\.\d+)?) ?(?:percent|%)", n)
+            said = claude_code.calibrate(self.cfg, float(sm.group(1)) if sm else None, float(wm.group(1)) if wm else None)
+            if said:
+                self._reply(said)
+                return True
         if re.fullmatch(r"(how much )?claude (usage|budget|left)|how much claude (have i used|is left|do i have left)|"
                         r"how much of my claude (budget|limit) (have i used|is left)", n):
             b = claude_code.budget(self.cfg)
@@ -891,6 +906,12 @@ class Batsy:
                 get_store().add_exchange("voice", text, reply, [f"handled instantly ({self._route})"])
         return handled
 
+    def _leans(self, topic: str) -> bool:
+        """Is the sentence about `topic`, or at least not leaning to something else? (Research talk asks this before
+        it takes a sentence nothing else wanted: "upright with the flat head down" leans to printing.)"""
+        t = getattr(self, "_topic", None)
+        return t is None or t.topic == topic or (t.topic is None and t.lean in (None, topic))
+
     def _may(self, *topics: str) -> bool:
         """May a handler for one of these topics take this sentence? Yes, unless the router is sure it's about
         something else ("next song" is music, never the research's "next steps")."""
@@ -940,6 +961,14 @@ class Batsy:
         from batsy.tools import screen
 
         n = _strip_fillers(_norm(text))
+        from batsy import mail
+
+        said = mail.handle(self, n, text) if self._may("mail", "todo") else None  # "check my email", "what's due"
+        if said:
+            self._route = "instant"
+            self._took("mail")
+            self._reply(said)
+            return True
         from batsy import built_apps
 
         said = built_apps.handle(self, n)  # "show me the UI for the gold project": an app Batsy built, started + opened
@@ -1201,7 +1230,7 @@ class Batsy:
             return True
         from batsy import research
 
-        if research.active() and self._may("research"):  # nothing else took it and a research is on: about it?
+        if research.active() and self._leans("research"):  # nothing else took it and a research is on: about it?
             said = research_talk.handle(self, n, text, explicit=False)
             if said:
                 self._route = "instant"

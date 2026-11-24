@@ -169,6 +169,14 @@ class Hub:
         `adb reverse` is lost on every reconnect, so it's re-applied every few seconds."""
         while True:
             try:
+                if shutil.which("adb") and time.time() - getattr(self, "_adb_fixed", 0) > 60:
+                    # a phone plugged in after adb's server started shows "no permissions" until it restarts
+                    out = subprocess.run(["adb", "devices"], capture_output=True, text=True, timeout=8).stdout
+                    if "no permissions" in out:
+                        self._adb_fixed = time.time()
+                        subprocess.run(["adb", "kill-server"], capture_output=True, timeout=8)
+                        subprocess.run(["adb", "start-server"], capture_output=True, timeout=15)
+                        log.info("phone usb: restarted adb (it had no permission for the phone)")
                 where = self._phone_on()
                 if where == "pc" and (self._tunnel is None or self._tunnel.poll() is not None):
                     pc = self._pc()
@@ -1014,6 +1022,15 @@ def _handler(hub: Hub):
                 from batsy import push
 
                 return self._send(200, {"key": push.public_key()})
+            if self.path.startswith("/api/plate"):  # models waiting to be sliced, and "how should it sit?"
+                from batsy import plate
+                from batsy.config import DATA_DIR
+
+                if self.path.startswith("/api/plate/img"):
+                    k = int((self.path.split("k=")[-1].split("&")[0] or "0") if "k=" in self.path else 0)
+                    f = DATA_DIR / f"plate_option_{max(0, min(k, 5))}.png"
+                    return self._send(200, body=f.read_bytes(), ctype="image/png") if f.exists() else self._send(404, {})
+                return self._send(200, plate.state())
             if self.path.startswith("/api/slice"):
                 last = hub.last_slice()
                 if self.path.startswith("/api/slice/paths"):
@@ -1054,6 +1071,32 @@ def _handler(hub: Hub):
                 return self._send(200, {"token": token(), "remote": hub.remote_url()})
             if not self._authed():
                 return
+            if self.path.startswith("/api/plate"):  # tapped on the slice card: start choosing, or pick an option
+                from batsy import plate, slicer
+
+                body = self._body()
+                app = hub.app
+                if "pick" in body:
+                    said = plate.answer(app, str(int(body["pick"]) + 1))
+                elif body.get("start") == "again":  # the slice card's Position button: the last plate, chosen again
+                    ms = plate.again(app)
+                    if not ms:
+                        said = "There's no model to position yet. Send me one."
+                    else:
+                        plate.WAITING.update(models=ms, t=time.time())
+                        plate._save()
+                        said = slicer.handle(app, f"slice {'both' if len(ms) > 1 else 'it'}")
+                elif body.get("start"):
+                    how = {"choose": "", "keep": " as it is", "best": " lying down"}.get(body["start"], "")
+                    n = len(plate.waiting())
+                    said = slicer.handle(app, f"slice {'both' if n > 1 else 'it'}{how}")
+                elif body.get("cancel"):
+                    said = plate.answer(app, "cancel")
+                else:
+                    said = None
+                if said:
+                    app._reply(said)
+                return self._send(200, {"ok": said is not None, "say": said or "", **plate.state()})
             if self.path.startswith("/api/voice"):  # the phone's microphone: raw audio in, Batsy's answer out
                 from urllib.parse import parse_qs, urlparse
 

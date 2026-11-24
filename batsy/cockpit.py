@@ -148,6 +148,15 @@ class Cockpit:
                             "seen": p.get("LastSeen", "")[:16]})
         except Exception as e:
             log.debug("tailscale: %s", e)
+        hub = getattr(self.app, "hub", None)
+        usb = getattr(hub, "usb", None) or {}
+        if usb.get("phone") and usb.get("reverse") and time.time() - usb.get("checked", 0) < 30:
+            # the Android phone on the USB cable talks to Batsy without Tailscale: it's here, whatever Tailscale says
+            phones = sorted((x for x in out if x["kind"] == "android"), key=lambda x: x.get("seen", ""), reverse=True)
+            if phones:
+                phones[0].update(online=True, via="USB")
+            else:
+                out.append({"name": "Android phone", "kind": "android", "online": True, "via": "USB"})
         light = (self.app.cfg.get("home.lights") or {}).get("light") if hasattr(self.app.cfg, "get") else None
         if light:
             import urllib.request

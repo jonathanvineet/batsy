@@ -312,6 +312,14 @@ class Inbox:
         from batsy import slicer
 
         _safely("slicer", slicer.on_arrival, self.app, files)  # presets -> your printer; models sliced in background
+        for f in files:  # Google's OAuth client file for Gmail ("client_secret_….json"): where mail.py looks for it
+            if f.suffix.lower() == ".json" and ("client_secret" in f.name or '"installed"' in f.read_text(errors="ignore")[:200]):
+                from batsy import mail
+
+                mail.CLIENT.write_bytes(f.read_bytes())
+                mail.CLIENT.chmod(0o600)
+                self.app.announce("Got your Google client file. Say connect my Gmail, and allow read-only access in the "
+                                  "browser.")
         fw = getattr(self.app, "pc_forward", None)
         if fw is not None:  # a copy to the sender's Inbox on the PC (Karan -> nightwing, ...)
             _safely("copy to the PC", fw.send, files, self.sender_of)

@@ -88,7 +88,13 @@
       <article class="w sw" id="sw">
         <div class="sw-img"><img id="sw-img" alt=""></div>
         <div class="sw-info"><h3>Sliced</h3><b id="sw-title">Nothing sliced yet</b><small id="sw-meta"></small>
-          <div class="sw-btns"><button id="sw-3d">3D view</button><button id="sw-print">Print</button></div></div>
+          <div class="sw-btns"><button id="sw-3d">3D view</button><button id="sw-pos">Position</button><button id="sw-print">Print</button></div></div>
+        <div class="sw-plate" id="sw-plate" hidden>  <!-- models waiting / "how should it sit?": tap to choose -->
+          <div class="sp-head"><h3 id="sp-title">Waiting to slice</h3><button id="sp-x" aria-label="Cancel">✕</button></div>
+          <div class="sp-opts" id="sp-opts"></div>
+          <div class="sp-btns" id="sp-btns"><button data-start="choose" class="go">Choose position &amp; slice</button>
+            <button data-start="keep">As sent</button><button data-start="best">Batsy picks</button></div>
+        </div>
       </article>
       <article class="w machines-w" id="machines-w"></article>
       <article class="w claude-w">

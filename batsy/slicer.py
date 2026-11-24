@@ -460,7 +460,8 @@ def _process_file(name: str | None) -> tuple[str, Path]:
     names = processes()
     if not names:
         raise ValueError("I don't have any print profiles. Send me your printer bundle first.")
-    want = (name or settings().get("default") or DEFAULT_PROCESS).lower()
+    # "nicee (custom)": the result of a slice says how it was tuned; the preset is still "nicee"
+    want = re.sub(r"\s*\([^)]*\)\s*$", "", (name or settings().get("default") or DEFAULT_PROCESS)).lower()
     pick = next((n for n in names if n.lower() == want), None) or next((n for n in names if want in n.lower()), None)
     if not pick:
         raise ValueError(f"I don't have a profile called {name}. I have {', '.join(names)}.")
@@ -483,17 +484,76 @@ def _estimates(gcode: Path) -> dict:
 
 
 def slice_model(model: Path, process: str | None = None, overrides: dict | None = None, label: str = "",
-                filament_overrides: dict | None = None) -> dict:
-    """Slice model with your printer and the process (default "nicee"), plus any tweaks on top.
-    Returns {"gcode", "time", "grams", ...}."""
+                filament_overrides: dict | None = None, others: list[Path] | None = None) -> dict:
+    """Slice model (and `others` with it, all arranged on one plate) with your printer and the process (default
+    "nicee"), plus any tweaks on top. Returns {"gcode", "time", "grams", ...}."""
     from batsy import activity
 
-    with activity.work(f"Slicing {model.stem}", "slice", f"Slicing {model.stem} with {process or settings().get('default', 'your preset')} (OrcaSlicer)"):
-        return _slice_model(model, process, overrides, label, filament_overrides)
+    what = plate_name([model, *(others or [])])
+    with activity.work(f"Slicing {what}", "slice", f"Slicing {what} with {process or settings().get('default', 'your preset')} (OrcaSlicer)"):
+        return _slice_model(model, process, overrides, label, filament_overrides, others)
+
+
+def plate_name(models: list[Path]) -> str:
+    """'bolt + nut': what's on the plate (a turned copy is still the bolt)."""
+    return " + ".join(re.sub(r" (?:laid|turned)$", "", m.stem) for m in models)
+
+
+def smart(models: list[Path]) -> tuple[dict, list[str]]:
+    """Brim and supports decided by each part's shape, not left always on by the preset ("nicee" had an inner +
+    outer brim and supports for everything, which filled a nut's threaded hole).
+      brim      only for a part that stands on little (a small footprint, or tall and thin), and outside only
+      supports  only for real overhangs: faces pointing nearly straight down, above the bed. Thread flanks, chamfers
+                and the inside of holes don't count.
+    Returns (settings, what was decided, in words)."""
+    import math
+
+    import trimesh
+    from scipy.spatial import ConvexHull
+
+    brim, support, why = False, 0.0, []
+    for m in models:
+        try:
+            mesh = _placed(trimesh.load(str(m), force="mesh"))
+        except Exception:
+            continue
+        n, a, c = mesh.face_normals, mesh.area_faces, mesh.triangles_center
+        v = mesh.vertices[mesh.vertices[:, 2] < 0.3][:, :2]
+        try:
+            foot = float(ConvexHull(v).volume) if len(v) >= 3 else 0.0
+        except Exception:
+            foot = 0.0
+        h = float(mesh.extents[2])
+        if foot < 100 or h > 3.5 * math.sqrt(max(foot, 1)):
+            brim = True
+        # overhangs past 50° that hang over a real drop: a thread's flank has the next turn ~1 mm below it (prints
+        # fine), a branch or a lip hangs over air (needs support). Rays straight down find what's under each face.
+        import numpy as np
+
+        down = np.nonzero((n[:, 2] < -0.77) & (c[:, 2] > 0.4))[0]
+        if len(down):
+            start = c[down] - np.array([0, 0, 0.05])
+            drop = c[down, 2].copy()  # nothing below: down to the bed
+            try:
+                hits, ray, _ = mesh.ray.intersects_location(start, np.tile([0, 0, -1.0], (len(down), 1)),
+                                                            multiple_hits=False)
+                for hit, r in zip(hits, ray):
+                    drop[r] = min(drop[r], start[r, 2] - hit[2])
+            except Exception as e:  # no ray support: count it all (supports on, as the preset had)
+                log.debug("support rays: %s", e)
+            support += float(a[down][drop > 3].sum())
+    out = {"brim_type": ["outer_only"] if brim else ["no_brim"]}
+    why.append("a brim, outside only (it stands on little)" if brim else "no brim (it stands well on the bed)")
+    if support < 30:
+        out["enable_support"] = ["0"]
+        why.append("no supports (nothing really overhangs)")
+    else:
+        why.append(f"supports ({support:.0f} mm² hangs over air)")
+    return out, why
 
 
 def _slice_model(model: Path, process: str | None = None, overrides: dict | None = None, label: str = "",
-                 filament_overrides: dict | None = None) -> dict:
+                 filament_overrides: dict | None = None, others: list[Path] | None = None) -> dict:
     cmd = command()
     if not cmd:
         raise ValueError("OrcaSlicer isn't installed.")
@@ -509,7 +569,9 @@ def _slice_model(model: Path, process: str | None = None, overrides: dict | None
     # Arc fitting off: OrcaSlicer turned near-straight curves into G2/G3 arcs with radii up to 2 m, and the
     # Ender-5 Pro's Marlin can misread one of those as a full circle and race the head to the bed's edge. That's
     # what shifted tree2 a few mm up (19 Nov). Plain short moves print the same curves safely.
-    proc = {**flatten(json.loads(pfile.read_text()), "process"), "enable_arc_fitting": ["0"], **(overrides or {})}
+    auto, decided = smart([model, *(others or [])])  # brim and supports by shape; what you asked for still wins
+    proc = {**flatten(json.loads(pfile.read_text()), "process"), "enable_arc_fitting": ["0"], **auto, **(overrides or {})}
+    log.info("slicing %s: %s", plate_name([model, *(others or [])]), "; ".join(decided))
     for cfg in (printer, proc):  # everything is complete now: no "only for printer X" checks against Orca's bundles
         cfg.pop("compatible_printers", None)
         cfg.pop("compatible_printers_condition", None)
@@ -531,7 +593,8 @@ def _slice_model(model: Path, process: str | None = None, overrides: dict | None
         if fil:
             (work / "filament.json").write_text(json.dumps({**fil, "type": "filament"}))
             args += ["--load-filaments", str(work / "filament.json")]
-        args += ["--arrange", "1", "--orient", "0", "--slice", "0", "--outputdir", str(work), str(model)]
+        args += ["--arrange", "1", "--orient", "0", "--slice", "0", "--outputdir", str(work), str(model),
+                 *[str(o) for o in others or []]]  # several models: arranged together on the one plate
         t0 = time.time()
         p = subprocess.run(args, capture_output=True, text=True, timeout=900, errors="replace")
         gcodes = sorted(work.glob("*.gcode"))
@@ -541,20 +604,21 @@ def _slice_model(model: Path, process: str | None = None, overrides: dict | None
             raise ValueError("OrcaSlicer couldn't slice it" + (f": {tail[-1][:160]}" if tail else "."))
         out_dir = model.parent if model.parent.name == "sliced" else model.parent / "sliced"  # (arrangements live there)
         out_dir.mkdir(exist_ok=True)
-        dest = out_dir / f"{model.stem} - {pname}{(' ' + label) if label else ''}.gcode"
+        dest = out_dir / f"{plate_name([model, *(others or [])]) if others else model.stem} - {pname}{(' ' + label) if label else ''}.gcode"
         shutil.move(str(gcodes[0]), dest)
     result = {"gcode": str(dest), "process": pname + (f" ({label})" if label else ""), "secs": round(time.time() - t0, 1),
+              "decided": [d for d in decided if not any(k in (overrides or {}) for k in ("brim_type", "enable_support"))],
               **_estimates(dest)}
     try:  # a picture of the sliced paths, so you can see the slicing
         from batsy import preview
 
-        title = f"{model.stem.replace('_', ' ')} · {result['process']}"
+        title = f"{(plate_name([model, *others]) if others else model.stem).replace('_', ' ')} · {result['process']}"
         from batsy import activity
 
         activity.step("Drawing the slice preview")
         png, paths = preview.both(dest, title)  # (drawn in its own process)
         result["preview"], result["paths"] = str(png), str(paths)
-        result["name"] = model.stem.replace("_", " ")
+        result["name"] = (plate_name([model, *others]) if others else model.stem).replace("_", " ")
     except Exception as e:
         log.warning("slicer: no preview (%s)", e)
     log.info("sliced %s: %s", model.name, result)
@@ -584,12 +648,16 @@ def too_long(r: dict, copies: int = 1, limit: float | None = None) -> str:
 
 
 def describe(model: Path, r: dict) -> str:
-    bits = [f"{model.stem.replace('_', ' ').replace('-', ' ')} is sliced with {r['process']}"]
+    name = r.get("name") or re.sub(r" (?:laid|turned)$", "", model.stem)
+    bits = [f"{name.replace('_', ' ').replace('-', ' ')} {'are' if ' + ' in name else 'is'} sliced with {r['process']}"]
     if r.get("time"):
         bits.append(f"it prints in about {_say_time(r['time'])}")
     if r.get("grams"):
         bits.append(f"using {round(r['grams'])} grams of filament" + (f", {r['metres']} metres" if r.get("metres") else ""))
-    return ", ".join(bits) + ". The G-code is in the sliced folder next to it."
+    said = ", ".join(bits) + "."
+    if r.get("decided"):  # "no brim (it stands well on the bed), supports (874 mm² hangs over air)"
+        said += " I went with " + " and ".join(x.split(" (")[0] for x in r["decided"]) + "."
+    return said + " The G-code is in the sliced folder next to it."
 
 
 def _say_time(t: str) -> str:
@@ -623,6 +691,15 @@ def handle(app, n: str, model_override: Path | None = None) -> str | None:
         n = re.sub(r"\s+(?:in|with|on)(?: the| its)?$", "", n)
         if not KICK.match(n):
             n = "slice it " + n
+    from batsy import plate
+
+    said = plate.answer(app, n)  # "2", "as it is", "you pick": how the model sits, then it's sliced
+    if said is not None:
+        return said
+    if plate.waiting() and re.search(r"\b(?:i(?:'ve| have)? )?(?:just )?sent (?:you )?(?:the |some |a |two |2 |three |3 )?"
+                                     r"(?:files?|models?|stls?|parts?)\b", n):
+        names = " and ".join(m.stem.replace("_", " ") for m in plate.waiting())
+        return f"Got them: {names}. Say slice {'them' if len(plate.waiting()) > 1 else 'it'} when you're ready."
     if SHOW.match(n):
         return "Opening the slice in 3D." if show_3d(app) else "I couldn't open the browser."
     if PROFILES.match(n):
@@ -662,6 +739,9 @@ def handle(app, n: str, model_override: Path | None = None) -> str | None:
     # "slice it ...", "print this", "make it stronger", or just "slice": the last model. Anything else names a model.
     generic = re.fullmatch(r"(?:please )?(?:re ?slice|slice|print|make)(?: (?:it|this|that|the model|the last one|"
                            r"the last model|again)\b.*)?", n)
+    if not generic and len(plate.waiting()) >= 2 and re.fullmatch(r"(?:please )?(?:re ?slice|slice|print) (?:the |all )?"
+                                                                 r"(?:both|them|all|these|those|everything)\b.*", n):
+        generic = True  # "slice both", "slice them together": what's waiting, on one plate
     if not named and not generic and not n.startswith("make"):
         return None  # you named something I don't have ("print a calibration test"): not the last model instead
     # "slice it finer" after "put five on the bed": the arrangement you sliced last, not the single original
@@ -676,9 +756,14 @@ def handle(app, n: str, model_override: Path | None = None) -> str | None:
     base_name = proc or (last["process"] if relative else None) or settings().get("default", DEFAULT_PROCESS)
     if model is None:
         return "Which model? Send me an STL or a 3MF first."
-    model, prepared = prepare(model, force=lay)  # broken mesh closed; laid down when it stands badly
-    if prepared:
-        app._reply(prepared)
+    group = plate.waiting()  # sent together and not sliced yet ("slice both": one plate)
+    models = [model]
+    if len(group) >= 2 and plate.BOTH.search(n):
+        models = group
+    elif len(group) >= 2 and generic and not named and not relative and model in group:
+        names = " and ".join(g.stem.replace("_", " ") for g in group)
+        return f"{names[:1].upper() + names[1:]} are waiting. Both on one plate, or one of them? Say slice both, or " \
+               f"slice the {group[0].stem.replace('_', ' ')}."
     try:
         base_name, pfile = _process_file(base_name)
     except ValueError as e:
@@ -693,9 +778,16 @@ def handle(app, n: str, model_override: Path | None = None) -> str | None:
     if not overrides and n.startswith("make") and not use_claude:
         return None
     label = "custom" if overrides or use_claude else ""
-    app._reply(f"Slicing {model.stem.replace('_', ' ')} with {base_name}" + (", tuned: " + "; ".join(notes[:4]) if notes else "") + ".")
 
-    def run():
+    def go(ms: list[Path]) -> str:  # sliced once you've said how each sits (or asked for none of that)
+        app._reply(f"Slicing {plate_name(ms).replace('_', ' ')} with {base_name}"
+                   + (" on one plate" if len(ms) > 1 else "")
+                   + (", tuned: " + "; ".join(notes[:4]) if notes else "") + ".")
+        threading.Thread(target=run, args=(ms,), daemon=True, name="slicing").start()
+        return ""
+
+    def run(ms: list[Path]):
+        model = ms[0]
         o, why = overrides, notes
         try:
             if use_claude:
@@ -703,8 +795,10 @@ def handle(app, n: str, model_override: Path | None = None) -> str | None:
                 if why:
                     app.announce("Tuned: " + "; ".join(why[:4]))
             all_o = {**((last or {}).get("overrides", {}) if relative else {}), **o}
-            r = slice_model(model, base_name, all_o, label if all_o else "")
-            app.slice_last = {"model": str(model), "process": base_name, "overrides": all_o, "result": r}
+            r = slice_model(model, base_name, all_o, label if all_o else "", others=ms[1:])
+            app.slice_last = {"model": str(model), "process": base_name, "overrides": all_o, "result": r,
+                              "models": [str(m) for m in ms]}
+            plate.done(ms)
             from batsy import vault_capture
 
             vault_capture.sliced(r, str(model))
@@ -713,8 +807,18 @@ def handle(app, n: str, model_override: Path | None = None) -> str | None:
         except Exception as e:
             app.announce(str(e))
 
-    threading.Thread(target=run, daemon=True, name="slicing").start()
-    return ""
+    if lay:  # "slice it lying down": Batsy's best way up, no questions
+        ms = []
+        for m in models:
+            m2, said = prepare(m, force=True)
+            if said:
+                app._reply(said)
+            ms.append(m2)
+        return go(ms)
+    if relative or plate.KEEP.search(n) or all(m.stem.endswith((" laid", " turned")) for m in models) \
+            or model_override is not None and model_override.stem.endswith((" laid", " turned")):
+        return go(models)  # "slice it again …", "as it is", or already turned the way you chose
+    return plate.start(app, models, go)  # how should each one sit? (a picture of the options, then your pick)
 
 
 def _named_model(n: str) -> Path | None:
@@ -874,22 +978,9 @@ def on_arrival(app, files: list[Path]) -> None:
     if not models or not ready():
         return
 
-    def run():
-        for model in models:
-            try:
-                model, said = prepare(model)
-                if said:
-                    app.announce(said)
-                r = slice_model(model)
-                app.slice_last = {"model": str(model), "process": r["process"], "overrides": {}, "result": r}
-                from batsy import vault_capture
+    from batsy import plate
 
-                vault_capture.sliced(r, str(model))
-                app.announce(describe(model, r))
-            except Exception as e:
-                log.warning("auto-slice %s: %s", model.name, e)
-
-    threading.Thread(target=run, daemon=True, name="auto-slice").start()
+    plate.arrived(app, models)  # never sliced on arrival: they wait until you say what to do
 
 
 def show_3d(app=None) -> bool:

@@ -258,6 +258,7 @@ async function nextTakeover() {
   img.hidden = true;
   if (e.kind === 'slice') {  // the slice's own picture
     await loadSlice().catch(() => {});
+    loadPlate();  // and "how should it sit?" on the card, if Batsy is asking
     if ($('#sw-img').src) { img.src = $('#sw-img').src; img.hidden = false; }
   }
   to.classList.toggle('long', e.text.length > 110);
@@ -534,10 +535,24 @@ function snapFab() {
 }
 function applyFab() {
   const p = store.get('fabPos', null), b = FAB();
-  if (!p) return;  // never moved: its usual bottom-right corner
   const w = b.offsetWidth, h = b.offsetHeight;
-  placeFab(p.side === 'left' ? 12 : innerWidth - w - 12, 6 + p.y * Math.max(0, innerHeight - h - 12));
+  if (p) placeFab(p.side === 'left' ? 12 : innerWidth - w - 12, 6 + p.y * Math.max(0, innerHeight - h - 12));
+  requestAnimationFrame(avoidButtons);
 }
+// The mic floats over everything: never let it sit on a button. If it does (landscape puts the widgets where its
+// corner is), it moves to the other side, low down, where the clock leaves room; your own placement is kept otherwise.
+function avoidButtons() {
+  const b = FAB(), r = b.getBoundingClientRect();
+  if (!r.width) return;
+  const hits = el => { const q = el.getBoundingClientRect();
+    return q.width && !(q.right < r.left || q.left > r.right || q.bottom < r.top || q.top > r.bottom); };
+  const under = [...document.querySelectorAll('.view button, .view a, .view input')].filter(el => el !== b && el.offsetParent && hits(el));
+  if (!under.length) return;
+  const other = r.left + r.width / 2 < innerWidth / 2 ? innerWidth - r.width - 12 : 12;
+  placeFab(other, innerHeight - r.height - 18);
+}
+addEventListener('resize', () => requestAnimationFrame(applyFab));
+$('#views')?.addEventListener('scroll', () => { clearTimeout(avoidButtons.t); avoidButtons.t = setTimeout(avoidButtons, 250); }, {passive: true});
 let fabRest = null;
 function restFab() {  // after a few quiet seconds it fades back a little, out of the way
   const b = FAB();
@@ -904,8 +919,8 @@ async function loadSlice() {
   try { s = await api('/api/slice'); } catch { return; }
   if (!s || !s.t) return;
   $('#sw-title').textContent = s.title;
-  $('#sw-meta').textContent = [s.time, s.grams ? Math.round(s.grams) + ' g' : '', s.metres ? s.metres + ' m' : '']
-    .filter(Boolean).join(' · ');
+  $('#sw-meta').textContent = [s.time, s.grams ? Math.round(s.grams) + '\u00a0g' : '', s.metres ? s.metres + '\u00a0m' : '']
+    .filter(Boolean).join(' · ');  // (a number never splits from its unit)
   if (s.t !== sliceT) {  // a new slice: fetch its picture (with the token, so not a plain <img src>)
     sliceT = s.t;
     try {
@@ -914,6 +929,51 @@ async function loadSlice() {
     } catch { /* keep the old one */ }
   }
 }
+// --- models waiting to slice: choose how each sits, right on the slice card -----------------------------------------
+let plateV = -1, plateTimer = null;
+async function loadPlate() {
+  let p;
+  try { p = await api('/api/plate'); } catch { return; }
+  const box = $('#sw-plate'), a = p.asking;
+  box.hidden = !a && !(p.waiting || []).length;
+  box.classList.toggle('waiting', !a);  // waiting: a bar at the bottom; asking: the whole card
+  clearTimeout(plateTimer);
+  if (box.hidden) return;
+  plateTimer = setTimeout(loadPlate, a ? 2500 : 15000);  // quicker while a question is open
+  if (a) {
+    $('#sp-title').textContent = `How should the ${a.model} sit?` + (a.of > 1 ? ` (${a.n} of ${a.of})` : '');
+    $('#sp-btns').hidden = true;
+    if (a.v === plateV) return;
+    plateV = a.v;
+    const tok = store.get('token', '');
+    $('#sp-opts').innerHTML = a.options.map((o, k) => `<button class="sp-opt${o.best ? ' best' : ''}" data-k="${k}">
+      <b>${k + 1}</b><img alt="" data-k="${k}"><small>${esc(o.how)}</small></button>`).join('');
+    for (const img of $('#sp-opts').querySelectorAll('img')) {  // with the token: not a plain <img src>
+      fetch(`/api/plate/img?k=${img.dataset.k}&v=${a.v}`, {headers: {Authorization: 'Bearer ' + tok}})
+        .then(r => r.ok ? r.blob() : null).then(b => { if (b) img.src = URL.createObjectURL(b); }).catch(() => {});
+    }
+  } else {
+    plateV = -1;
+    const w = p.waiting;
+    $('#sp-title').textContent = (w.length > 1 ? w.slice(0, -1).join(', ') + ' and ' + w[w.length - 1] : w[0]) + ' waiting to slice';
+    $('#sp-opts').innerHTML = '';
+    $('#sp-btns').hidden = false;
+    $('#sp-btns .go').textContent = w.length > 1 ? 'Choose positions' : 'Choose position';
+  }
+}
+async function plateDo(body, el) {
+  try {
+    if (el) el.disabled = true;
+    const r = await api('/api/plate', body, 60000);
+    if (r.say) toast(r.say.length > 140 ? r.say.slice(0, 137) + '…' : r.say);
+  } catch (err) { toast(err.message); }
+  finally { if (el) el.disabled = false; plateV = -1; loadPlate(); setTimeout(loadSlice, 4000); }
+}
+$('#sp-opts').addEventListener('click', e => { const b = e.target.closest('.sp-opt'); if (b) plateDo({pick: +b.dataset.k}, b); });
+$('#sp-btns').addEventListener('click', e => { const b = e.target.closest('button[data-start]'); if (b) plateDo({start: b.dataset.start}, b); });
+$('#sp-x').addEventListener('click', e => plateDo({cancel: true}, e.currentTarget));
+$('#sw-pos').addEventListener('click', e => plateDo({start: 'again'}, e.currentTarget));  // choose how it sits, re-slice
+
 $('#sw-3d').addEventListener('click', () => {
   const box = $('#slice3d');
   $('#slice3d-frame').src = '/app/slice.html';
@@ -1504,8 +1564,8 @@ async function refresh() {
     if (String(e.message).startsWith('Not paired')) toast(e.message);
   } finally { busy = false; }
 }
-refresh(); loadLight(); loadFiles(); loadSlice(); loadCloudWidget(); loadBrain();
+refresh(); loadLight(); loadFiles(); loadSlice(); loadPlate(); loadCloudWidget(); loadBrain();
 setInterval(() => { if (!document.hidden) { loadCloudWidget(); loadBrain(); } }, 60000);
 setInterval(refresh, 3000);
-setInterval(() => { if (!document.hidden) { loadLight(); loadFiles(); loadSlice(); } }, 20000);
-document.addEventListener('visibilitychange', () => { if (!document.hidden) { refresh(); loadLight(); loadFiles(); loadSlice(); loadCloudWidget(); loadBrain(); } });
+setInterval(() => { if (!document.hidden) { loadLight(); loadFiles(); loadSlice(); loadPlate(); } }, 20000);
+document.addEventListener('visibilitychange', () => { if (!document.hidden) { refresh(); loadLight(); loadFiles(); loadSlice(); loadPlate(); loadCloudWidget(); loadBrain(); } });

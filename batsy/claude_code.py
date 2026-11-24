@@ -59,7 +59,9 @@ def _rows() -> list[dict]:
 
 
 def _tokens(r: dict) -> int:
-    return r["in"] + r["out"] + r["cache_read"] + r["cache_write"]
+    # cache reads cost the plan about a tenth of fresh input: counting them in full made Batsy say 92% when the
+    # real figure was 3%
+    return r["in"] + r["out"] + r["cache_write"] + r["cache_read"] // 10
 
 
 def budget(cfg) -> dict:
@@ -88,6 +90,23 @@ def budget(cfg) -> dict:
     return {"session": pack(s_used, lim["session_tokens"], s_reset),
             "week": pack(w_used, lim["weekly_tokens"], week_start + 7 * 86400),
             "requests_week": sum(1 for r in rows if r["t"] >= week_start)}
+
+
+def calibrate(cfg, session_pct: float | None, week_pct: float | None) -> str:
+    """You read the real numbers off claude.ai ("session 23%, week 3%"): the limits are set so Batsy's count matches
+    them (Batsy only sees its own use of Claude, so check again now and then)."""
+    b = budget(cfg)
+    said = []
+    for key, pct, name in (("session", session_pct, "session"), ("week", week_pct, "weekly")):
+        if pct is None:
+            continue
+        used = b[key]["used"]
+        if used and pct > 0:
+            set_limit(name, int(used / (pct / 100)))
+            said.append(f"{key} {pct:g} percent")
+        else:
+            said.append(f"{key} {pct:g} percent (I haven't used Claude in this {key} yet, so I'll check it then)")
+    return "Got it: " + " and ".join(said) + ". My numbers match yours now." if said else ""
 
 
 def over_budget(cfg) -> str | None:

@@ -54,7 +54,7 @@ function render(d) {
   if (d.printer) dev.unshift({name: '3D printer', online: !!d.printer.connected});
   const up = dev.filter(x => x.online).length;
   $('#devices ul').innerHTML = dev.map(x => `<li class="${x.online ? '' : 'down'}"><i class="dot ${x.online ? 'on' : 'off'}"></i>
-    <span>${esc(x.name)}</span></li>`).join('');
+    <span>${esc(x.name)}${x.via ? ` <small>· ${esc(x.via)}</small>` : ''}</span></li>`).join('');
   const off = ms.filter(m => m.online === false).map(m => m.name);
   $('#health').textContent = `${up} of ${dev.length} devices online` + (off.length ? ` · ${off.join(', ')} off` : '');
 

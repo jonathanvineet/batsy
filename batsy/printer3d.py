@@ -67,6 +67,17 @@ class Printer:
 
     # --- the link ----------------------------------------------------------------------------------------------
     def _keep(self) -> None:
+        """The printer link, kept alive: anything unexpected is logged and the link starts over (a dead thread
+        meant a frozen "0%" for a whole print)."""
+        while not self._stop:
+            try:
+                self._keep_link()
+            except Exception:
+                log.exception("printer link")
+                self.ser = None
+                time.sleep(5)
+
+    def _keep_link(self) -> None:
         """Connect, and reconnect when the cable comes back. Never reopen a working link."""
         import serial
 
@@ -107,7 +118,9 @@ class Printer:
                 m = re.search(r"MACHINE_TYPE:([^\s]+(?: [^\s:]+)*?) EXTRUDER", " ".join(fw))
                 self.state["firmware"] = m.group(1) if m else ""
                 self._poll()
-            except (OSError, serial.SerialException) as e:
+            except (OSError, serial.SerialException, TypeError, AttributeError) as e:
+                # (TypeError/AttributeError: the port was closed under the read, e.g. a print stream taking it over;
+                # it used to kill this thread, and the progress froze at 0%)
                 log.info("printer: link lost (%s)", e)
             finally:
                 self.state["connected"] = False
