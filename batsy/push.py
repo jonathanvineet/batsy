@@ -49,11 +49,12 @@ def _subs() -> list[dict]:
         return []
 
 
-def subscribe(sub: dict, device: str = "") -> int:
+def subscribe(sub: dict, device: str = "", user: str = "") -> int:
+    """user "" = you (the phone app, your browser); a friend's key for their browser on the website."""
     if not isinstance(sub, dict) or not sub.get("endpoint") or not (sub.get("keys") or {}).get("p256dh"):
         raise ValueError("not a push subscription")
     with _lock:
-        subs = [s for s in _subs() if s["endpoint"] != sub["endpoint"]] + [{**sub, "device": device[:80]}]
+        subs = [s for s in _subs() if s["endpoint"] != sub["endpoint"]] + [{**sub, "device": device[:80], "user": user}]
         SUBS.write_text(json.dumps(subs))
         SUBS.chmod(0o600)
     return len(subs)
@@ -64,9 +65,10 @@ def unsubscribe(endpoint: str) -> None:
         SUBS.write_text(json.dumps([s for s in _subs() if s["endpoint"] != endpoint]))
 
 
-def notify(title: str, body: str, tag: str = "batsy", url: str = "/app/") -> int:
-    """Send to every subscribed phone, in the background. Returns how many it's sending to."""
-    subs = _subs()
+def notify(title: str, body: str, tag: str = "batsy", url: str = "/app/", user: str | None = None) -> int:
+    """Send to your subscribed devices (user=None), or to one friend's browsers (user = their key), in the
+    background. Returns how many it's sending to."""
+    subs = [s for s in _subs() if s.get("user", "") == (user or "")]
     if not subs:
         return 0
 

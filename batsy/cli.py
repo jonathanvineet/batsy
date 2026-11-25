@@ -9,6 +9,7 @@
   batsy spotify-login   connect Batsy to your Spotify account (one time)
 """
 import argparse
+import json
 import fcntl
 import logging
 import os
@@ -479,6 +480,15 @@ def main() -> None:
         print(json.dumps(reply, indent=1))
         if args[0] == "open" and VIEWER.proc:  # started from a terminal: keep the window until it's closed
             VIEWER.proc.wait()
+        return
+    if len(sys.argv) > 1 and sys.argv[1] == "remote":  # `batsy remote setup|status`: run the laptop from anywhere
+        from batsy import remote
+
+        Config.load()
+        if sys.argv[2:3] == ["setup"]:
+            remote.setup()
+        else:
+            print(json.dumps(remote.status(), indent=1))
         return
     if len(sys.argv) > 1 and sys.argv[1] == "selftest":  # `batsy selftest [--gui --voice --claude --arduino --all]`
         from batsy import selftest

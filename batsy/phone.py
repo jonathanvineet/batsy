@@ -889,6 +889,10 @@ def _handler(hub: Hub):
                 return {}
 
         def do_GET(self):
+            from batsy import web
+
+            if web.serve(self, hub.app, "GET"):  # the website (/web): you and your friends, by Tailscale identity
+                return
             if self.path == "/app.apk":  # the app itself: no token yet when you install it
                 if not APK.exists():
                     return self._send(404, {"error": "not built"})
@@ -1062,6 +1066,10 @@ def _handler(hub: Hub):
             self._send(404, {"error": "no such thing"})
 
         def do_POST(self):
+            from batsy import web
+
+            if web.serve(self, hub.app, "POST"):
+                return
             if self.path == "/api/pair":
                 code = str(self._body().get("code", ""))
                 ok = hub.pair_code and time.time() < hub.pair_code[1] and secrets.compare_digest(code, hub.pair_code[0])

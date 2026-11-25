@@ -102,6 +102,7 @@ class Batsy:
                 log.exception("sharing the last slice")
 
     def __init__(self, cfg, voice: bool = True, speak: bool = True):
+        self.started_at = time.time()
         self.cfg = cfg
         self.voice = voice
         self.speaker = Speaker(cfg, enabled=speak)
@@ -732,6 +733,10 @@ class Batsy:
             print(f"\n[Batsy] {text}")
 
     def _confirm(self, question: str) -> bool:
+        from batsy import web
+
+        if web.remote_confirm_wanted(self):  # asked from the website, or you're away: answer it there
+            return web.CONFIRMS.ask(question)
         return self.confirm_handler(question)
 
     def _confirm_console(self, question: str) -> bool:
@@ -1256,7 +1261,10 @@ class Batsy:
                 log.exception("kill word unavailable")
         ControlServer(self).start()
         if self.cfg.get("phone.enabled"):
-            self.hub.start()  # the phone widgets: over USB through the PC, or over Tailscale
+            self.hub.start()
+            from batsy import web
+
+            web.start(self)  # the website on the same server: http://<laptop>:8765/web  # the phone widgets: over USB through the PC, or over Tailscale
         self.ears.start()
         self.speaker.say(lifecycle.started())  # "Batsy online." or "I'm back. Updated: 23 files changed."
         log.info("listening for wake word")

@@ -399,6 +399,19 @@ Several research topics at once, kept apart, all written into your Obsidian brai
 - **Filing notes and files into the right research** uses `nomic-embed-text` on the HP (meaning, not just words). When the HP is off, it falls back to word matching.
 - `batsy research list|show|search|papers|fetch|add-finding|add-note`: the same, from a terminal. It's also Claude's tool.
 
+## Fully remote, and the Batsy website
+
+**Run the laptop from anywhere.** Once, in a terminal on the laptop, run `batsy remote setup`. Each step is skipped if it's already done:
+1. **Tailscale SSH and file collection:** a terminal from any device (`tailscale ssh workstation`), and files sent with Taildrop get collected.
+2. **Lingering:** your services keep running with nobody logged in.
+3. **Claude Remote Control:** a Claude Code session on the laptop, kept running by systemd, that you drive from **claude.ai/code** or the **Claude app**. It's named `<laptop>-batsy`.
+4. **Automatic login with the screen locked** (it asks first): after a reboot the desktop comes back by itself, so voice and screen work again without anyone at the laptop.
+
+**The website** is at `https://<laptop>.<tailnet>.ts.net/web` once you've run `tailscale serve --bg 8765` (HTTPS also makes browser notifications work), or at `http://<laptop>:8765/web`. It's reachable over Tailscale only. Nobody signs in: Tailscale tells Batsy who's visiting.
+- **You:** live status, chat (the real Batsy, everything it can do), research, reminders, every received file, and a **Remote** panel. The panel shows Batsy's uptime and buttons to stop, restart or update it. It also has a live log, `doctor`, Claude Remote Control start/stop with a link to the session, and the setup checklist. When you're away from the laptop, or the request came from the website, Batsy's **"should I go ahead?" questions appear here** (and as a notification) instead of being asked out loud.
+- **Friends** (anyone in `[files] senders`, by Tailscale login): their own chat, **research** (Claude reads the web and returns a summary, findings, open questions, sources and a draggable **concept map**), reminders sent to their browser, the files they've sent you, the printer's status, and what Batsy is up to (busy or free, not what it's doing for you).
+- Friends' chats and research run in Claude with **web search only**: no shell, no files and no MCP connectors (your Gmail and Drive aren't even visible), in an empty folder, with no access to your memories or conversations. They share your Claude plan, so there's a daily limit (`[web] friend_daily`). Share the laptop with them in the Tailscale admin console so they can reach it.
+
 ## Reminders (no tokens)
 
 - "Remind me in 20 minutes to take the print off the bed" · "remind me at 5 pm to call mom" · "remind me tomorrow at 9 to submit the DBMS assignment" · "remind me on Friday at 4:30 to push the code" · "remind me tonight to charge the batteries" · "remind me at half past five to eat" · "set a reminder for 7 to go to the gym"

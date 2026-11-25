@@ -1,0 +1,140 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0b0d12">
+<title>Batsy</title>
+<link rel="icon" href="/app/icons/icon-192.png">
+<link rel="stylesheet" href="web.css">
+</head>
+<body>
+<header class="top">
+  <div class="brand"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15.6c-.4-1.3-1.2-2.1-2.4-2.2-.6-1.5-2.1-2.3-3.9-1.9.5-1.2.2-2.6-.8-3.6C3.3 8.6 1.9 9.9 1 11.6c1.5-.4 2.8 0 3.6 1.1 1.3-.5 2.8 0 3.4 1.3 1.4 0 2.6.8 3 2.2l.5.6.5-.6c.4-1.4 1.6-2.2 3-2.2.6-1.3 2.1-1.8 3.4-1.3.8-1.1 2.1-1.5 3.6-1.1-.9-1.7-2.3-3-4.1-3.7-1 1-1.3 2.4-.8 3.6-1.8-.4-3.3.4-3.9 1.9-.4 0-.8.1-1.1.3l-.2-1.3-.5.6-.5-.6-.2 1.3c-.3-.2-.7-.3-1.1-.3z"/></svg><span>Batsy</span></div>
+  <nav id="tabs" aria-label="Sections">
+    <a href="#live" data-tab="live">Live</a>
+    <a href="#chat" data-tab="chat">Chat</a>
+    <a href="#research" data-tab="research">Research</a>
+    <a href="#reminders" data-tab="reminders">Reminders</a>
+    <a href="#files" data-tab="files">Files</a>
+    <a href="#remote" data-tab="remote" class="owner-only" hidden>Remote</a>
+  </nav>
+  <div class="me"><span class="dot" id="link"></span><span id="me">…</span></div>
+</header>
+
+<main>
+  <!-- LIVE ------------------------------------------------------------------------------------------- -->
+  <section id="live" class="tab">
+    <div id="confirms"></div>
+    <div class="grid">
+      <article class="card wide" id="c-batsy">
+        <h2>Batsy</h2>
+        <div class="state"><span class="pulse" id="b-dot"></span><b id="b-state">—</b><span id="b-status" class="dim"></span></div>
+        <p id="b-said" class="said"></p>
+        <p id="b-you" class="dim small"></p>
+        <ul id="b-busy" class="chips"></ul>
+      </article>
+      <article class="card" id="c-printer">
+        <h2>Printer</h2>
+        <div id="p-body" class="dim">—</div>
+      </article>
+      <article class="card owner-only" id="c-music" hidden>
+        <h2>Now playing</h2>
+        <div id="m-body" class="dim">Nothing playing</div>
+      </article>
+      <article class="card owner-only" id="c-claude" hidden>
+        <h2>Claude</h2>
+        <div class="meter"><span>Session</span><i><b id="cl-s"></b></i><em id="cl-sp">–</em></div>
+        <div class="meter"><span>Week</span><i><b id="cl-w"></b></i><em id="cl-wp">–</em></div>
+        <p id="cl-note" class="dim small"></p>
+      </article>
+    </div>
+    <h3 class="sub">Machines</h3>
+    <div class="grid" id="machines"></div>
+  </section>
+
+  <!-- CHAT ------------------------------------------------------------------------------------------ -->
+  <section id="chat" class="tab" hidden>
+    <div class="chat">
+      <div id="msgs" class="msgs" aria-live="polite"></div>
+      <form id="ask" class="ask">
+        <textarea id="ask-text" rows="1" placeholder="Ask Batsy anything · “research …” · “remind me at 6 to …”" aria-label="Message"></textarea>
+        <button type="submit" class="primary">Send</button>
+      </form>
+      <p class="hint dim small" id="chat-hint"></p>
+    </div>
+  </section>
+
+  <!-- RESEARCH -------------------------------------------------------------------------------------- -->
+  <section id="research" class="tab" hidden>
+    <div class="split">
+      <aside class="list">
+        <form id="r-new" class="row">
+          <input id="r-topic" placeholder="Research a topic…" aria-label="Topic">
+          <button class="primary">Start</button>
+        </form>
+        <ul id="r-list" class="items"></ul>
+      </aside>
+      <div class="detail" id="r-detail"><p class="empty dim">Start a research, or pick one. Batsy searches the web,
+        reads the best sources and maps how it all fits together. It takes a few minutes.</p></div>
+    </div>
+  </section>
+
+  <!-- REMINDERS ------------------------------------------------------------------------------------- -->
+  <section id="reminders" class="tab" hidden>
+    <form id="rem-new" class="row narrow">
+      <input id="rem-text" placeholder="at 6 pm to call home · in 20 minutes to check the print · tomorrow at 9 to …" aria-label="Reminder">
+      <button class="primary">Add</button>
+    </form>
+    <p class="dim small narrow" id="push-note"></p>
+    <ul id="rem-list" class="items narrow"></ul>
+  </section>
+
+  <!-- FILES ----------------------------------------------------------------------------------------- -->
+  <section id="files" class="tab" hidden>
+    <p class="dim small narrow" id="files-note"></p>
+    <ul id="file-list" class="items narrow"></ul>
+  </section>
+
+  <!-- REMOTE (you only) ----------------------------------------------------------------------------- -->
+  <section id="remote" class="tab" hidden>
+    <div class="grid">
+      <article class="card">
+        <h2>Batsy</h2>
+        <p id="rm-up" class="dim"></p>
+        <div class="buttons">
+          <button data-act="stop">Stop talking</button>
+          <button data-act="restart">Restart</button>
+          <button data-act="update">Update &amp; restart</button>
+          <button data-act="doctor">Run doctor</button>
+        </div>
+      </article>
+      <article class="card">
+        <h2>Claude Remote Control</h2>
+        <p id="rc-state" class="dim">—</p>
+        <p class="small dim">Drive Claude on this laptop from <a href="https://claude.ai/code" target="_blank" rel="noopener">claude.ai/code</a> or the Claude app.</p>
+        <div class="buttons">
+          <a id="rc-link" class="btn primary" target="_blank" rel="noopener" hidden>Open the session</a>
+          <button data-act="rc_start">Start</button>
+          <button data-act="rc_restart">Restart</button>
+          <button data-act="rc_stop">Stop</button>
+        </div>
+      </article>
+      <article class="card">
+        <h2>Laptop setup</h2>
+        <ul id="setup" class="checks"></ul>
+        <p class="small dim">Anything not ticked: run <code>batsy remote setup</code> once in a terminal on the laptop
+          (or over <code>tailscale ssh</code>).</p>
+      </article>
+    </div>
+    <article class="card logbox">
+      <div class="row between"><h2 id="out-title">Log</h2><button data-act="log">Refresh</button></div>
+      <pre id="out"></pre>
+    </article>
+  </section>
+</main>
+
+<div id="toast" role="status"></div>
+<script src="web.js"></script>
+</body>
+</html>

@@ -122,6 +122,12 @@ DEFAULTS = {
         "renderer": "auto",           # auto | web (GPU, line + particles, 3D inside) | classic (plain Qt painting)
     },
     "pc": {"host": "", "mac": "", "broadcast": ""},
+    # The website (batsy/web.py), on the phone API's port, Tailscale only: you get everything, friends in
+    # [files] senders get their own chat, research, reminders and files (Claude with web search only).
+    "web": {
+        "friend_daily": 60,           # messages a friend can send per day (a research counts as 5)
+        "max_research": 3,            # research running at once, everyone together
+    },
     # The Android widgets (android/, batsy/phone.py): a small API the phone app reads.
     "phone": {
         "enabled": True,
