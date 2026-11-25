@@ -1229,7 +1229,10 @@ def _handler(hub: Hub):
                         try:
                             return self._send(200, hub.cloud_ticket(str(body.get("path", ""))))
                         except FileNotFoundError:  # moved or deleted since the list was shown: say so, not a crash
-                            return self._send(404, {"error": "That file isn't there any more.", "say": "That file isn't there any more."})
+                            msg = "That file isn't on the drive any more. It was moved or deleted."
+                            return self._send(404, {"error": msg, "say": msg})
+                        except (ConnectionError, PermissionError) as e:  # the PC is off, or can't be signed in to
+                            return self._send(503, {"error": str(e), "say": str(e)})
                     if act == "mkdir":
                         p = hub.drive.mkdir(str(body.get("dir", "/batman")), str(body.get("name", "")))
                         return self._send(200, {"ok": True, "path": p, "say": f"Made {Path(p).name}."})

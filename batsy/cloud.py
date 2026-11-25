@@ -128,9 +128,24 @@ class Drive:
         return out
 
     def stat(self, path: str) -> tuple[int, int]:
+        """(size, modified). Says why it failed: ConnectionError (the PC is off, or Batsy can't sign in to the
+        drive), PermissionError, or FileNotFoundError (really not there)."""
         path = self.safe(path)
-        r = self._run(f"stat -c '%s %Y' -- {shlex.quote(path)}", timeout=10)
+        if not self.host:
+            raise ConnectionError("The PC isn't set up.")
+        try:
+            r = self._run(f"stat -c '%s %Y' -- {shlex.quote(path)}", timeout=10)
+        except subprocess.TimeoutExpired:
+            raise ConnectionError("The PC took too long to answer.")
+        if r.returncode == 255:
+            err = r.stderr.decode(errors="replace")
+            raise ConnectionError(f"Batsy can't sign in to {self.person}'s drive on the PC (its key isn't set up: "
+                                  f"say set up the batman drive)." if "denied" in err.lower() else
+                                  "The PC is off or asleep. Say wake up the PC.")
         if r.returncode:
+            err = r.stderr.decode(errors="replace")
+            if "ermission denied" in err:
+                raise PermissionError(f"Batsy isn't allowed to read {Path(path).name} on the PC.")
             raise FileNotFoundError(path)
         size, t = r.stdout.decode().split()
         return int(size), int(t)

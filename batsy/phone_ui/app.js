@@ -31,12 +31,15 @@ async function api(path, body, timeout = 10000) {
       headers: {'Authorization': 'Bearer ' + store.get('token', ''), ...(body ? {'Content-Type': 'application/json'} : {})},
       body: body ? JSON.stringify(body) : undefined});
     if (r.status === 401) { needPairing('Batsy doesn’t know this phone any more: pair again.'); throw new Error('Not paired'); }
-    if (!r.ok) throw new Error('HTTP ' + r.status);
+    if (!r.ok) {  // Batsy's own words when it gave any ("The PC is off or asleep..."), else the status
+      const j = await r.clone().json().catch(() => ({}));
+      throw Object.assign(new Error(j.say || j.error || 'HTTP ' + r.status), {status: r.status});
+    }
     setLink(true);
     return await r.json();
   } catch (e) {
     if (e.name === 'AbortError') e = new Error('Batsy took too long');
-    if (!String(e.message).startsWith('Not paired')) setLink(false);
+    if (!String(e.message).startsWith('Not paired') && !e.status) setLink(false);  // Batsy answered: not offline
     throw e;
   } finally { clearTimeout(timer); }
 }
@@ -1290,7 +1293,9 @@ async function openCloud(f, from) {
   }
   if (cached) return viewHere({ok: true, name: f.name, blob: await cached.blob()});
   try { viewHere({...(await api('/api/cloud', {action: 'open', path: f.path}, 20000)), cache: cacheKey}); }
-  catch (err) { toast(err.message.startsWith('HTTP') ? 'The PC is asleep, and this file isn’t saved on the phone yet.' : err.message); }
+  catch (err) {  // why, as Batsy said it: the PC is asleep, the drive isn't set up, or the file is gone
+    toast(err.message.startsWith('HTTP') ? 'Couldn’t get it from the PC, and it isn’t saved on this phone yet.' : err.message);
+  }
 }
 async function keepFile(key, blob) {
   // phone storage is limited: keep about 400 MB of opened files, dropping the longest-unopened first
