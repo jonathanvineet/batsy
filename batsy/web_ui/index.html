@@ -131,6 +131,15 @@
         </div>
       </article>
       <article class="card">
+        <h2>PC setup</h2>
+        <p class="small dim">Once: lets Batsy control the PC, open everyone's drives and copy received files to their
+          Inbox. Type the PC's password here (from anywhere): it goes straight to the PC over Tailscale and isn't saved.</p>
+        <form id="pc-setup" class="row" autocomplete="off">
+          <input type="password" id="pc-pass" placeholder="The PC's password" aria-label="The PC's password" autocomplete="off">
+          <button class="primary">Set up the PC</button>
+        </form>
+      </article>
+      <article class="card">
         <h2>Laptop setup</h2>
         <ul id="setup" class="checks"></ul>
         <p class="small dim">Anything not ticked: run <code>batsy remote setup</code> once in a terminal on the laptop

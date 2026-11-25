@@ -178,8 +178,8 @@ def handle(app, n: str) -> str | None:
                 r"(?:drive|folder|storage|cloud|disk)(?: (?:on|for|in|to) .*)?$", n):  # the PC's /batman, for the phone
         from batsy import cloud
 
-        return "I've opened a terminal. Type the PC's password there, just this once, and the Batman drive shows up " \
-            "in the iPhone app." if _terminal(cloud.setup_command(app.cfg, ("Jonathan", "Karan", "Rehaan")), "Batman drive") else "I couldn't open a terminal."
+        return "Not at the laptop? Use Set up the PC in the website's Remote panel, from your phone. I've also opened a " \
+            "terminal here: type the PC's password there, just this once." if _terminal(cloud.setup_command(app.cfg, ("Jonathan", "Karan", "Rehaan")), "Batman drive") else "I couldn't open a terminal."
     if not ON_PC.search(n):
         return None
     pc = getattr(app, "pc", None) or Remote(app.cfg)
@@ -203,7 +203,8 @@ def handle(app, n: str) -> str | None:
                   "systemctl --user daemon-reload && systemctl --user enable --now ydotoold; "
                   "echo; echo 'Done. Batsy can now shut down, restart, update, wake and type on the PC. You can close this.'")
         ok = _terminal(" ".join(shlex.quote(a) for a in pc.ssh_args(tty=True)) + " " + shlex.quote(script), "Set up the PC")
-        return "I've opened a terminal on the laptop. Type the PC's password there, just this once." if ok else \
+        return "I've opened a terminal on the laptop: type the PC's password there, just this once. Away from the " \
+            "laptop, use Set up the PC in the website's Remote panel instead." if ok else \
             "I couldn't open a terminal."
 
     if re.match(rf"{pre}(?:set ?up|make|create) (?:the )?(?:inbox|inboxes|inbox folders?)(?: (?:on|for|in) {PC})?$", n):
@@ -212,7 +213,8 @@ def handle(app, n: str) -> str | None:
             return "I don't know whose files go where. Add files.pc_users to the config."
         cmd = " ".join(shlex.quote(a) for a in pc.ssh_args(tty=True)) + " " + \
             shlex.quote("sudo bash -c " + shlex.quote(fw.setup_script()))
-        return "I've opened a terminal. Type the PC's password there, just this once." if _terminal(cmd, "PC inboxes") \
+        return "I've opened a terminal: type the PC's password there, once. Or use Set up the PC in the website's Remote " \
+            "panel, from anywhere." if _terminal(cmd, "PC inboxes") \
             else "I couldn't open a terminal."
 
     if re.match(rf"{pre}(?:is {PC} (?:on|up|awake|running|alive)|(?:how'?s|how is|check(?: on)?) {PC}(?: doing)?|"
@@ -442,3 +444,59 @@ class Forwarder:
     @staticmethod
     def _save(jobs: list[dict]) -> None:
         OUTBOX.write_text(json.dumps(jobs))
+
+
+# --- everything that needs the PC's password, done once, from anywhere (the website's Remote panel) ---------------
+def setup_everything(app, password: str) -> str:
+    """The three one-time PC setups in one go, over Batsy's existing SSH connection to the PC, with the PC's
+    password typed on the website instead of in a terminal on the laptop:
+      1. sudo rules (shut down / restart / update / Wake-on-LAN without a password), ydotool for typing
+      2. Batsy's key on each person's PC account (the Batman drive and the others' drives)
+      3. each person's Inbox on the PC, writable by Batsy (received files get copied there)
+    The password goes to `sudo -S` on the PC through SSH's stdin: never on a command line, never saved or logged."""
+    from batsy import cloud
+
+    pc = getattr(app, "pc", None) or Remote(app.cfg)
+    if not pc.configured:
+        return "The PC isn't set up in the config ([pc] host)."
+    if not pc.up():
+        return "The PC is off or asleep. Wake it first."
+    pub = (Path.home() / ".ssh/id_ed25519.pub").read_text().strip()
+    people = ("Jonathan", "Karan", "Rehaan")
+    users = sorted({u for p in people if (u := cloud.Drive(app.cfg, p).user)})
+    fw = getattr(app, "pc_forward", None)
+    inbox_users = sorted(set(fw.users.values())) if fw and fw.users else users
+    root = "\n".join([
+        "set +e",
+        f"echo {shlex.quote(SUDO_RULES)} > /etc/sudoers.d/batsy && chmod 440 /etc/sudoers.d/batsy && "
+        "visudo -cf /etc/sudoers.d/batsy >/dev/null && echo '1. PC control: ready' || echo '1. PC control: FAILED'",
+        "con=$(nmcli -t -f NAME,DEVICE con show --active 2>/dev/null | grep -m1 ':enp' | cut -d: -f1); "
+        "[ -n \"$con\" ] && nmcli con modify \"$con\" 802-3-ethernet.wake-on-lan magic 2>/dev/null; "
+        "/usr/sbin/ethtool -s enp2s0 wol g 2>/dev/null",
+        "DEBIAN_FRONTEND=noninteractive apt-get install -y ydotool >/dev/null 2>&1; "
+        f"echo {shlex.quote(UDEV_RULE)} > /etc/udev/rules.d/80-batsy-uinput.rules; "
+        "modprobe uinput; udevadm control --reload; udevadm trigger --name-match=uinput",
+        "echo '2. Drives:'",
+        *(cloud.SETUP.format(user=shlex.quote(u), key=shlex.quote(pub)) for u in users),
+        "echo '3. Inboxes:'",
+        INBOX_SETUP.format(users=" ".join(shlex.quote(u) for u in inbox_users)).replace("set -e", "set +e")
+        .rsplit("echo;", 1)[0],
+    ])
+    try:
+        p = subprocess.run(pc.ssh_args() + ["sudo -S -p '' bash -c " + shlex.quote(root)],
+                           input=password + "\n", capture_output=True, text=True, timeout=900, errors="replace")
+    except subprocess.TimeoutExpired:
+        return "The PC took too long. Try again."
+    out = (p.stdout + p.stderr).strip()
+    if "incorrect password" in out.lower() or "sorry, try again" in out.lower():
+        return "The PC said that password is wrong."
+    if "not in the sudoers" in out.lower():
+        return f"{pc.host.split('@')[0]} isn't allowed to use sudo on the PC, so I can't set it up from here."
+    # the typing service runs as the PC user, no password needed
+    pc.run(f"mkdir -p ~/.config/systemd/user && printf %s {shlex.quote(SERVICE)} > ~/.config/systemd/user/ydotoold.service "
+           "&& systemctl --user daemon-reload && systemctl --user enable --now ydotoold", timeout=60)
+    log.info("PC setup from the website: %s", out[-800:])
+    if fw is not None:
+        threading.Thread(target=fw.flush, kwargs={"force": True}, daemon=True).start()  # files waiting: now
+    lines = [ln for ln in out.splitlines() if ln.strip() and not ln.startswith("[sudo]")]
+    return "Done.\n" + "\n".join(lines[-20:])

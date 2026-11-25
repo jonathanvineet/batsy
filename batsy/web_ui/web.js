@@ -332,6 +332,16 @@ async function runAct(act, btn) {
 }
 document.querySelectorAll('#remote [data-act]').forEach(b => b.addEventListener('click', () => runAct(b.dataset.act, b)));
 $('#log-src').addEventListener('change', () => runAct('log'));
+$('#pc-setup').addEventListener('submit', async e => {
+  e.preventDefault();
+  const pass = $('#pc-pass').value; if (!pass) return;
+  const b = e.target.querySelector('button'); b.disabled = true; b.textContent = 'Setting up…';
+  try {
+    const r = await api('/api/web/remote', {action: 'pc_setup', password: pass}, 900000);
+    $('#out-title').textContent = 'PC setup'; $('#out').textContent = r.text || r.say; toast(r.say);
+  } catch (x) { toast(x.message); }
+  finally { $('#pc-pass').value = ''; b.disabled = false; b.textContent = 'Set up the PC'; }
+});
 
 // --- start ------------------------------------------------------------------------------------------------------------
 (async () => {

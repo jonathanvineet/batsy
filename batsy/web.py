@@ -474,6 +474,11 @@ def remote_action(app, body: dict) -> dict:
     if a == "stop":
         app.end_conversation()
         return {"ok": True, "say": "Stopped."}
+    if a == "pc_setup":  # the PC's password, once: everything that used to need a terminal on the laptop
+        from batsy import pc
+
+        text = pc.setup_everything(app, str(body.get("password") or ""))
+        return {"ok": text.startswith("Done"), "say": text.splitlines()[0], "text": text}
     if a == "self":  # the self-control buttons: the same commands as saying them (batsy/selfctl.py)
         from batsy import selfctl
 
