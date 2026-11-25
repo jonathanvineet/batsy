@@ -308,8 +308,15 @@ loaders.remote = async () => {
     ['Keeps running with nobody logged in', s.linger], ['Comes back by itself after a reboot', s.autologin],
     ['Claude Remote Control', rc.state === 'active']];
   $('#setup').innerHTML = checks.map(([t, ok]) => `<li class="${ok ? 'ok' : ''}">${t}</li>`).join('');
+  $('#self-state').textContent = [s.voice_muted ? 'Voice muted' : `Voice on (${s.volume}%)`,
+    s.mic_muted ? 'not listening' : 'listening'].join(' · ');
   if (!$('#out').textContent) runAct('log');
 };
+document.querySelectorAll('#remote [data-self]').forEach(b => b.addEventListener('click', async () => {
+  b.disabled = true;
+  try { toast((await api('/api/web/remote', {action: 'self', what: b.dataset.self}, 30000)).say); loaders.remote(); }
+  catch (x) { toast(x.message); } finally { b.disabled = false; }
+}));
 async function runAct(act, btn) {
   if (['restart', 'update'].includes(act) && !confirm(act === 'update' ? 'Pull the latest code and restart Batsy?' : 'Restart Batsy?')) return;
   if (btn) btn.disabled = true;

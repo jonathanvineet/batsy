@@ -412,6 +412,17 @@ Several research topics at once, kept apart, all written into your Obsidian brai
 - **Friends** (anyone in `[files] senders`, by Tailscale login): their own chat, **research** (Claude reads the web and returns a summary, findings, open questions, sources and a draggable **concept map**), reminders sent to their browser, the files they've sent you, the printer's status, and what Batsy is up to (busy or free, not what it's doing for you).
 - Friends' chats and research run in Claude with **web search only**: no shell, no files and no MCP connectors (your Gmail and Drive aren't even visible), in an empty folder, with no access to your memories or conversations. They share your Claude plan, so there's a daily limit (`[web] friend_daily`). Share the laptop with them in the Tailscale admin console so they can reach it.
 
+## Batsy controls itself
+
+Say it or type it. None of these use the AI:
+- **"Mute yourself"** / "go quiet for an hour" / "text only": Batsy's own voice goes silent, but answers still show on screen and on the phone. "Unmute yourself" / "talk again" brings it back.
+- **"Speak quieter / louder"** / "set your volume to 40": Batsy's own voice, not the laptop's volume.
+- **"Stop listening"** / "mute your mic for 30 minutes": the microphone is ignored. Typing, the phone and the website still work, and "start listening" there turns it back on.
+- **"Restart the phone app"** (closes and reopens the Batsy app over USB) · "reconnect the phone" · **"restart your screen"** (the full-screen view and corner bat) · "restart Claude Remote Control".
+- "What's muted?" / "are you listening?"
+
+These settings survive a restart. All of them are also buttons in the website's Remote panel.
+
 ## Reminders (no tokens)
 
 - "Remind me in 20 minutes to take the print off the bed" · "remind me at 5 pm to call mom" · "remind me tomorrow at 9 to submit the DBMS assignment" · "remind me on Friday at 4:30 to push the code" · "remind me tonight to charge the batteries" · "remind me at half past five to eat" · "set a reminder for 7 to go to the gym"

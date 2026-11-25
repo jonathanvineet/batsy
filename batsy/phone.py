@@ -404,7 +404,8 @@ class Hub:
                 "asks": [a["question"] for a in act["asks"]][:3],
                 "next_reminder": {"what": rem[0].get("what") or "timer", "at": int(rem[0]["next_run"])} if rem else None,
                 "today": self._today(),  # the day's to-dos, shown under the clock
-                "listening_paused": bool(getattr(self.app, "muted_mic", False))}
+                "listening_paused": time.time() < getattr(self.app, "muted_mic_until", 0.0),
+                "voice_muted": time.time() < getattr(self.app.speaker, "muted_until", 0.0)}
 
     @staticmethod
     def _today() -> list[str]:

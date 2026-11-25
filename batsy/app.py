@@ -103,9 +103,13 @@ class Batsy:
 
     def __init__(self, cfg, voice: bool = True, speak: bool = True):
         self.started_at = time.time()
+        self.muted_mic_until = 0.0  # "stop listening": the mic is ignored until then (inf = until "start listening")
         self.cfg = cfg
         self.voice = voice
         self.speaker = Speaker(cfg, enabled=speak)
+        from batsy import selfctl as _selfctl
+
+        _selfctl.restore(self)  # what was muted before a restart stays muted
         self.ctx = ToolContext(cfg, announce=self.announce, confirm=self._confirm)
         self.registry = build_registry(self.ctx)
         if cfg.get("brain.engine") == "claude":  # optional: Claude API with your own key (pay per use)
@@ -946,6 +950,14 @@ class Batsy:
             return True
         if self._self_command(n):
             return True
+        from batsy import selfctl
+
+        said = selfctl.handle(self, n)  # "mute yourself", "stop listening", "restart the phone app"...
+        if said is not None:
+            self._route = "command"
+            if said:
+                self._reply(said)
+            return True
         fixed = self.router.correction(n)  # "no, I meant the printer": the last sentence, done the right way
         if fixed:
             from batsy.router import Decision
@@ -1297,6 +1309,9 @@ class Batsy:
                         wake_only = True
                 if pending_text is not None:
                     text, pending_text = pending_text, None
+                elif follow_up and time.time() < self.muted_mic_until:
+                    follow_up = False  # "stop listening": no follow-ups either (type, phone or website still work)
+                    continue
                 elif follow_up and time.time() - getattr(self, "conversation_ended", 0) < 5:
                     follow_up = False  # you just ended the conversation: back to waiting for "Batsy"
                     continue
@@ -1339,7 +1354,7 @@ class Batsy:
                     self.overlay.heard(text)
                 else:
                     frame = self.ears.read(0.5)
-                    if frame is None or time.time() < self.phone_ears_until or \
+                    if frame is None or time.time() < self.phone_ears_until or time.time() < self.muted_mic_until or \
                             not self.ears.wake_hit(frame, strict=self.music_on):  # music on: no half-heard "Batsy"s
                         continue  # (while the phone is Batsy's ears, the laptop's mic doesn't wake it)
                     text = self._listen_after_wake(strip_wake_word)

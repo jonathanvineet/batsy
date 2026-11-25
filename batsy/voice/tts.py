@@ -67,6 +67,8 @@ class Speaker:
         self.chime_path = DATA_DIR / "chime.wav"
         self._lock = threading.Lock()  # stop() and starting the next sentence never interleave
         self.hushed_until = 0.0  # the kill switch: nothing is spoken until then (or until you ask something new)
+        self.muted_until = 0.0   # "mute yourself": no voice at all until then (inf = until "unmute yourself")
+        self.volume = 1.0        # "speak quieter": Batsy's own voice, not the laptop's volume
         self.on_idle = None  # called when the last queued sentence has finished playing (or speech was stopped)
         self.on_play = None  # called with (loudness every 40 ms, 0.04) as each sentence starts: the cockpit's wave
         if enabled:
@@ -102,6 +104,9 @@ class Speaker:
         if time.time() < self.hushed_until:  # killed: whatever is still finishing up stays silent
             log.info("hushed: %s", text)
             return
+        if time.time() < self.muted_until:  # muted: the answer is still shown on screen and the phone
+            log.info("muted: %s", text)
+            return
         log.info("say: %s", text)
         if self.enabled:
             self.q.put((self.generation, text))
@@ -116,7 +121,7 @@ class Speaker:
         self.hushed_until = 0.0
 
     def chime(self) -> None:
-        if self.enabled and self.cfg.get("voice.chime") and self.player:
+        if self.enabled and self.cfg.get("voice.chime") and self.player and time.time() >= self.muted_until:
             subprocess.Popen([*self.player, str(self.chime_path)], stderr=subprocess.DEVNULL)
 
     def stop(self) -> None:
@@ -188,13 +193,20 @@ class Speaker:
                         self.on_play(_envelope(path), 0.04)
                     except Exception:
                         pass
-                self._run([*self.player, path], gen)
+                self._run([*self.player, *self._volume_args(), path], gen)
             except Exception as e:
                 log.error("audio playback failed: %s", e)
             finally:
                 Path(path).unlink(missing_ok=True)
                 self.q.task_done()
                 self._maybe_idle()
+
+    def _volume_args(self) -> list[str]:
+        v = self.volume
+        if abs(v - 1.0) < 0.01 or not self.player:
+            return []
+        return {"pw-play": [f"--volume={v:.2f}"], "paplay": [f"--volume={int(65536 * v)}"],
+                "afplay": ["-v", f"{v:.2f}"]}.get(self.player[0], [])
 
     def _discard(self, path: str) -> None:
         Path(path).unlink(missing_ok=True)

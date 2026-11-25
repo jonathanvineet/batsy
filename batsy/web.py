@@ -441,6 +441,9 @@ def remote_status(app) -> dict:
     st = remote.status()
     st["uptime_s"] = int(time.time() - getattr(app, "started_at", time.time()))
     st["pending"] = CONFIRMS.pending()
+    st["voice_muted"] = time.time() < app.speaker.muted_until
+    st["mic_muted"] = time.time() < getattr(app, "muted_mic_until", 0.0)
+    st["volume"] = round(app.speaker.volume * 100)
     return st
 
 
@@ -470,6 +473,16 @@ def remote_action(app, body: dict) -> dict:
     if a == "stop":
         app.end_conversation()
         return {"ok": True, "say": "Stopped."}
+    if a == "self":  # the self-control buttons: the same commands as saying them (batsy/selfctl.py)
+        from batsy import selfctl
+
+        text = {"mute": "mute yourself", "unmute": "unmute yourself", "mic_off": "stop listening",
+                "mic_on": "start listening", "phone_app": "restart the phone app", "screen": "restart your screen",
+                "quieter": "speak quieter", "louder": "speak louder"}.get(body.get("what", ""))
+        if not text:
+            return {"ok": False, "say": "Unknown."}
+        said = selfctl.handle(app, text)
+        return {"ok": True, "say": said or getattr(app, "last_said", "") or "Done."}
     return {"ok": False, "say": f"Unknown action {a}"}
 
 
