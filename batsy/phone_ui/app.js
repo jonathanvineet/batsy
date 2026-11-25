@@ -200,12 +200,36 @@ function drawBatsy(b) {
     .map(t => `<li class="${t.done ? 'done' : ''}">${esc(t.text)}</li>`).join('');
   for (const id of ['#w-today', '#big-today']) if ($(id)) $(id).innerHTML = today;
 }
-const chat = store.get('chat', []);
+// The conversation comes from the laptop (Batsy's memory): everything you said, by voice at the laptop, from this
+// phone, typed or on the website, and every answer. Kept here too, so it shows at once (and offline).
+let chat = store.get('chatLog', []), chatLive = null, sending = [], chatTimer = null;
+const VIA = {voice: '🎙', phone: '📱', typed: '⌨', website: '🌐', announced: '🦇', routine: '⏰'};
 function drawChat() {
-  $('#chat').innerHTML = chat.slice(-10).map(m => `<div class="msg ${m.who}${m.wait ? ' wait' : ''}">${esc(m.text)}</div>`).join('');
-  $('#chat').scrollTop = 1e6;
+  const box = $('#chat');
+  const atEnd = box.scrollHeight - box.scrollTop - box.clientHeight < 60;
+  const rows = chat.map(m => `<div class="msg ${m.who}"><span class="via">${VIA[m.via] || ''}</span>${esc(m.text)}</div>`);
+  if (chatLive && !sending.some(s => s.text === chatLive.you)) {  // being answered right now (by voice, say)
+    rows.push(`<div class="msg you">${esc(chatLive.you)}</div>`,
+      `<div class="msg bot wait">${esc(chatLive.said || chatLive.status || 'Thinking…')}</div>`);
+  }
+  for (const s of sending) rows.push(`<div class="msg you">${esc(s.text)}</div>`, `<div class="msg bot wait">${esc(s.reply || 'Thinking…')}</div>`);
+  box.innerHTML = rows.join('') || '<div class="msg bot">Say “Batsy”, or type here.</div>';
+  if (atEnd || box.dataset.opened !== '1') { box.scrollTop = 1e9; box.dataset.opened = '1'; }
 }
-function openSheet() { $('#sheet').hidden = false; drawChat(); $('#ask-text').focus(); }
+async function loadChat() {
+  try {
+    const r = await api('/api/conversation?limit=120');
+    chat = r.messages; chatLive = r.live;
+    store.set('chatLog', chat.slice(-120));
+  } catch {}
+  drawChat();
+}
+function openSheet() {
+  $('#sheet').hidden = false; $('#chat').dataset.opened = '0';
+  drawChat(); loadChat(); $('#ask-text').focus();
+  clearInterval(chatTimer);
+  chatTimer = setInterval(() => { if ($('#sheet').hidden) clearInterval(chatTimer); else loadChat(); }, 3000);
+}
 $('#batsy-w').addEventListener('click', openSheet);
 $('#sheet').addEventListener('click', e => { if (e.target.id === 'sheet') $('#sheet').hidden = true; });
 $('#ask').addEventListener('submit', async e => {
@@ -213,12 +237,12 @@ $('#ask').addEventListener('submit', async e => {
   const text = $('#ask-text').value.trim();
   if (!text) return;
   $('#ask-text').value = '';
-  chat.push({who: 'you', text});
-  const pending = {who: 'bot', text: 'Thinking…', wait: true};
-  chat.push(pending); drawChat();
-  try { pending.text = (await api('/api/batsy', {action: 'ask', text}, 180000)).say || 'Done.'; }
-  catch (err) { pending.text = err.message; }
-  delete pending.wait; store.set('chat', chat.slice(-30)); drawChat(); refresh();
+  const s = {text};
+  sending.push(s); $('#chat').dataset.opened = '0'; drawChat();
+  try { await api('/api/batsy', {action: 'ask', text}, 180000); }
+  catch (err) { s.reply = err.message; drawChat(); await new Promise(r => setTimeout(r, 2500)); }
+  sending = sending.filter(x => x !== s);
+  await loadChat(); refresh();  // the answer, as Batsy saved it
 });
 
 // --- Android StandBy: something Batsy announces takes over the whole screen for a few seconds ---------------------

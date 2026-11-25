@@ -261,6 +261,7 @@ input { font: inherit; color: inherit; }
 .msg.you { align-self: flex-end; background: var(--signal); color: var(--ink); border-bottom-right-radius: 5px; }
 .msg.bot { align-self: flex-start; background: var(--w2); border-bottom-left-radius: 5px; }
 .msg.wait { color: var(--muted); }
+.msg .via { font-size: 11px; opacity: .55; margin-right: 6px; }
 #ask { display: flex; gap: 8px; }
 #ask input { flex: 1; min-width: 0; height: 48px; padding: 0 18px; border-radius: 24px; border: 0; outline: none; background: var(--w2); }
 .go { width: 48px; height: 48px; border-radius: 50%; background: var(--signal); color: var(--ink); display: grid; place-items: center; font-size: 22px; }

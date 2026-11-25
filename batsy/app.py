@@ -912,7 +912,8 @@ class Batsy:
             reply = " ".join(said or [])
             vault_capture.exchange(text, reply, self._route)
             if reply:  # in the conversation history too, so a follow-up ("it's in my GitHub") knows what "it" is
-                get_store().add_exchange("voice", text, reply, [f"handled instantly ({self._route})"])
+                via = getattr(self, "_source_hint", None) or ("typed" if getattr(self, "_typed_turn", False) else "voice")
+                get_store().add_exchange(via, text, reply, [f"handled instantly ({self._route})"])
         return handled
 
     def _leans(self, topic: str) -> bool:

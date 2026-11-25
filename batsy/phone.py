@@ -448,6 +448,35 @@ class Hub:
         self._sp = (0, None)
         return {"ok": True, "say": said}
 
+    def conversation(self, limit: int = 80, after: int = 0) -> dict:
+        """The conversation, oldest first: what you said (by voice at the laptop, from the phone, typed, on the
+        website) and what Batsy answered, plus what it announced by itself (reminders...). From Batsy's memory, so
+        every device shows the same thing. `after`: only newer than that id. While a request is still being
+        answered it's included as `live`, so the phone shows it straight away."""
+        from batsy.memory_store import get_store
+
+        st = get_store()
+        with st.lock:
+            rows = st.db.execute("SELECT id, t, source, user, reply FROM exchanges WHERE id > ? ORDER BY id DESC "
+                                 "LIMIT ?", (after, max(1, min(limit, 300)))).fetchall()
+        msgs = []
+        for r in rows[::-1]:
+            via = {"voice": "voice", "typed": "typed", "phone": "phone", "web": "website", "skill": "voice",
+                   "routine": "routine", "alert": "batsy"}.get(r["source"], r["source"] or "")
+            if r["user"]:
+                msgs.append({"id": r["id"], "t": r["t"], "who": "you", "text": r["user"], "via": via})
+            if r["reply"]:
+                msgs.append({"id": r["id"], "t": r["t"], "who": "bot", "text": r["reply"],
+                             "via": "announced" if r["source"] == "alert" else via})
+        live = getattr(self.app.overlay, "live", {}) or {}
+        cur = None
+        if live.get("state") in ("listening", "thinking", "speaking") and live.get("you"):
+            last_you = next((m["text"] for m in reversed(msgs) if m["who"] == "you"), "")
+            if live["you"] != last_you:  # asked, not answered (and saved) yet
+                cur = {"you": live["you"], "said": live.get("said", ""), "status": live.get("status", ""),
+                       "state": live["state"]}
+        return {"messages": msgs, "live": cur, "last_id": rows[0]["id"] if rows else after}
+
     def batsy_action(self, body: dict) -> dict:
         action = body.get("action")
         if action == "stop":
@@ -537,9 +566,11 @@ class Hub:
                 self.app.overlay.say(t)
 
         self.app._reply = both
+        self.app._source_hint = "phone"  # saved in the conversation as asked from the phone
         try:
             return self.app.local_command(text)
         finally:
+            self.app._source_hint = None
             self.app._reply = old
 
     def pc_action(self, action: str) -> dict:
@@ -1019,6 +1050,11 @@ def _handler(hub: Hub):
                     return self._send(400, {"error": str(e)})
                 out["k"] = hub.thumb_key()
                 return self._send(200, out)
+            if self.path.startswith("/api/conversation"):  # every exchange, however it was said: voice, typed, phone
+                from urllib.parse import parse_qs, urlparse
+
+                q = {k: v[0] for k, v in parse_qs(urlparse(self.path).query).items()}
+                return self._send(200, hub.conversation(int(q.get("limit", 80)), int(q.get("after", 0))))
             if self.path.startswith("/api/where"):
                 return self._send(200, hub.where(self.client_address[0], self.headers))
             if self.path.startswith("/api/files"):
