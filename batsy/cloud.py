@@ -237,12 +237,13 @@ class Drive:
 
 
 SETUP = """
+( set -e
 home=$(getent passwd {user} | cut -d: -f6)
 install -d -m 700 -o {user} -g {user} "$home/.ssh"
 touch "$home/.ssh/authorized_keys"
 grep -qxF {key} "$home/.ssh/authorized_keys" || echo {key} >> "$home/.ssh/authorized_keys"
 chown {user}:{user} "$home/.ssh/authorized_keys"; chmod 600 "$home/.ssh/authorized_keys"
-echo "  {user}: ready"
+) && echo "  {user}: ready" || echo "  {user}: FAILED (see the errors below)"
 """
 
 

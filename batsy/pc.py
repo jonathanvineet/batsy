@@ -340,11 +340,14 @@ OUTBOX = DATA_DIR / "pc_outbox.json"  # waiting for the PC (it was off): [{"path
 INBOX_SETUP = """set -e
 for u in {users}; do
   home=$(getent passwd "$u" | cut -d: -f6); [ -n "$home" ] || {{ echo "no user $u"; continue; }}
-  mkdir -p "$home/Inbox"; chown "$u:$u" "$home/Inbox"; chmod 700 "$home/Inbox"
-  setfacl -m u:bob:x "$home"                       # bob may pass through the home, not look around in it
-  setfacl -m u:bob:rwx "$home/Inbox"               # ...and drop files in Inbox
-  setfacl -d -m u:"$u":rwx,u:bob:rwx "$home/Inbox"  # files bob drops there are the owner's to read and delete
-  echo "$u: $home/Inbox"
+  if mkdir -p "$home/Inbox" && chown "$u:$u" "$home/Inbox" && chmod 700 "$home/Inbox" &&
+     setfacl -m u:bob:x "$home" &&                      # bob may pass through the home, not look around in it
+     setfacl -m u:bob:rwx "$home/Inbox" &&              # ...and drop files in Inbox
+     setfacl -d -m u:"$u":rwx,u:bob:rwx "$home/Inbox"; then  # what bob drops there is the owner's
+    echo "$u: $home/Inbox"
+  else
+    echo "$u: FAILED (see the errors below)"
+  fi
 done
 echo; echo 'Done. Files sent to Batsy now land in each person'"'"'s Inbox on the PC. You can close this.'"""
 

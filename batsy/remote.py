@@ -128,7 +128,15 @@ def log_tail(lines: int = 150) -> str:
 
 LOG_FILES = {"batsy": "batsy.log", "crash": "crash.log", "overlay": "overlay.log", "dock": "dock.log",
              "sidetab": "sidetab.log", "printer": "printstream.log"}
-SOURCES = ("failures", *LOG_FILES, "service", "system", "kernel", "boot")
+SOURCES = ("failures", *LOG_FILES, "service", "system", "kernel", "boot", "pc")
+
+# Run on the PC (as Batsy's PC user, over its SSH connection): its disks, what's mounted, and disk/kernel errors
+PC_DIAG = r"""echo '== disks'; lsblk -o NAME,SIZE,TYPE,FSTYPE,MOUNTPOINTS,MODEL,STATE 2>/dev/null
+echo; echo '== mounts of /batman and /home'; findmnt -T /batman 2>&1; findmnt -T /home 2>&1
+echo; echo '== space'; df -h / /batman /home 2>&1 | sort -u
+echo; echo '== can /batman be read?'; ls -la /batman 2>&1 | head -15; timeout 10 stat /batman 2>&1 | head -4
+echo; echo '== kernel errors and warnings (disk, USB, filesystem)'; (journalctl -k -p warning -n 120 --no-pager 2>/dev/null   || dmesg 2>/dev/null | tail -120 || tail -120 /var/log/kern.log 2>/dev/null) | grep -iE 'error|fail|i/o|ata|usb|sd[a-z]|nvme|ext4|ntfs|exfat|btrfs|xfs|remount|read-only|reset' | tail -80
+echo; echo '== uptime'; uptime"""
 
 
 def _tail_file(path: Path, lines: int, grep: str = "") -> str:
@@ -168,6 +176,15 @@ def logs(source: str = "failures", lines: int = 200, grep: str = "") -> str:
         return _journal(["-b", "-p", "err", "-o", "short-iso"], lines, grep)
     if source == "failures":
         return failures(lines)
+    if source == "pc":  # the desktop PC's disks and kernel errors, over Batsy's SSH connection to it
+        from batsy.config import Config
+        from batsy.pc import Remote
+
+        pc = Remote(Config.load())
+        if not pc.configured:
+            return "The PC isn't set up ([pc] host)."
+        code, out = pc.run(PC_DIAG, timeout=60)
+        return out if code != 255 else "The PC is off or can't be reached."
     return f"Unknown log {source!r}. Try one of: {', '.join(SOURCES)}"
 
 
