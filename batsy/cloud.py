@@ -117,9 +117,9 @@ class Drive:
             return {"error": "The PC took too long."}
         if r.returncode == 255:
             err = r.stderr.decode(errors="replace")
-            return {"error": f"Batsy can't sign in to {self.person}'s drive on the PC yet (its key isn't set up)."
-                    if "denied" in err else "The PC is off or asleep.", "offline": "denied" not in err,
-                    "setup": "denied" in err}
+            why = self._why(err)
+            key = "turned down batsy's key" in why.lower()
+            return {"error": why, "offline": "off or asleep" in why, "setup": key}
         if r.returncode:
             return {"error": r.stderr.decode(errors="replace")[-200:] or "couldn't read it"}
         out = json.loads(r.stdout)
@@ -137,11 +137,8 @@ class Drive:
             r = self._run(f"stat -c '%s %Y' -- {shlex.quote(path)}", timeout=10)
         except subprocess.TimeoutExpired:
             raise ConnectionError("The PC took too long to answer.")
-        if r.returncode == 255:
-            err = r.stderr.decode(errors="replace")
-            raise ConnectionError(f"Batsy can't sign in to {self.person}'s drive on the PC (its key isn't set up: "
-                                  f"say set up the batman drive)." if "denied" in err.lower() else
-                                  "The PC is off or asleep. Say wake up the PC.")
+        if r.returncode == 255:  # ssh itself failed: say exactly why (and log ssh's own words)
+            raise ConnectionError(self._why(r.stderr.decode(errors="replace")))
         if r.returncode:
             err = r.stderr.decode(errors="replace")
             if "ermission denied" in err:
@@ -149,6 +146,18 @@ class Drive:
             raise FileNotFoundError(path)
         size, t = r.stdout.decode().split()
         return int(size), int(t)
+
+    def _why(self, err: str) -> str:
+        err = err.strip()
+        log.warning("drive: ssh %s failed: %s", self.host, err[-400:] or "(no message)")
+        low = err.lower()
+        if "permission denied (publickey" in low or "too many authentication failures" in low:
+            return (f"The PC turned down Batsy's key for {self.user} (say set up the batman drive). "
+                    f"SSH said: {err.splitlines()[-1][:120]}")
+        if any(x in low for x in ("timed out", "no route to host", "connection refused", "network is unreachable",
+                                  "could not resolve", "host is down")):
+            return "The PC is off or asleep. Say wake up the PC."
+        return f"Couldn't reach the drive on the PC. SSH said: {err.splitlines()[-1][:160] if err else 'nothing'}"
 
     def stream(self, path: str, out) -> None:
         """Copy the file to `out` (a socket file), as it comes off the PC."""
