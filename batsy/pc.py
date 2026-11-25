@@ -368,12 +368,20 @@ class Forwarder:
                 self._save(self._load() + jobs)
             threading.Thread(target=self.flush, daemon=True, name="pc-forward").start()
 
-    def flush(self) -> None:
+    GIVE_UP = 3 * 86400  # a copy that keeps failing for a reason other than "the PC is off" stops after this
+
+    def flush(self, force: bool = False) -> None:
+        """Copy what's waiting. The PC being off or unreachable just means later. Any other failure ("no Inbox")
+        backs off (1 min, 2, 4... up to 6 h), is logged once, and is given up after 3 days with one announcement,
+        instead of trying (and logging) every minute forever."""
         with self.lock:
-            left = []
+            left, now = [], time.time()
             for job in self._load():
                 p = Path(job["path"])
                 if not p.exists():
+                    continue
+                if not force and now < job.get("next", 0):
+                    left.append(job)
                     continue
                 code, out = self._copy(p, job["user"])
                 if code == 0:
@@ -381,10 +389,24 @@ class Forwarder:
                     from batsy import received
 
                     received.on_pc(p, out.splitlines()[-1] if out else "")
-                else:
+                    continue
+                if code in (255, 124):  # the PC is off or unreachable: try again whenever it's back
                     left.append(job)
-                    if code not in (255, 124):
-                        log.warning("couldn't save %s for %s on the PC: %s", p.name, job["user"], out[-200:])
+                    continue
+                tries = job.get("tries", 0) + 1
+                first = job.setdefault("failing_since", now)
+                if tries == 1:
+                    log.warning("couldn't save %s for %s on the PC: %s (will retry, backing off)", p.name,
+                                job["user"], out[-200:])
+                if now - first > self.GIVE_UP:
+                    log.warning("gave up copying %s to %s's Inbox on the PC after %d tries: %s", p.name, job["user"],
+                                tries, out[-200:])
+                    why = " It has no Inbox folder: say set up the PC." if "no Inbox" in out else ""
+                    self.app.announce(f"I couldn't copy {p.name} to {job['user']} on the PC, so I've stopped "
+                                      f"trying.{why}")
+                    continue
+                left.append({**job, "tries": tries, "next": now + min(6 * 3600, 60 * 2 ** min(tries, 12)),
+                             "error": out[-200:]})
             self._save(left)
 
     def _copy(self, p: Path, user: str) -> tuple[int, str]:

@@ -412,6 +412,8 @@ Several research topics at once, kept apart, all written into your Obsidian brai
 - **Friends** (anyone in `[files] senders`, by Tailscale login): their own chat, **research** (Claude reads the web and returns a summary, findings, open questions, sources and a draggable **concept map**), reminders sent to their browser, the files they've sent you, the printer's status, and what Batsy is up to (busy or free, not what it's doing for you).
 - Friends' chats and research run in Claude with **web search only**: no shell, no files and no MCP connectors (your Gmail and Drive aren't even visible), in an empty folder, with no access to your memories or conversations. They share your Claude plan, so there's a daily limit (`[web] friend_daily`). Share the laptop with them in the Tailscale admin console so they can reach it.
 
+**Logs from anywhere:** the Remote panel has a log picker: everything that failed lately, Batsy, crashes, the screen, the corner bat, Batsy's services, the system journal, the kernel, this boot's errors, and the printer. From a terminal on any of your Tailscale devices, run `scripts/batsy-logs` to get the failures summary (Batsy's errors and tracebacks, crash log, failed services, system errors from the last 24 hours, crashed programs, and memory and disk right now). `scripts/batsy-logs batsy 400 spotify` gives the last 400 lines of `batsy.log` that mention Spotify. It's yours only, recognised by your Tailscale login.
+
 ## Batsy controls itself
 
 Say it or type it. None of these use the AI:

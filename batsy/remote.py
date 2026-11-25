@@ -126,6 +126,85 @@ def log_tail(lines: int = 150) -> str:
         return f"(no log: {e})"
 
 
+LOG_FILES = {"batsy": "batsy.log", "crash": "crash.log", "overlay": "overlay.log", "dock": "dock.log",
+             "sidetab": "sidetab.log", "printer": "printstream.log"}
+SOURCES = ("failures", *LOG_FILES, "service", "system", "kernel", "boot")
+
+
+def _tail_file(path: Path, lines: int, grep: str = "") -> str:
+    try:
+        with open(path, "rb") as f:
+            f.seek(0, 2)
+            f.seek(max(0, f.tell() - 4_000_000))
+            text = f.read().decode(errors="replace").splitlines()
+    except OSError as e:
+        return f"({path.name}: {e.strerror or e})"
+    if grep:
+        rx = re.compile(grep, re.I)
+        text = [ln for ln in text if rx.search(ln)]
+    return "\n".join(text[-lines:]) or f"({path.name} is empty)"
+
+
+def _journal(args: list[str], lines: int, grep: str = "") -> str:
+    argv = ["journalctl", "--no-pager", "-n", str(lines), *args] + (["-g", grep] if grep else [])
+    code, out = _run(argv, timeout=30)
+    return out or "(nothing)"
+
+
+def logs(source: str = "failures", lines: int = 200, grep: str = "") -> str:
+    """Any of Batsy's logs or the system's, as text. source: failures (everything that went wrong lately, in one
+    place), batsy, crash, overlay, dock, sidetab, printer, service (Batsy's systemd user units), system (the
+    whole machine's journal, warnings and worse), kernel, boot (this boot's errors). grep: only matching lines."""
+    lines = max(10, min(int(lines or 200), 5000))
+    if source in LOG_FILES:
+        return _tail_file(DATA_DIR / LOG_FILES[source], lines, grep)
+    if source == "service":
+        return _journal(["--user", "-u", "batsy*", "-u", RC_UNIT, "-o", "short-iso"], lines, grep)
+    if source == "system":
+        return _journal(["-p", "warning", "-o", "short-iso"], lines, grep)
+    if source == "kernel":
+        return _journal(["-k", "-p", "warning", "-o", "short-iso"], lines, grep)
+    if source == "boot":
+        return _journal(["-b", "-p", "err", "-o", "short-iso"], lines, grep)
+    if source == "failures":
+        return failures(lines)
+    return f"Unknown log {source!r}. Try one of: {', '.join(SOURCES)}"
+
+
+def failures(lines: int = 200) -> str:
+    """Everything that went wrong lately, in one place: Batsy's errors and tracebacks, its crash log, failed
+    services, the system's errors, crashed programs, and what's using the machine right now."""
+    parts = []
+
+    def section(title: str, body: str) -> None:
+        parts.append(f"===== {title} =====\n{body.strip() or '(none)'}")
+
+    section("Batsy errors and warnings (batsy.log)",
+            _tail_file(LOG, lines, r" (ERROR|WARNING|CRITICAL) |Traceback|Error:|Exception|^\s+File \""))
+    section("Batsy crash log (crash.log)", _tail_file(DATA_DIR / "crash.log", 60))
+    section("Overlay problems (overlay.log)", _tail_file(DATA_DIR / "overlay.log", 30, r"error|warn|fail|crash|Traceback"))
+    section("Failed services", "\n".join(x for x in (
+        _run(["systemctl", "--failed", "--no-legend", "--plain"])[1],
+        _run(["systemctl", "--user", "--failed", "--no-legend", "--plain"])[1]) if x) or "(none)")
+    section("Batsy's services (user journal, errors)", _journal(["--user", "-p", "warning", "-S", "-24h",
+                                                                   "-o", "short-iso"], 60))
+    section("System errors, last 24 h", _journal(["-p", "err", "-S", "-24h", "-o", "short-iso"], 80))
+    code, out = _run(["coredumpctl", "list", "--since", "-7d", "--no-pager", "--no-legend"])
+    section("Programs that crashed, last 7 days (coredumpctl)", out if code == 0 else "(none)")
+    try:
+        import psutil
+
+        vm, du = psutil.virtual_memory(), psutil.disk_usage("/")
+        top = sorted(psutil.process_iter(["name", "memory_percent", "cpu_percent"]),
+                     key=lambda p: p.info.get("memory_percent") or 0, reverse=True)[:6]
+        section("Right now", f"memory {vm.percent}% used, disk {du.percent}% used ({du.free // 2**30} GB free), "
+                             f"load {', '.join(f'{x:.1f}' for x in psutil.getloadavg())}\n"
+                + "\n".join(f"  {p.info['name']}: {p.info.get('memory_percent') or 0:.1f}% memory" for p in top))
+    except Exception as e:
+        section("Right now", str(e))
+    return "\n\n".join(parts)
+
+
 def doctor() -> str:
     code, out = _run([sys.executable, "-m", "batsy", "doctor"], timeout=120)
     return out[-6000:]

@@ -138,7 +138,14 @@
       </article>
     </div>
     <article class="card logbox">
-      <div class="row between"><h2 id="out-title">Log</h2><button data-act="log">Refresh</button></div>
+      <div class="row between"><h2 id="out-title">Log</h2>
+        <div class="row"><select id="log-src" aria-label="Which log">
+          <option value="failures">Everything that failed</option><option value="batsy">Batsy</option>
+          <option value="crash">Batsy crashes</option><option value="overlay">Screen (overlay)</option>
+          <option value="dock">Corner bat</option><option value="service">Batsy services</option>
+          <option value="system">System (warnings and errors)</option><option value="kernel">Kernel</option>
+          <option value="boot">This boot's errors</option><option value="printer">Printer</option></select>
+        <button data-act="log">Refresh</button></div></div>
       <pre id="out"></pre>
     </article>
   </section>

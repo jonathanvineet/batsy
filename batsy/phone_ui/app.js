@@ -240,7 +240,10 @@ $('#ask').addEventListener('submit', async e => {
   const s = {text};
   sending.push(s); $('#chat').dataset.opened = '0'; drawChat();
   try { await api('/api/batsy', {action: 'ask', text}, 180000); }
-  catch (err) { s.reply = err.message; drawChat(); await new Promise(r => setTimeout(r, 2500)); }
+  catch (err) {  // no answer: Batsy may be restarting (or updating). What it said is saved and shows up once it's back.
+    s.reply = 'No answer yet. If Batsy is restarting, its reply will show up here when it’s back.';
+    drawChat(); await new Promise(r => setTimeout(r, 4000));
+  }
   sending = sending.filter(x => x !== s);
   await loadChat(); refresh();  // the answer, as Batsy saved it
 });

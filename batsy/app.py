@@ -898,6 +898,7 @@ class Batsy:
         self.speaker.unhush()  # a new request: Batsy may speak again ("stop" itself hushes again at once)
         self.local_busy += 1
         self._said = []
+        self._exchange_saved = False
         try:
             handled = self._local_command(text)
         finally:
@@ -911,7 +912,7 @@ class Batsy:
 
             reply = " ".join(said or [])
             vault_capture.exchange(text, reply, self._route)
-            if reply:  # in the conversation history too, so a follow-up ("it's in my GitHub") knows what "it" is
+            if reply and not getattr(self, "_exchange_saved", False):  # in the history too, so a follow-up knows "it"
                 via = getattr(self, "_source_hint", None) or ("typed" if getattr(self, "_typed_turn", False) else "voice")
                 get_store().add_exchange(via, text, reply, [f"handled instantly ({self._route})"])
         return handled
@@ -1279,7 +1280,16 @@ class Batsy:
 
             web.start(self)  # the website on the same server: http://<laptop>:8765/web  # the phone widgets: over USB through the PC, or over Tailscale
         self.ears.start()
-        self.speaker.say(lifecycle.started())  # "Batsy online." or "I'm back. Updated: 23 files changed."
+        back = lifecycle.started()  # "Batsy online." or "I'm back. Updated: 23 files changed."
+        self.speaker.say(back)
+        if back != "Batsy online.":  # after a restart you asked for: shown on the phone and website too
+            from batsy.memory_store import get_store
+
+            get_store().add_exchange("alert", "", back, [])
+            try:
+                self.phone_event(back)
+            except Exception:
+                pass
         log.info("listening for wake word")
         self.automator.start()  # in the background: turn repeated model requests into instant code
 
@@ -1400,7 +1410,7 @@ class Batsy:
         if not update and not restart:
             return False
         self._route = "command"
-        reason = "restart"
+        reason, deps = "restart", False
         if update:
             repo = Path(__file__).resolve().parent.parent
             self.overlay.send("status", text="Pulling the latest code")
@@ -1419,16 +1429,37 @@ class Batsy:
                     return True
             else:
                 changed = re.search(r"(\d+) files? changed", out)
-                self._reply(f"Pulled {changed.group(1) + ' changed files' if changed else 'the update'}. Restarting.")
+                deps = "pyproject.toml" in out  # dependencies may have changed
+                self._reply(f"Pulled {changed.group(1) + ' changed files' if changed else 'the update'}. "
+                            + ("Installing the new dependencies, then restarting." if deps else "Restarting."))
                 reason = f"update: {changed.group(1)} files changed" if changed else "update"
-                if "pyproject.toml" in out:  # dependencies may have changed
-                    self.overlay.send("status", text="Installing dependencies")
-                    subprocess.run([sys.executable, "-m", "pip", "install", "-q", "-e", str(repo)], timeout=900)
         else:
             self._reply("Restarting.")
-        self.speaker.wait_idle(15)
-        self.restart(reason)
+        # The answer must be saved and delivered before this process is replaced: it's in the conversation now, and
+        # a request from the phone / website / typing gets its reply back before the restart (~2 s later).
+        self._save_exchange(getattr(self, "last_raw_text", "") or n, " ".join(self._said or []), "restarted")
+        repo = Path(__file__).resolve().parent.parent
+
+        def go():
+            if deps:
+                self.overlay.send("status", text="Installing dependencies")
+                subprocess.run([sys.executable, "-m", "pip", "install", "-q", "-e", str(repo)], timeout=900)
+            self.speaker.wait_idle(15)
+            self.restart(reason)
+
+        if threading.current_thread() is threading.main_thread():  # by voice: nobody is waiting for a reply
+            go()
+        else:
+            threading.Thread(target=lambda: (time.sleep(2), go()), daemon=True, name="restart").start()
         return True
+
+    def _save_exchange(self, text: str, reply: str, note: str) -> None:
+        """Into the conversation history (what the phone and website show), right now."""
+        from batsy.memory_store import get_store
+
+        via = getattr(self, "_source_hint", None) or ("typed" if getattr(self, "_typed_turn", False) else "voice")
+        get_store().add_exchange(via, text, reply, [note])
+        self._exchange_saved = True
 
     def _learner_command(self, n: str) -> bool:
         """"That's wrong" forgets a remembered answer; "learn from what I ask" automates repeats now;

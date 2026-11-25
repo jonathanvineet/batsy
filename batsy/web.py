@@ -455,7 +455,8 @@ def remote_action(app, body: dict) -> dict:
         ok = CONFIRMS.answer(int(body.get("id", 0)), bool(body.get("yes")))
         return {"ok": ok, "say": ("Yes, go ahead." if body.get("yes") else "No.") if ok else "That question expired."}
     if a == "log":
-        return {"ok": True, "text": remote.log_tail(int(body.get("lines", 150)))}
+        return {"ok": True, "text": remote.logs(body.get("source", "batsy"), int(body.get("lines", 150)),
+                                                body.get("grep", ""))}
     if a == "doctor":
         return {"ok": True, "text": remote.doctor()}
     if a in ("rc_start", "rc_stop", "rc_restart"):
@@ -594,6 +595,14 @@ def _route(app, p: Person, method: str, path: str, q: dict, body: dict, h):
     if path == "/api/web/push":
         push.subscribe(body.get("sub") or {}, f"web: {p.name}", user="" if p.owner else p.key)
         return {"ok": True}
+    if path == "/api/web/remote/logs":  # yours only (anything under /api/web/remote is): every log, as text
+        from batsy import remote
+
+        text = remote.logs(q.get("source", "failures"), int(q.get("lines", 200)), q.get("grep", ""))
+        if q.get("format") == "json":
+            return {"text": text, "sources": list(remote.SOURCES)}
+        h._send(200, body=text.encode(), ctype="text/plain; charset=utf-8")
+        return None
     if path == "/api/web/remote":
         return remote_action(app, body) if method == "POST" else remote_status(app)
     return {"error": "no such thing"}

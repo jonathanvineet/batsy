@@ -321,14 +321,17 @@ async function runAct(act, btn) {
   if (['restart', 'update'].includes(act) && !confirm(act === 'update' ? 'Pull the latest code and restart Batsy?' : 'Restart Batsy?')) return;
   if (btn) btn.disabled = true;
   try {
-    const r = await api('/api/web/remote', {action: act}, 180000);
-    if (r.text != null) { $('#out-title').textContent = act === 'doctor' ? 'Doctor' : 'Log'; $('#out').textContent = r.text;
+    const src = $('#log-src').value;
+    const r = await api('/api/web/remote', {action: act, ...(act === 'log' ? {source: src, lines: 300} : {})}, 180000);
+    if (r.text != null) { $('#out-title').textContent = act === 'doctor' ? 'Doctor' : $('#log-src').selectedOptions[0].text;
+      $('#out').textContent = r.text;
       if (act === 'log') $('#out').scrollTop = 1e9; }
     toast(r.say);
     if (act.startsWith('rc_')) setTimeout(loaders.remote, 2500);
   } catch (x) { toast(x.message); } finally { if (btn) btn.disabled = false; }
 }
 document.querySelectorAll('#remote [data-act]').forEach(b => b.addEventListener('click', () => runAct(b.dataset.act, b)));
+$('#log-src').addEventListener('change', () => runAct('log'));
 
 // --- start ------------------------------------------------------------------------------------------------------------
 (async () => {

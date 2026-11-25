@@ -1,0 +1,12 @@
+#!/bin/sh
+# Read the laptop's logs from any of your devices on Tailscale (you're recognised by your Tailscale login).
+#   scripts/batsy-logs                      everything that failed lately (Batsy, crashes, services, system, coredumps)
+#   scripts/batsy-logs batsy 400            the last 400 lines of batsy.log
+#   scripts/batsy-logs system 200 bluetooth only matching lines
+# Sources: failures batsy crash overlay dock sidetab printer service system kernel boot
+# Host: BATSY_HOST (default: workstation). Port: BATSY_PORT (default: 8765).
+HOST="${BATSY_HOST:-workstation}"
+PORT="${BATSY_PORT:-8765}"
+SRC="${1:-failures}"; LINES="${2:-200}"; GREP="${3:-}"
+exec curl -sS --max-time 60 -G "http://$HOST:$PORT/api/web/remote/logs" \
+  --data-urlencode "source=$SRC" --data-urlencode "lines=$LINES" --data-urlencode "grep=$GREP"

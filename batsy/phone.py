@@ -1226,7 +1226,10 @@ def _handler(hub: Hub):
                 if self.path == "/api/cloud":
                     act = body.get("action")
                     if act == "open":
-                        return self._send(200, hub.cloud_ticket(str(body.get("path", ""))))
+                        try:
+                            return self._send(200, hub.cloud_ticket(str(body.get("path", ""))))
+                        except FileNotFoundError:  # moved or deleted since the list was shown: say so, not a crash
+                            return self._send(404, {"error": "That file isn't there any more.", "say": "That file isn't there any more."})
                     if act == "mkdir":
                         p = hub.drive.mkdir(str(body.get("dir", "/batman")), str(body.get("name", "")))
                         return self._send(200, {"ok": True, "path": p, "say": f"Made {Path(p).name}."})

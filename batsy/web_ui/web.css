@@ -157,3 +157,5 @@ pre#out { margin: 0; max-height: 460px; overflow: auto; font: 12px/1.45 ui-monos
   .top { flex-wrap: wrap; gap: 10px; } nav { order: 3; flex-basis: 100%; }
   .chat { height: calc(100vh - 170px); } .msg { max-width: 92%; }
 }
+select { font: inherit; color: var(--bone); background: var(--panel2); border: 1px solid var(--line); border-radius: 14px;
+  padding: 8px 12px; }
