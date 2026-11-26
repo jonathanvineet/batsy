@@ -1284,6 +1284,12 @@ class Batsy:
             self.hub.start()
             from batsy import web
 
+            try:  # the 3D printing company: its database, PrintDesk's proxy key, the print watcher (batsy/shop/)
+                from batsy.shop import api as shop_api
+
+                shop_api.start(self)
+            except Exception:
+                log.exception("shop unavailable")
             web.start(self)  # the website on the same server: http://<laptop>:8765/web  # the phone widgets: over USB through the PC, or over Tailscale
         self.ears.start()
         back = lifecycle.started()  # "Batsy online." or "I'm back. Updated: 23 files changed."

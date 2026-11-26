@@ -923,6 +923,10 @@ def _handler(hub: Hub):
         def do_GET(self):
             from batsy import web
 
+            from batsy.shop import api as shop_api
+
+            if shop_api.serve(self, hub.app, "GET"):  # the company (batsy/shop/): PrintDesk Pro, by tailnet identity
+                return
             if web.serve(self, hub.app, "GET"):  # the website (/web): you and your friends, by Tailscale identity
                 return
             if self.path == "/app.apk":  # the app itself: no token yet when you install it
@@ -1105,6 +1109,10 @@ def _handler(hub: Hub):
         def do_POST(self):
             from batsy import web
 
+            from batsy.shop import api as shop_api
+
+            if shop_api.serve(self, hub.app, "POST"):  # the company (batsy/shop/): PrintDesk Pro, by tailnet identity
+                return
             if web.serve(self, hub.app, "POST"):
                 return
             if self.path == "/api/pair":

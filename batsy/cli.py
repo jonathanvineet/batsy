@@ -501,6 +501,12 @@ def main() -> None:
         Config.load()
         saver.cli(sys.argv[2:])
         return
+    if len(sys.argv) > 1 and sys.argv[1] == "shop":  # `batsy shop ...`: the 3D printing company (batsy/shop/)
+        from batsy.shop import cli as shop_cli
+
+        Config.load()
+        shop_cli.main(sys.argv[2:])
+        return
     if len(sys.argv) > 1 and sys.argv[1] == "doc":  # `batsy doc ...`: document tools (used by Claude Code)
         from batsy import docs
 
