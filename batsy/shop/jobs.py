@@ -19,7 +19,7 @@ import threading
 import time
 from pathlib import Path
 
-from batsy.shop import costing, db, gcode, quote
+from batsy.shop import costing, db, gcode, quote, sync
 
 log = logging.getLogger("batsy.shop.jobs")
 OPEN = ("waiting", "slicing", "ready", "printing", "failed")
@@ -91,6 +91,7 @@ def edit_order(oid: int, who: str, **f) -> dict:
     if allowed:
         db.update("orders", oid, **allowed, updated=time.time())
         db.event(who, "order_edit", f"{db.get('orders', oid)['code']}: {', '.join(allowed)}", f"order:{oid}")
+        sync.later(oid)
     if f.get("customer"):
         o = db.get("orders", oid)
         c = f["customer"]
@@ -183,6 +184,7 @@ def confirm(oid: int, who: str) -> dict:
         _prepare(jid)
     db.update("orders", oid, status="confirmed", confirmed=now, updated=now)
     db.event(who, "confirmed", f"{o['code']} confirmed: {len(parts)} part(s) queued", f"order:{oid}")
+    sync.later(oid)
     return order(oid)
 
 
@@ -328,6 +330,7 @@ def print_job(app, jid: int, who: str) -> dict:
     if o["status"] in ("confirmed", "quote"):
         db.update("orders", o["id"], status="printing", updated=time.time())
     db.event(who, "print", f"Printing {title}", f"run:{rid}")
+    sync.later(o["id"])
     return {"ok": True, "say": said, "run": rid}
 
 
@@ -353,6 +356,9 @@ def resume(app) -> dict:
 def set_reason(rid: int, reason: str, who: str) -> None:
     db.update("runs", rid, reason=reason[:300])
     db.event(who, "failure_reason", f"Run {rid}: {reason}", f"run:{rid}")
+    r = db.get("runs", rid)
+    if r and r["outcome"] in ("failed", "cancelled"):
+        sync.later(r["order_id"])  # the reason shows on the site's failed prints too
 
 
 # --- the watcher ---------------------------------------------------------------------------------------------------
@@ -453,6 +459,7 @@ def close(rid: int, outcome: str, st: dict | None, error: str = "", app=None) ->
         msg = (f"{'Stopped' if outcome == 'cancelled' else 'Failed'}: {label} at {pct:.0f}%. "
                f"Lost {grams:.0f} g and {hours:.1f} h: ₹{loss:.0f}. It's waiting for a reprint.")
     db.event("batsy", f"run_{outcome}", msg, f"run:{rid}")
+    sync.later(r["order_id"])
     log.info("shop: %s", msg)
     try:
         from batsy import push

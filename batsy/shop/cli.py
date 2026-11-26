@@ -5,6 +5,8 @@
   batsy shop ask "question"         the business brain (local model, Claude Code when it's hard)
   batsy shop key                    PrintDesk Pro's proxy key (its .env.local BATSY_SHOP_KEY)
   batsy shop staff add LOGIN NAME   let a tailnet login use PrintDesk (staff); `staff admin LOGIN NAME`; `staff rm LOGIN`
+  batsy shop supabase --env FILE    link Batsy to the team's site (SUPABASE_URL + SUPABASE_SERVICE_ROLE_KEY from
+                                    that .env): orders, costs and failures are written back, prices read
   batsy shop import-supabase        old PrintDesk orders and price list, from Supabase (SUPABASE_URL and
                                     SUPABASE_SERVICE_ROLE_KEY in the environment, or --env path/to/.env)
 """
@@ -15,7 +17,7 @@ import time
 import urllib.request
 from pathlib import Path
 
-from batsy.shop import api, brain, costing, db, jobs, quote, reports
+from batsy.shop import api, brain, costing, db, jobs, quote, reports, sync
 
 
 def _env(path: str | None) -> dict:
@@ -60,10 +62,11 @@ def import_supabase(env_path: str | None = None) -> str:
         quote.add_manual_part(made["id"], o.get("item_description") or "Part", float(o.get("filament_grams") or 0),
                               float(o.get("print_hours") or 0))
         st = status.get(o.get("status"), "confirmed")
-        db.update("orders", made["id"], status=st, price=float(o.get("final_price") or 0), external_id=o["id"],
+        price = float(o.get("quoted_price") or o.get("final_price") or 0)
+        db.update("orders", made["id"], status=st, price=price, external_id=o["id"],
                   created=ts(o.get("created_at")), updated=ts(o.get("updated_at")),
                   delivered=ts(o.get("updated_at")) if st == "delivered" else None,
-                  paid=float(o.get("final_price") or 0) if st == "delivered" else 0)
+                  paid=price if st == "delivered" else 0)
         n += 1
     rates = get("pricing_rates", "&order=updated_at.desc&limit=1")
     if rates:
@@ -97,6 +100,16 @@ def main(argv: list[str]) -> None:
                    "name = excluded.name, role = excluded.role",
                    (argv[2].lower(), " ".join(argv[3:]) or argv[2], role, time.time()))
         print(json.dumps(db.q("SELECT * FROM staff"), indent=1))
+    elif cmd == "supabase":
+        env = _env(argv[argv.index("--env") + 1] if "--env" in argv else None)
+        url = env.get("SUPABASE_URL") or env.get("NEXT_PUBLIC_SUPABASE_URL") or ""
+        key = env.get("SUPABASE_SERVICE_ROLE_KEY") or ""
+        if not url or not key:
+            print("Need SUPABASE_URL (or NEXT_PUBLIC_SUPABASE_URL) and SUPABASE_SERVICE_ROLE_KEY.")
+            sys.exit(1)
+        sync.set_creds(url, key)
+        sync.pull_rates(force=True)
+        print("Linked to the site. Price list:", json.dumps({k: v for k, v in costing.rates().items() if k != "materials"}))
     elif cmd == "import-supabase":
         env = argv[argv.index("--env") + 1] if "--env" in argv else None
         print(import_supabase(env))

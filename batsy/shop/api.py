@@ -22,7 +22,7 @@ import time
 from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse
 
-from batsy.shop import brain, costing, db, jobs, quote, reports
+from batsy.shop import brain, costing, db, jobs, quote, reports, sync
 
 log = logging.getLogger("batsy.shop.api")
 TAILNET = [ipaddress.ip_network("100.64.0.0/10"), ipaddress.ip_network("fd7a:115c:a1e0::/48")]
@@ -231,6 +231,11 @@ def route(app, p: dict, method: str, path: str, q: dict, b: dict, h):
             return {"ok": True}
         raise ValueError(f"Unknown action {a}")
 
+    if path == "/api/shop/link" and post:  # an order on the team's site -> its Batsy order (made once)
+        return jobs.order(sync.link(b.get("order") or {}, who)["id"])
+    if path == "/api/shop/sync":
+        return {"enabled": sync.enabled()}
+
     # parts (the virtual slicer's results)
     if path == "/api/shop/part":
         pid = int(b.get("id") or q.get("id") or 0)
@@ -369,9 +374,21 @@ def route(app, p: dict, method: str, path: str, q: dict, b: dict, h):
 
 def start(app) -> None:
     """From the app, with the hub: the database, the proxy key for PrintDesk, the print watcher."""
+    import threading
+
     db.connect()
     proxy_key()
     jobs.watch(app)
+
+    def rates_loop():  # the team's price list (Supabase pricing_rates) is Batsy's
+        while True:
+            try:
+                sync.pull_rates()
+            except Exception:
+                log.exception("shop: rates from the site")
+            time.sleep(300)
+
+    threading.Thread(target=rates_loop, daemon=True, name="shop-rates").start()
 
 
 def ask_route(app, p: dict, b: dict) -> dict:
