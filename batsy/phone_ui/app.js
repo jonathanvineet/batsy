@@ -11,9 +11,23 @@ const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&': '&amp;', '<': '
 if (/iPhone|iPad|iPod/.test(navigator.userAgent) && !window.BatsyApp || /[?&]layout=dash/.test(location.search)) {
   document.body.classList.add('dash');
 }
+// The phone's own storage (iOS allows ~5 MB). Chat, folder listings and samples are only caches of what Batsy has;
+// when it's full, they go (Batsy fills them again) rather than the pairing silently failing to save: a full store
+// used to drop the token, so the phone paired and was asked to pair again at once.
+const KEEP = ['token', 'via', 'dashLayout', 'standbyLayout', 'fabPos', 'view'];
 const store = {
   get(k, d) { try { return JSON.parse(localStorage.getItem(k)) ?? d; } catch { return d; } },
-  set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} },
+  set(k, v) {
+    const s = JSON.stringify(v);
+    try { localStorage.setItem(k, s); return true; } catch {}
+    try {
+      for (const key of Object.keys(localStorage)) {
+        if (!KEEP.includes(key) && !key.startsWith('stack-')) localStorage.removeItem(key);
+      }
+      localStorage.setItem(k, s);
+      return true;
+    } catch { return false; }
+  },
 };
 (() => {
   const h = new URLSearchParams(location.hash.slice(1));
@@ -101,7 +115,11 @@ $('#pairform').addEventListener('submit', async e => {
   try {
     const r = await fetch('/api/pair', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({code})});
     if (!r.ok) { $('#pairmsg').textContent = 'That code didn’t work. Ask Batsy for a new one.'; return; }
-    store.set('token', (await r.json()).token);
+    const t = (await r.json()).token;
+    if (!store.set('token', t) || store.get('token', '') !== t) {
+      $('#pairmsg').textContent = 'Paired, but this phone wouldn’t save it: turn off Private Browsing, or clear Safari’s website data for Batsy, then pair again.';
+      return;
+    }
     store.set('via', 'Tailscale');
     $('#pairsheet').hidden = true;
     refresh(); loadLight(); loadFiles(); loadSlice(); showBell(); loadCloudWidget();
