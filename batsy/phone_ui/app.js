@@ -38,13 +38,20 @@ const store = {
 })();
 
 async function api(path, body, timeout = 10000) {
+  const tok = store.get('token', '');
+  if (!tok) throw new Error('Not paired');  // nothing to ask Batsy until the phone is paired
   const ctl = new AbortController();
   const timer = setTimeout(() => ctl.abort(), timeout);
   try {
     const r = await fetch(path, {method: body ? 'POST' : 'GET', signal: ctl.signal,
-      headers: {'Authorization': 'Bearer ' + store.get('token', ''), ...(body ? {'Content-Type': 'application/json'} : {})},
+      headers: {'Authorization': 'Bearer ' + tok, ...(body ? {'Content-Type': 'application/json'} : {})},
       body: body ? JSON.stringify(body) : undefined});
-    if (r.status === 401) { needPairing('Batsy doesn’t know this phone any more: pair again.'); throw new Error('Not paired'); }
+    if (r.status === 401) {
+      // only if it was refused with the token the phone has now: an old request (sent before pairing) coming back
+      // late used to throw the pairing screen up again right after a successful pairing
+      if (store.get('token', '') === tok) needPairing('Batsy doesn’t know this phone any more: pair again.');
+      throw new Error('Not paired');
+    }
     if (!r.ok) {  // Batsy's own words when it gave any ("The PC is off or asleep..."), else the status
       const j = await r.clone().json().catch(() => ({}));
       throw Object.assign(new Error(j.say || j.error || 'HTTP ' + r.status), {status: r.status});
@@ -110,13 +117,14 @@ function needPairing(msg = '') {
 if (!store.get('token', '')) needPairing();
 $('#pairform').addEventListener('submit', async e => {
   e.preventDefault();
-  const code = $('#paircode').value.trim();
+  const code = $('#paircode').value.replace(/\D/g, '');  // "928 664" typed with a space still counts
   if (!/^\d{6}$/.test(code)) { $('#pairmsg').textContent = 'The code is 6 digits.'; return; }
   try {
     const r = await fetch('/api/pair', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({code})});
     if (!r.ok) { $('#pairmsg').textContent = 'That code didn’t work. Ask Batsy for a new one.'; return; }
     const t = (await r.json()).token;
-    if (!store.set('token', t) || store.get('token', '') !== t) {
+    store.set('token', t);  // (store.set returns nothing: testing it always failed, and pairing never "took")
+    if (store.get('token', '') !== t) {
       $('#pairmsg').textContent = 'Paired, but this phone wouldn’t save it: turn off Private Browsing, or clear Safari’s website data for Batsy, then pair again.';
       return;
     }

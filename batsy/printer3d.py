@@ -864,6 +864,10 @@ def handle(app, n: str) -> str | None:
         if m:
             return _again(app, pr, m["what"] or m["what2"])
         m = PRINT.match(n)
+        if not m and not re.match(r"(?:how|when|what|is|did|why|can you tell)\b", n) and re.search(
+                r"\b(?:start(?:ing)? (?:the |to )?print(?:ing)?(?: it| that| this)?|(?:and |then |now |go ahead and |just )print "
+                r"(?:it|that|this)|send (?:it|that) to (?:the )?printer|print (?:it|that|this) now)\b", n):
+            m = PRINT.match("print it")  # "okk do it and start printing": the latest slice (it asks "bed clear?" first)
         if m and m["what"] not in ("screen", "the screen", "a document", "this page") and not re.search(r"\bpdf\b|\bpage", n):
             return _print(app, pr, m["what"], m["proc"])
     except OSError as e:

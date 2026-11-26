@@ -151,7 +151,14 @@ def remember(d: dict) -> None:
 def recall() -> dict | None:
     try:
         d = json.loads(LAST.read_text())
-        r = d.get("result") or {}
+        r = dict(d.get("result") or {})
+        from batsy.config import WORKSPACE
+
+        absolute = lambda x: str(WORKSPACE / x) if x and not str(x).startswith("/") else x  # noqa: E731
+        d["model"] = absolute(d.get("model"))  # stored relative to ~/Batsy: "print it" checked them from Batsy's own
+        for k in ("gcode", "preview", "paths"):  # folder, missed them, and re-sliced on plain settings
+            if r.get(k):
+                r[k] = absolute(r[k])
         return {"model": d.get("model"), "process": d.get("process"), "overrides": d.get("overrides"),
                 "copies": d.get("copies"), "each_mm": d.get("each_mm"), "hours": d.get("hours"),
                 "time": r.get("time"), "grams": r.get("grams"), "gcode": r.get("gcode"), "t": d.get("t"), "result": r}

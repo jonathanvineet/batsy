@@ -1,6 +1,6 @@
 // Batsy's service worker: keeps the app's own files so it opens instantly (and offline), shows push notifications,
 // and opens Batsy when one is tapped. Live data (/api/...) always goes to the laptop, never from a cache.
-const CACHE = 'batsy-shell-v13';
+const CACHE = 'batsy-shell-v15';
 const SHELL = ['/app/', '/app/app.css', '/app/app.js', '/app/manifest.webmanifest', '/app/slice.html',
   '/app/fonts/barlow-condensed-600.woff2', '/app/fonts/barlow-condensed-700.woff2',
   '/app/icons/icon-192.png', '/app/icons/apple-touch-icon.png'];

@@ -102,6 +102,9 @@ def _ai_speed() -> dict:
             "done_s": round(statistics.median([s for s, _ in rows]), 1) if rows else None}
 
 
+_refused: dict[str, float] = {}  # device -> when its refusal was last logged
+
+
 def token() -> str:
     if not TOKEN_FILE.exists():
         TOKEN_FILE.write_text(secrets.token_urlsafe(24))
@@ -247,6 +250,10 @@ class Hub:
             return ""
 
     def new_pair_code(self) -> str:
+        """A 6-digit code for 10 minutes. Asking again while one is still good gives the same one (a new one each
+        time silently cancelled the code you were typing)."""
+        if self.pair_code and time.time() < self.pair_code[1] - 120:
+            return self.pair_code[0]
         code = f"{secrets.randbelow(10 ** 6):06d}"
         self.pair_code = (code, time.time() + 600)
         return code
@@ -910,6 +917,15 @@ def _handler(hub: Hub):
             got = self.headers.get("Authorization", "").removeprefix("Bearer ").strip()
             if got and secrets.compare_digest(got, token()):
                 return True
+            ua = self.headers.get("User-Agent") or ""
+            dev = "iPhone" if "iPhone" in ua else "Android app" if "okhttp" in ua.lower() or "Dalvik" in ua else \
+                "Android browser" if "Android" in ua else ua[:40] or "?"
+            src = (self.headers.get("X-Forwarded-For") or self.client_address[0]).split(",")[0].strip()
+            seen = _refused.get(src, 0)
+            if time.time() - seen > 600:  # once per device per 10 minutes (an unpaired tab asks every few seconds)
+                _refused[src] = time.time()
+                log.info("phone: refused %s from %s (%s, %s)", self.path.split("?")[0], src, dev,
+                         "no token: not paired" if got in ("", "Bearer") else "an old token: pair again")
             self._send(401, {"error": "not paired"})
             return False
 
@@ -1116,8 +1132,11 @@ def _handler(hub: Hub):
             if web.serve(self, hub.app, "POST"):
                 return
             if self.path == "/api/pair":
-                code = str(self._body().get("code", ""))
+                code = re.sub(r"\D", "", str(self._body().get("code", "")))  # "928 664", "928-664": the digits
                 ok = hub.pair_code and time.time() < hub.pair_code[1] and secrets.compare_digest(code, hub.pair_code[0])
+                log.info("phone pairing from %s: %s", self.client_address[0],
+                         "ok" if ok else "no code waiting" if not hub.pair_code else
+                         "expired" if time.time() >= hub.pair_code[1] else f"wrong code ({len(code)} digits)")
                 if not ok:
                     return self._send(403, {"error": "wrong or expired code"})
                 hub.pair_code = None

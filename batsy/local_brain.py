@@ -133,7 +133,9 @@ COMMAND = re.compile(r"^(?:(?:hey|ok|okay|please|now|so|and|can you|could you|wo
 QUICK_SYSTEM = ("You are Batsy, {user}'s friendly voice assistant. {user} is {about}. Answer in one or two short spoken sentences, "
                 "no lists or markdown. Speak plainly as yourself: no role-play, sound effects, stage directions, "
                 "narration or quotation marks; ignore any theme or character from earlier talk. Input is speech-to-text, so guess sensibly at misheard words. If the answer "
-                "needs the laptop, the internet, recent events, or facts you're not sure of, reply with only: PASS")
+                "needs the laptop, the internet, recent events, or facts you're not sure of, reply with only: PASS. "
+                "You can't DO anything (print, slice, send, open, play, set, buy, change, save): if he asks you to do "
+                "something, reply with only: PASS. Never say you did, sent, started or set something.")
 
 
 def vision_source(text: str) -> str | None:
