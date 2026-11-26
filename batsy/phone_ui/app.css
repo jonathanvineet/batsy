@@ -317,6 +317,7 @@ dialog .ghost { background: var(--w2); } dialog .danger { background: var(--bad)
 .sw-plate { position: absolute; inset: 0; z-index: 2; border-radius: inherit; background: var(--card, #111318);
   padding: clamp(10px, 3vmin, 16px); display: flex; flex-direction: column; gap: 8px; }
 .sw-plate[hidden] { display: none; }
+.sw-plate.busy button { opacity: .5; pointer-events: none; }
 /* only waiting (not asking): a compact bar along the bottom, so the last slice stays visible above it */
 .sw-plate.waiting { inset: auto 0 0 0; padding: 10px 12px 12px; border-radius: 0 0 var(--r) var(--r);
   background: color-mix(in srgb, var(--card, #111318) 94%, transparent); box-shadow: 0 -12px 28px rgba(0, 0, 0, .55); gap: 8px; }

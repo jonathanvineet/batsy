@@ -1130,13 +1130,17 @@ def _handler(hub: Hub):
                     else:
                         plate.WAITING.update(models=ms, t=time.time())
                         plate._save()
-                        said = slicer.handle(app, f"slice {'both' if len(ms) > 1 else 'it'}")
+                        said = slicer.handle(app, f"slice {'both' if len(ms) > 1 else 'it'}", keep_last=True)  # same settings
                 elif body.get("start"):
                     how = {"choose": "", "keep": " as it is", "best": " lying down"}.get(body["start"], "")
                     n = len(plate.waiting())
                     said = slicer.handle(app, f"slice {'both' if n > 1 else 'it'}{how}")
-                elif body.get("cancel"):
+                elif body.get("cancel"):  # ✕: an open question is cancelled; a "waiting" card is dismissed
                     said = plate.answer(app, "cancel")
+                    if said is None and plate.waiting():
+                        plate.WAITING["models"] = []
+                        plate._save()
+                        said = "Okay, I'll leave them."
                 else:
                     said = None
                 if said:

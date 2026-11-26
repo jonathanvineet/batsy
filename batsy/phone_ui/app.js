@@ -428,7 +428,17 @@ function closePreview() {
 // Audio goes to the laptop (Whisper there turns it into words; Batsy handles it like anything you'd say); Batsy
 // answers out loud from the laptop, and as text here. The phone is only the microphone.
 const mic = {stream: null, rec: null, chunks: [], ears: false, ctx: null, an: null, busy: false, mute: false, timer: null};
+// iOS takes the mic away when the app goes to the background or the screen locks, without saying so: a stream that
+// isn't live any more is dropped and asked for again (reusing a dead one froze the button until the app was reopened)
+const micLive = () => mic.stream && mic.stream.getAudioTracks().some(t => t.readyState === 'live' && t.enabled && !t.muted);
+function micRelease() {
+  try { if (mic.rec && mic.rec.state !== 'inactive') mic.rec.stop(); } catch {}
+  mic.rec = null;
+  if (mic.stream) mic.stream.getTracks().forEach(t => { try { t.stop(); } catch {} });
+  mic.stream = null;
+}
 async function micStream() {
+  if (mic.stream && !micLive()) micRelease();
   if (!mic.stream) {
     if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) throw new Error('This phone can’t use its microphone here (it needs the secure Batsy address).');
     mic.stream = await navigator.mediaDevices.getUserMedia({audio: {echoCancellation: true, noiseSuppression: true, autoGainControl: true}});
@@ -439,14 +449,18 @@ const recType = () => ['audio/webm;codecs=opus', 'audio/mp4', 'audio/webm', 'aud
 function startRec() {
   const t = recType(), r = new MediaRecorder(mic.stream, t ? {mimeType: t} : {});
   mic.chunks = []; r.ondataavailable = e => { if (e.data.size) mic.chunks.push(e.data); };
-  r.start(); r.t0 = Date.now(); mic.rec = r;
+  r.start(250); r.t0 = Date.now(); mic.rec = r;  // (chunks as it goes: something to send even if stop never reports)
 }
 function stopRec() {
   return new Promise(res => {
     const r = mic.rec; mic.rec = null;
     if (!r || r.state === 'inactive') return res(null);
-    r.onstop = () => res({blob: new Blob(mic.chunks, {type: r.mimeType}), ms: Date.now() - r.t0});
-    r.stop();
+    let done = false;
+    const finish = () => { if (done) return; done = true;
+      res(mic.chunks.length ? {blob: new Blob(mic.chunks, {type: r.mimeType || recType()}), ms: Date.now() - r.t0} : null); };
+    r.onstop = finish;
+    setTimeout(finish, 2500);  // iOS sometimes never fires "stop": don't wait for it forever
+    try { r.stop(); } catch { finish(); }
   });
 }
 let unlocked = false, voicePlayer = null;
@@ -477,8 +491,14 @@ function chime(up = true) {
   } catch {}
 }
 async function sendVoice(blob, mode) {
-  const r = await fetch('/api/voice?mode=' + mode, {method: 'POST', body: blob,
-    headers: {Authorization: 'Bearer ' + store.get('token', ''), 'Content-Type': blob.type || 'application/octet-stream'}});
+  const ctl = new AbortController(), timer = setTimeout(() => ctl.abort(), 90000);  // Batsy restarting: don't hang
+  let r;
+  try {
+    r = await fetch('/api/voice?mode=' + mode, {method: 'POST', body: blob, signal: ctl.signal,
+      headers: {Authorization: 'Bearer ' + store.get('token', ''), 'Content-Type': blob.type || 'application/octet-stream'}});
+  } catch (e) {
+    throw new Error(e.name === 'AbortError' ? 'Batsy took too long. Try again.' : 'Batsy isn’t reachable right now.');
+  } finally { clearTimeout(timer); }
   if (!r.ok) throw new Error('Batsy didn’t get that (' + r.status + ')');
   return r.json();
 }
@@ -504,7 +524,8 @@ function holdToTalk(btn, movable = false) {
     try { await micStream(); } catch (err) { btn.dataset.down = ''; return toast(err.message); }
     if (!btn.dataset.down) return;  // let go while the permission prompt was up
     if (mic.ears) mic.mute = true;  // ears mode: this recording, not that one
-    startRec(); btn.classList.add('rec'); document.body.classList.add('ptt'); chime(true);
+    try { startRec(); } catch { micRelease(); try { await micStream(); startRec(); } catch (err) { btn.dataset.down = ''; return toast('The mic didn’t start. Try again.'); } }
+    btn.classList.add('rec'); document.body.classList.add('ptt'); chime(true);
     status('Listening… let go when you’re done');
   }
   btn.addEventListener('pointerdown', e => {
@@ -538,13 +559,28 @@ function holdToTalk(btn, movable = false) {
     const got = await stopRec();
     if (!got || got.ms < 400) { status('Hold the mic while you talk.'); setTimeout(() => document.body.classList.remove('ptt'), 1200); restFab(); return; }
     status('Thinking…'); btn.classList.add('wait');
-    try { answered(await sendVoice(got.blob, 'ptt')); } catch (err) { toast(err.message); }
-    btn.classList.remove('wait');
+    try { answered(await sendVoice(got.blob, 'ptt')); } catch (err) { toast(err.message); status(err.message); }
+    finally { btn.classList.remove('wait', 'rec'); }
     $('#fab-said').textContent = $('#b-said').textContent;  // the answer, under the big mic for a moment
     setTimeout(() => document.body.classList.remove('ptt'), 4000);
     restFab();
   }));
 }
+// Leaving the app (or locking the phone) ends any recording and gives the mic back; coming back starts clean, so the
+// mic always answers the next hold without reopening the app
+let earsWere = false;
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) {
+    earsWere = mic.ears;
+    if (mic.ears) earsOff(true);  // (the laptop's mic takes over while the app is away)
+    micRelease();
+    mic.busy = false;
+  } else if (earsWere) { earsWere = false; setTimeout(() => earsOn(), 400); }  // back: listening again, fresh mic
+  for (const b of document.querySelectorAll('.rec, .wait')) b.classList.remove('rec', 'wait');
+  document.body.classList.remove('ptt');
+  for (const b of document.querySelectorAll('[data-down]')) b.dataset.down = '';
+});
+addEventListener('pageshow', () => { if (mic.stream && !micLive()) micRelease(); });
 // --- the floating mic's place: dragged anywhere, snapped to the nearest side, remembered (like AssistiveTouch) ----
 const FAB = () => $('#fab-mic');
 function placeFab(x, y) {
@@ -991,13 +1027,21 @@ async function loadPlate() {
     $('#sp-btns .go').textContent = w.length > 1 ? 'Choose positions' : 'Choose position';
   }
 }
+let plateBusy = false;
 async function plateDo(body, el) {
+  if (plateBusy) return;  // one at a time: repeated taps used to start a slice each
+  plateBusy = true;
+  $('#sw-plate').classList.add('busy');
   try {
     if (el) el.disabled = true;
     const r = await api('/api/plate', body, 60000);
     if (r.say) toast(r.say.length > 140 ? r.say.slice(0, 137) + '…' : r.say);
   } catch (err) { toast(err.message); }
-  finally { if (el) el.disabled = false; plateV = -1; loadPlate(); setTimeout(loadSlice, 4000); }
+  finally {
+    if (el) el.disabled = false;
+    plateBusy = false; $('#sw-plate').classList.remove('busy');
+    plateV = -1; loadPlate(); setTimeout(loadSlice, 4000);
+  }
 }
 $('#sp-opts').addEventListener('click', e => { const b = e.target.closest('.sp-opt'); if (b) plateDo({pick: +b.dataset.k}, b); });
 $('#sp-btns').addEventListener('click', e => { const b = e.target.closest('button[data-start]'); if (b) plateDo({start: b.dataset.start}, b); });

@@ -494,6 +494,9 @@ def slice_model(model: Path, process: str | None = None, overrides: dict | None 
         return _slice_model(model, process, overrides, label, filament_overrides, others)
 
 
+_busy = threading.Lock()  # a slice running (from handle): another request waits its turn instead of piling on
+
+
 def plate_name(models: list[Path]) -> str:
     """'bolt + nut': what's on the plate (a turned copy is still the bolt)."""
     return " + ".join(re.sub(r" (?:laid|turned)$", "", m.stem) for m in models)
@@ -544,6 +547,12 @@ def smart(models: list[Path]) -> tuple[dict, list[str]]:
             support += float(a[down][drop > 3].sum())
     out = {"brim_type": ["outer_only"] if brim else ["no_brim"]}
     why.append("a brim, outside only (it stands on little)" if brim else "no brim (it stands well on the bed)")
+    # the top: always ironed, with settings that leave it smooth, whichever preset ("fast" had ironing off, "nicee"
+    # ironed a spiral top at 15 mm/s and the finish came out patchy). Monotonic top lines iron flat; only flat tops
+    # can be ironed at all (a curved top keeps its layer lines). "no ironing" in what you ask still turns it off.
+    out.update({"ironing_type": ["top"], "ironing_flow": ["12%"], "ironing_speed": ["30"], "ironing_spacing": ["0.1"],
+                "ironing_inset": ["0.2"], "top_surface_pattern": ["monotonicline"]})
+    why.append("the top ironed")
     if support < 30:
         out["enable_support"] = ["0"]
         why.append("no supports (nothing really overhangs)")
@@ -607,7 +616,7 @@ def _slice_model(model: Path, process: str | None = None, overrides: dict | None
         dest = out_dir / f"{plate_name([model, *(others or [])]) if others else model.stem} - {pname}{(' ' + label) if label else ''}.gcode"
         shutil.move(str(gcodes[0]), dest)
     result = {"gcode": str(dest), "process": pname + (f" ({label})" if label else ""), "secs": round(time.time() - t0, 1),
-              "decided": [d for d in decided if not any(k in (overrides or {}) for k in ("brim_type", "enable_support"))],
+              "decided": [d for d, k in zip(decided, ("brim_type", "ironing_type", "enable_support")) if k not in (overrides or {})],
               **_estimates(dest)}
     try:  # a picture of the sliced paths, so you can see the slicing
         from batsy import preview
@@ -648,16 +657,13 @@ def too_long(r: dict, copies: int = 1, limit: float | None = None) -> str:
 
 
 def describe(model: Path, r: dict) -> str:
-    name = r.get("name") or re.sub(r" (?:laid|turned)$", "", model.stem)
-    bits = [f"{name.replace('_', ' ').replace('-', ' ')} {'are' if ' + ' in name else 'is'} sliced with {r['process']}"]
+    name = re.sub(r" (?:laid|turned)$", "", r.get("name") or model.stem)
+    bits = [f"{name.replace('_', ' ').replace('-', ' ')} {'are' if ' + ' in name else 'is'} sliced"]
     if r.get("time"):
         bits.append(f"it prints in about {_say_time(r['time'])}")
     if r.get("grams"):
-        bits.append(f"using {round(r['grams'])} grams of filament" + (f", {r['metres']} metres" if r.get("metres") else ""))
-    said = ", ".join(bits) + "."
-    if r.get("decided"):  # "no brim (it stands well on the bed), supports (874 mm² hangs over air)"
-        said += " I went with " + " and ".join(x.split(" (")[0] for x in r["decided"]) + "."
-    return said + " The G-code is in the sliced folder next to it."
+        bits.append(f"{round(r['grams'])} grams")
+    return ", ".join(bits) + "."
 
 
 def _say_time(t: str) -> str:
@@ -681,7 +687,7 @@ SAVE = re.compile(r"^(?:please )?(?:save|keep|store) (?:it|this|that|these setti
 KICK = re.compile(r"^(?:please )?(?:slice|re ?slice|make|print)\b")
 
 
-def handle(app, n: str, model_override: Path | None = None) -> str | None:
+def handle(app, n: str, model_override: Path | None = None, keep_last: bool = False) -> str | None:
     # "s uh slice it with 0.16 uh layer height" -> "slice it with 0.16 layer height";
     # "don't use fuzzy skin and slice it again" -> "slice it again don't use fuzzy skin" (on top of the last slice)
     n, again = canonical(n)
@@ -735,7 +741,7 @@ def handle(app, n: str, model_override: Path | None = None) -> str | None:
         return None
     if n.startswith("make") and not re.match(r"(?:please )?make (?:it|this|that|the (?:model|print|part|last one))\b", n):
         return None  # "make my discovery playlist", "make a note": not a print tweak (those are "make it …")
-    named = _named_model(n)
+    named = _named_model(n) or _sent_by(n)  # "the iphone stand", or "what Karan sent" / "Karan's file"
     # "slice it ...", "print this", "make it stronger", or just "slice": the last model. Anything else names a model.
     generic = re.fullmatch(r"(?:please )?(?:re ?slice|slice|print|make)(?: (?:it|this|that|the model|the last one|"
                            r"the last model|again)\b.*)?", n)
@@ -743,16 +749,22 @@ def handle(app, n: str, model_override: Path | None = None) -> str | None:
                                                                  r"(?:both|them|all|these|those|everything)\b.*", n):
         generic = True  # "slice both", "slice them together": what's waiting, on one plate
     if not named and not generic and not n.startswith("make"):
+        if re.search(r"\b(?:sent|send|gave|shared)\b|'s (?:file|model|stl)\b", n):
+            return "I don't have a model from them yet. Ask them to send it to Batsy, then say slice what they sent."
         return None  # you named something I don't have ("print a calibration test"): not the last model instead
     # "slice it finer" after "put five on the bed": the arrangement you sliced last, not the single original
     last_model = Path(last["model"]) if last and last.get("model") else None
+    waiting_now = plate.waiting()
+    if waiting_now and generic and not named and not again and not keep_last and model_override is None:
+        model_override = waiting_now[-1] if len(waiting_now) == 1 else model_override  # what you just sent, not the last slice
     model = model_override or named or (last_model if last_model and (n.startswith("make") or (generic and last_model.exists()))
                       else None) or _target(app, None)
     if n.startswith("make") and not (last or model):
         return None  # "make it louder": not about printing
     names = processes()
     proc = next((x for x in sorted(names, key=len, reverse=True) if re.search(rf"\b{re.escape(x.lower())}\b", n)), None)
-    relative = (n.startswith("make") or again) and last  # "make it stronger", "slice it again without X": on top of the last
+    relative = (n.startswith("make") or again or keep_last) and last  # "make it stronger", "slice it again without X",
+    # or choosing a new position for the last slice (keep_last): on top of the last slice's settings
     base_name = proc or (last["process"] if relative else None) or settings().get("default", DEFAULT_PROCESS)
     if model is None:
         return "Which model? Send me an STL or a 3MF first."
@@ -780,13 +792,20 @@ def handle(app, n: str, model_override: Path | None = None) -> str | None:
     label = "custom" if overrides or use_claude else ""
 
     def go(ms: list[Path]) -> str:  # sliced once you've said how each sits (or asked for none of that)
-        app._reply(f"Slicing {plate_name(ms).replace('_', ' ')} with {base_name}"
-                   + (" on one plate" if len(ms) > 1 else "")
-                   + (", tuned: " + "; ".join(notes[:4]) if notes else "") + ".")
+        if _busy.locked():  # already slicing (a double tap, a repeated request): one at a time
+            return "I'm already slicing; one moment."
+        app._reply(f"Slicing {plate_name(ms).replace('_', ' ')}" + (" on one plate" if len(ms) > 1 else "") + ".")
         threading.Thread(target=run, args=(ms,), daemon=True, name="slicing").start()
         return ""
 
     def run(ms: list[Path]):
+        _busy.acquire()
+        try:
+            _run(ms)
+        finally:
+            _busy.release()
+
+    def _run(ms: list[Path]):
         model = ms[0]
         o, why = overrides, notes
         try:
@@ -815,10 +834,34 @@ def handle(app, n: str, model_override: Path | None = None) -> str | None:
                 app._reply(said)
             ms.append(m2)
         return go(ms)
-    if relative or plate.KEEP.search(n) or all(m.stem.endswith((" laid", " turned")) for m in models) \
+    if (relative and not keep_last) or plate.KEEP.search(n) or all(m.stem.endswith((" laid", " turned")) for m in models) \
             or model_override is not None and model_override.stem.endswith((" laid", " turned")):
         return go(models)  # "slice it again …", "as it is", or already turned the way you chose
     return plate.start(app, models, go)  # how should each one sit? (a picture of the options, then your pick)
+
+
+# who sent it, as the mic hears the names ("slice what current sent" was "what Karan sent")
+SENDERS = {"karan": "Karan", "current": "Karan", "karen": "Karan", "kiran": "Karan", "caran": "Karan", "corrin": "Karan",
+           "rehaan": "Rehaan", "rehan": "Rehaan", "rayan": "Rehaan", "rihan": "Rehaan", "reyhan": "Rehaan",
+           "jonathan": "Jonathan", "i": "Jonathan", "me": "Jonathan", "my": "Jonathan"}
+
+
+def _sent_by(n: str) -> Path | None:
+    """'slice what Karan sent', 'slice Karan's file', 'the model Rehaan sent': that person's newest model."""
+    m = re.search(r"\b(?:what|whatever|the (?:file|model|stl|part|thing)s?|the one|that) (?P<who>[a-z]+) (?:just )?(?:has )?"
+                  r"(?:sent|send|gave|shared)\b|\b(?P<who2>[a-z]+)'?s (?:file|model|stl|part|print|thing)\b", n)
+    if not m:
+        return None
+    who = SENDERS.get(m.group("who") or m.group("who2") or "")
+    if not who:
+        return None
+    from batsy import received
+
+    for r in received.all_rows(limit=300):  # newest first
+        p = Path(r["path"])
+        if p.suffix.lower() in MODELS and p.exists() and p.parent.name == who:
+            return step_to_stl(p) if p.suffix.lower() in (".step", ".stp") else p
+    return None
 
 
 def _named_model(n: str) -> Path | None:
@@ -861,6 +904,32 @@ def _target(app, said: str | None) -> Path | None:
         if Path(r["path"]).suffix.lower() in MODELS and Path(r["path"]).exists():
             return Path(r["path"])
     return None
+
+
+def step_to_stl(step: Path) -> Path:
+    """A STEP (CAD) file -> an STL in millimetres next to it, so positions, supports and slicing all work on a mesh.
+    (STEP reads in metres: 0.04 x 0.06 x 0.04 is a 40 x 60 x 40 mm part.) The STEP itself if it can't be read."""
+    try:
+        import trimesh
+
+        m = trimesh.load(str(step), force="mesh")  # (cascadio reads the CAD)
+        if not len(m.faces):
+            return step
+        if float(max(m.extents)) < 1.0:
+            m.apply_scale(1000.0)
+        out = step.with_suffix(".stl")
+        if out.exists():
+            out = step.with_name(f"{step.stem} (mesh).stl")
+        from batsy import inbox
+
+        inbox.made(out)
+        m.export(str(out))
+        x, y, z = (round(float(v)) for v in m.extents)
+        log.info("converted %s -> %s (%s x %s x %s mm)", step.name, out.name, x, y, z)
+        return out
+    except Exception as e:
+        log.warning("couldn't read %s: %s", step.name, e)
+        return step
 
 
 def fix_units(model: Path) -> str | None:
@@ -970,7 +1039,7 @@ def on_arrival(app, files: list[Path]) -> None:
                 app.announce(f"Got your printer presets: {got['printer']}, with {', '.join(got['process'])}.")
             except (OSError, ValueError, zipfile.BadZipFile) as e:
                 log.warning("printer bundle %s: %s", f.name, e)
-    models = [f for f in files if f.suffix.lower() in MODELS]
+    models = [step_to_stl(f) if f.suffix.lower() in (".step", ".stp") else f for f in files if f.suffix.lower() in MODELS]
     for f in models:
         said = fix_units(f)
         if said:
@@ -983,17 +1052,53 @@ def on_arrival(app, files: list[Path]) -> None:
     plate.arrived(app, models)  # never sliced on arrival: they wait until you say what to do
 
 
+_viewer: dict = {}  # the 3D slice window: its process and its throwaway profile
+
+
 def show_3d(app=None) -> bool:
-    """The newest slice in 3D, in the browser on this laptop (the phone app's viewer page, with the token)."""
+    """The newest slice in 3D, in its own small browser window on this laptop (the phone app's viewer page, with the
+    token). Its own process and profile, so Batsy can close it (and wipe its cache) when the print starts."""
+    import shutil as _sh
+
     from batsy import phone
 
     port = (getattr(app, "cfg", None) and app.cfg.get("phone.port")) or 8765
     url = f"http://127.0.0.1:{port}/app/slice.html#t={phone.token()}"
+    close_3d()  # one at a time: a new slice replaces the old window
+    browser = next((b for b in ("brave-browser", "brave", "chromium-browser", "chromium", "google-chrome")
+                    if _sh.which(b)), None)
     try:
-        subprocess.Popen(["xdg-open", url], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+        if browser:
+            profile = DATA_DIR / "viewer3d-profile"
+            _viewer["proc"] = subprocess.Popen([browser, f"--app={url}", f"--user-data-dir={profile}", "--no-first-run",
+                                                "--no-default-browser-check", "--window-size=1100,760"],
+                                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+            _viewer["profile"] = profile
+        else:
+            subprocess.Popen(["xdg-open", url], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
         return True
     except OSError:
         return False
+
+
+def close_3d() -> None:
+    """Close the 3D slice window and clear its cache (the print has started: it's done its job)."""
+    import os
+    import shutil as _sh
+    import signal
+
+    p = _viewer.pop("proc", None)
+    if p is not None and p.poll() is None:
+        try:
+            os.killpg(p.pid, signal.SIGTERM)
+            p.wait(timeout=5)
+        except Exception:
+            try:
+                os.killpg(p.pid, signal.SIGKILL)
+            except Exception:
+                pass
+    profile = _viewer.pop("profile", None) or (DATA_DIR / "viewer3d-profile")
+    _sh.rmtree(profile, ignore_errors=True)
 
 
 SHOW = re.compile(r"^(?:please )?(?:show|open|let me see)(?: me)? (?:the |my )?(?:slic(?:ing|e)|slice preview|preview|"

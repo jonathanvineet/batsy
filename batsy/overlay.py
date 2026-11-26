@@ -311,10 +311,24 @@ class Overlay:
     def image(self, path: str, caption: str = "") -> None:
         self.has_media = True
         self.send("image", path=str(path), caption=caption)
+        self._close_later()
 
     def card(self, title: str, text: str) -> None:
         self.has_media = True
         self.send("card", title=title, text=text)
+        self._close_later()
+
+    def _close_later(self) -> None:
+        """A picture or card shown outside a conversation (the slice position options, a report card): nothing else
+        would close it, so it lingers its usual time and folds away. (In a conversation, the turn's own "done" does.)"""
+        import threading
+
+        if getattr(self, "_closer", None):
+            self._closer.cancel()
+        self._closer = threading.Timer(3.0, lambda: None if getattr(self, "live", {}).get("state") in ("listen", "think",
+                                                                                                    "speak") else self.done())
+        self._closer.daemon = True
+        self._closer.start()
 
     def done(self) -> None:
         key = "overlay.linger_media_seconds" if self.has_media else "overlay.linger_seconds"

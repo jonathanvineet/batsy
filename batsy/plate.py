@@ -29,10 +29,7 @@ def arrived(app, models: list[Path]) -> None:
     """New models: kept waiting for you (never sliced on their own)."""
     WAITING.update(models=list(models), t=time.time())
     _save()
-    names = " and ".join(m.stem.replace("_", " ") for m in models)
-    app.announce(f"{names[:1].upper() + names[1:]} {'is a 3D model' if len(models) == 1 else 'are 3D models'}. "
-                 f"I'll wait: say slice {'it' if len(models) == 1 else 'them'} when you want, and I'll ask how "
-                 f"{'it' if len(models) == 1 else 'each one'} should sit on the bed.")
+    # (the inbox already says "You sent camera stand": this just puts it on the slice card, quietly)
 
 
 def _save() -> None:
@@ -189,12 +186,11 @@ def _ask_current(app) -> str:
     except Exception as e:
         log.warning("no options picture: %s", e)
     best = next(k for k, o in enumerate(opts) if o.get("best"))
-    words = "; ".join(f"{k + 1}, {o['label']}" for k, o in enumerate(opts))
     name = model.stem.replace("_", " ")
     if hasattr(app, "phone_event"):  # the phone goes to its slice card, where the options are buttons
         app.phone_event(f"How should the {name} sit before slicing? Tap one on the slice card.")
-    lead = f"For the {name}: " if len(ASK["queue"]) > 1 else f"How should {name} sit? "
-    return f"{lead}{words}. I'd go with {best + 1}. Which one?"
+    lead = f"The {name}: " if len(ASK["queue"]) > 1 else f"How should {name} sit? "
+    return f"{lead}I'd go with {best + 1}, {_short(opts[best]).split(' · ')[0].lower()}. Pick one on the screen."
 
 
 def answer(app, n: str) -> str | None:
@@ -203,6 +199,8 @@ def answer(app, n: str) -> str | None:
         return None
     if re.match(r"(?:stop|cancel|never ?mind|forget it|don'?t slice)\b", n):
         ASK.clear()
+        if getattr(app, "overlay", None) is not None and app.overlay.enabled:
+            app.overlay.hide()  # the options picture goes too
         return "Okay, I won't slice it."
     opts = ASK["opts"]
     m = re.search(r"\b(" + "|".join(PICKS) + r")\b", n)
@@ -226,7 +224,7 @@ def answer(app, n: str) -> str | None:
     ASK["chosen"].append(_apply(ASK["queue"][ASK["i"]], ASK["mesh"], opts[k]))
     ASK["i"] += 1
     if ASK["i"] < len(ASK["queue"]):
-        return f"Okay, {k + 1}. " + _ask_current(app)
+        return _ask_current(app)
     chosen, go = ASK["chosen"], ASK["go"]
     ASK.clear()
     app.overlay.hide() if getattr(app, "overlay", None) is not None and app.overlay.enabled else None

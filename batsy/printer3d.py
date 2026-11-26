@@ -331,6 +331,12 @@ class Printer:
             vault_capture.print_started(job, str(gcode), dict(self.state.get("info") or {}), started)
         except Exception:
             log.exception("brain: print note")
+        try:  # the 3D slice window has done its job: closed, its cache cleared
+            from batsy import slicer
+
+            slicer.close_3d()
+        except Exception:
+            log.exception("closing the 3D view")
         port = find_port() or "/dev/ttyUSB0"
         self.hand_over = True  # the poll loop lets go of the port
         with self.lock:

@@ -19,7 +19,7 @@ kbd { font: 10px var(--mono); color: var(--dim); border: 1px solid var(--line2);
 /* --- rail ------------------------------------------------------------------------------------------------- */
 .rail { background: var(--rail); border-right: 1px solid var(--line); padding: 20px 14px; display: flex; flex-direction: column; gap: 6px; }
 .logo { display: flex; align-items: center; gap: 10px; color: var(--text); text-decoration: none; margin: 0 6px 18px; }
-.logo svg { width: 36px; fill: var(--signal); }
+.logo svg { width: 40px; color: var(--signal); fill: var(--signal); }
 .logo span { font: 700 22px/1 var(--display); letter-spacing: .32em; }
 .who { margin: 0 6px 14px; padding-bottom: 14px; border-bottom: 1px solid var(--line); }
 .k { display: block; font: 10px var(--mono); letter-spacing: .12em; text-transform: uppercase; color: var(--dim); margin-bottom: 3px; }

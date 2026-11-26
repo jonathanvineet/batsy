@@ -44,8 +44,14 @@ class Cockpit:
     def send(self, cmd: str, **kw) -> None:
         with self.lock:
             if self.proc is None or self.proc.poll() is not None:
+                import os
+
+                env = dict(os.environ)
+                plat = self.app.cfg.get("overlay").get("qt_platform") if hasattr(self.app, "cfg") else ""
+                if plat:  # the same as the overlay (XWayland): otherwise it opened underneath it
+                    env["QT_QPA_PLATFORM"] = plat
                 self.proc = subprocess.Popen([sys.executable, "-m", "batsy.cockpit_window"], stdin=subprocess.PIPE,
-                                             stdout=subprocess.DEVNULL, text=True)
+                                             stdout=subprocess.DEVNULL, text=True, env=env)
             try:
                 self.proc.stdin.write(json.dumps({"cmd": cmd, **kw}) + "\n")
                 self.proc.stdin.flush()
@@ -55,6 +61,10 @@ class Cockpit:
     def open(self) -> None:
         if self.visible or not self._allowed():
             return
+        try:  # you've stepped away: whatever the overlay was showing makes way for the cockpit
+            self.app.overlay.hide()
+        except Exception:
+            pass
         self.send("data", **payload(self.app))  # the picture first, then the window: no blank frame
         live = dict(getattr(self.app.overlay, "live", {}) or {})
         self.send("state", state=live.get("state", "idle"), you=live.get("you", ""), said=live.get("said", ""))

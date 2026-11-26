@@ -728,11 +728,17 @@ class Batsy:
         self.phone_event(text)
         self.brain.note_announcement(text)
         self.speaker.say(text)
-        try:
-            subprocess.Popen(["notify-send", "-a", "Batsy", "Batsy", text],
-                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        except FileNotFoundError:
-            pass
+        # A desktop banner only while you're at the laptop: GNOME keeps banners up until you come back, so while you
+        # were away (or the cockpit was up) they piled up at the top. Transient: they don't collect in the list either.
+        from batsy import idle
+
+        away = (idle.idle_ms() or 0) > 60_000 or getattr(getattr(self, "cockpit", None), "visible", False)
+        if not away:
+            try:
+                subprocess.Popen(["notify-send", "-a", "Batsy", "--hint=int:transient:1", "-t", "6000", "Batsy", text],
+                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            except FileNotFoundError:
+                pass
         if not self.voice:
             print(f"\n[Batsy] {text}")
 
