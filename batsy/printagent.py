@@ -89,7 +89,14 @@ def ask(request: str, context: str = "", on_text=None, cfg=None, timeout: int = 
     """Claude, with the print tool, on this request (and the conversation so far)."""
     from batsy import claude_code
 
-    info = _info(None)
+    from batsy import slicer
+    from batsy.learning import norm
+
+    model = slicer.resolve_model(slicer.canonical(norm(request))[0])  # "the flute Karan sent": that file, by name
+    info = _info(str(model) if model else None)
+    if model:  # (without this it took "the last model": the camera stand, when he'd asked for Karan's flute)
+        context = (f"THE MODEL HE MEANS: {model.name} ({model}). Slice THIS file, not the last one or another "
+                   f"recent model.\n") + context
     return claude_code.run(BRIEF.format(request=request, info=json.dumps(info)[:6000], context=context),
                            "print: " + request[:40], cwd=Path.home() / "Batsy", timeout=timeout, on_text=on_text,
                            cfg=cfg, args=["--allowedTools", "Read,Bash(batsy print:*)", "--add-dir",

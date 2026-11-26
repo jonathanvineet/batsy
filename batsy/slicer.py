@@ -741,7 +741,7 @@ def handle(app, n: str, model_override: Path | None = None, keep_last: bool = Fa
         return None
     if n.startswith("make") and not re.match(r"(?:please )?make (?:it|this|that|the (?:model|print|part|last one))\b", n):
         return None  # "make my discovery playlist", "make a note": not a print tweak (those are "make it …")
-    named = _named_model(n) or _sent_by(n)  # "the iphone stand", or "what Karan sent" / "Karan's file"
+    named = resolve_model(n)  # "the iphone stand", "what Karan sent", "the flute Karan sent"
     # "slice it ...", "print this", "make it stronger", or just "slice": the last model. Anything else names a model.
     generic = re.fullmatch(r"(?:please )?(?:re ?slice|slice|print|make)(?: (?:it|this|that|the model|the last one|"
                            r"the last model|again)\b.*)?", n)
@@ -844,6 +844,46 @@ def handle(app, n: str, model_override: Path | None = None, keep_last: bool = Fa
 SENDERS = {"karan": "Karan", "current": "Karan", "karen": "Karan", "kiran": "Karan", "caran": "Karan", "corrin": "Karan",
            "rehaan": "Rehaan", "rehan": "Rehaan", "rayan": "Rehaan", "rihan": "Rehaan", "reyhan": "Rehaan",
            "jonathan": "Jonathan", "i": "Jonathan", "me": "Jonathan", "my": "Jonathan"}
+
+
+def _words(name: str) -> set[str]:
+    """'SingleFlute_F_Sharp_MAJOR' -> {'single', 'flute', 'sharp', 'major'}: CamelCase and _ split, short bits dropped."""
+    name = re.sub(r"([a-z])([A-Z])", r"\1 \2", Path(name).stem)
+    return {w for w in re.split(r"[^a-zA-Z0-9]+", name.lower()) if len(w) >= 3}
+
+
+def resolve_model(n: str) -> Path | None:
+    """The model you mean: its name ('the flute' finds SingleFlute_F_Sharp_MAJOR), who sent it ('what Karan sent',
+    heard as 'current sent'), or both ('the flute Karan sent'). None when nothing fits (then: the last one)."""
+    from batsy import received
+
+    who = None
+    m = re.search(r"\b(?:that|which|what|the one|whatever) (?P<who>[a-z]+) (?:just )?(?:has )?(?:sent|send|scent|gave|shared)\b|"
+                  r"\b(?P<who2>[a-z]+)'?s (?:file|model|stl|part|print|thing)\b|\bfrom (?P<who3>[a-z]+)\b", n)
+    if m:
+        who = SENDERS.get(m.group("who") or m.group("who2") or m.group("who3") or "")
+    said = {w for w in re.findall(r"[a-z0-9]{4,}", n)} - {"slice", "print", "that", "with", "what", "want", "sent", "scent",
+                                                          "highest", "quality", "layer", "height", "this", "model", "file",
+                                                          "just", "please", "make", "them", "both", "again", "current",
+                                                          "karan", "rehaan", "jonathan", "fast", "fine", "nicee", "good"}
+    best, score = None, 0
+    for r in received.all_rows(limit=300):  # newest first
+        p = Path(r["path"])
+        if p.suffix.lower() not in MODELS or not p.exists():
+            continue
+        if who and p.parent.name != who:
+            continue
+        flat = re.sub(r"[^a-z0-9]", "", Path(r["name"]).stem.lower())  # "iphonestand", "singleflutefsharpmajor"
+        hits = sum(1 for w in said if w in flat) + 0.5 * len(said & _words(r["name"]))
+        if hits > score:
+            best, score = p, hits
+        elif who and best is None:
+            best = p  # theirs, newest, if no word picks one out
+    if best is None:
+        best = _named_model(n)
+    if best is not None and best.suffix.lower() in (".step", ".stp"):
+        best = step_to_stl(best)
+    return best
 
 
 def _sent_by(n: str) -> Path | None:

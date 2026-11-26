@@ -312,6 +312,19 @@ dialog .ghost { background: var(--w2); } dialog .danger { background: var(--bad)
 .g-yes.danger { background: rgba(255, 92, 77, .92); color: #fff; }
 
 /* --- the newest slice ------------------------------------------------------------------------------------- */
+/* recently sliced: a row each, picture, name, time and grams; tap = make it the current slice */
+.rs-w h3 { margin-bottom: 8px; }
+.rs-list { list-style: none; display: flex; flex-direction: column; gap: 6px; overflow-y: auto; max-height: 100%; }
+.rs-list li { display: grid; grid-template-columns: 52px 1fr auto; gap: 10px; align-items: center; padding: 6px;
+  border-radius: 12px; background: var(--w2); cursor: pointer; }
+.rs-list li:active { transform: scale(.98); }
+.rs-list li.now { outline: 2px solid var(--signal); }
+.rs-list img { width: 52px; height: 52px; border-radius: 8px; object-fit: cover; background: #0b0d12; }
+.rs-list b { display: block; font: 700 16px/1.15 var(--display); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.rs-list small { color: var(--muted); font-size: 12.5px; }
+.rs-list .who { font-size: 11px; color: var(--muted); text-align: right; }
+.rs-list .empty { background: none; cursor: default; color: var(--muted); }
+body.dash .rs-w { height: auto; min-height: 140px; }
 .sw { display: grid; grid-template-columns: 55% 1fr; gap: clamp(10px, 3vmin, 18px); position: relative; }
 /* models waiting to be sliced, and "how should it sit?": over the card, tap an option */
 .sw-plate { position: absolute; inset: 0; z-index: 2; border-radius: inherit; background: var(--card, #111318);
@@ -352,6 +365,8 @@ dialog .ghost { background: var(--w2); } dialog .danger { background: var(--bad)
   -webkit-box-orient: vertical; overflow: hidden; }
 .sw-info small { font-size: clamp(12px, 3.6vmin, 16px); }
 .sw-btns { margin-top: auto; display: flex; flex-direction: column; gap: 8px; }
+/* short card (landscape StandBy): the three buttons side by side so Print never falls off the bottom */
+@media (max-height: 520px) { .sw-btns { flex-direction: row; flex-wrap: wrap; } .sw-btns button { flex: 1 1 30%; min-width: 0; } }
 .sw-btns button { height: clamp(36px, 10vmin, 46px); border-radius: 999px; background: var(--w2); color: var(--text);
   font: 700 clamp(14px, 4vmin, 17px)/1 var(--display); letter-spacing: .05em; }
 .sw-btns #sw-print { background: var(--signal); color: var(--ink); }
@@ -389,7 +404,8 @@ body.dash h1.dash-title { display: flex; }
 .dash-title svg { width: 34px; height: 34px; color: var(--signal); }
 /* order: printer, slice, home, files, computers, music, claude, batsy */
 body.dash #pw { order: 1; min-height: 330px; }
-body.dash #sw { order: 2; height: 230px; }
+body.dash #sw { order: 2; height: auto; min-height: 230px; }  /* grows to fit 3D view, Position and Print */
+body.dash #sw .sw-img { max-height: 260px; }
 body.dash .home-w { order: 3; height: 230px; }
 body.dash .files-w { order: 4; }
 body.dash #machines-w { order: 5; }

@@ -610,9 +610,13 @@ addEventListener('pageshow', () => { if (mic.stream && !micLive()) micRelease();
 // --- the floating mic's place: dragged anywhere, snapped to the nearest side, remembered (like AssistiveTouch) ----
 const FAB = () => $('#fab-mic');
 function placeFab(x, y) {
-  const b = FAB(), w = b.offsetWidth, h = b.offsetHeight;
-  b.style.left = Math.max(6, Math.min(innerWidth - w - 6, x)) + 'px';
-  b.style.top = Math.max(6, Math.min(innerHeight - h - 6, y)) + 'px';
+  const b = FAB(), w = b.offsetWidth || 72, h = b.offsetHeight || 72;
+  const H = (window.visualViewport && visualViewport.height) || innerHeight, W = innerWidth;
+  if (H < 240 || W < 200) { setTimeout(applyFab, 300); return; }  // the app is still opening (iOS reports a tiny screen):
+  //                                                                 placing it now put it under the status bar
+  const TOP = 56, BOTTOM = 34;  // clear of the status bar / notch and the home bar
+  b.style.left = Math.max(6, Math.min(W - w - 6, x)) + 'px';
+  b.style.top = Math.max(TOP, Math.min(H - h - BOTTOM, y)) + 'px';
   b.style.right = b.style.bottom = 'auto';
 }
 function snapFab() {
@@ -644,6 +648,9 @@ function avoidButtons() {
   placeFab(other, innerHeight - r.height - 18);
 }
 addEventListener('resize', () => requestAnimationFrame(applyFab));
+addEventListener('orientationchange', () => setTimeout(applyFab, 350));
+addEventListener('pageshow', () => setTimeout(applyFab, 300));  // back to the app: put it where it belongs
+addEventListener('load', () => setTimeout(applyFab, 500));
 $('#views')?.addEventListener('scroll', () => { clearTimeout(avoidButtons.t); avoidButtons.t = setTimeout(avoidButtons, 250); }, {passive: true});
 let fabRest = null;
 function restFab() {  // after a few quiet seconds it fades back a little, out of the way
@@ -1021,6 +1028,35 @@ async function loadSlice() {
     } catch { /* keep the old one */ }
   }
 }
+// --- recently sliced: tap one and it's the current slice, on the Sliced card with its Print button -----------------
+let rsSeen = '';
+async function loadRecent() {
+  let d;
+  try { d = await api('/api/slices'); } catch { return; }
+  const list = d.slices || [], key = list.map(x => x.key + x.t).join('|');
+  if (key === rsSeen) return;
+  rsSeen = key;
+  const tok = store.get('token', '');
+  $('#rs-list').innerHTML = list.length ? list.slice(0, 6).map((x, i) => `<li data-key="${esc(x.key)}" class="${i === 0 ? 'now' : ''}">
+    <img alt="" data-key="${esc(x.key)}"><div><b>${esc(x.name)}</b><small>${esc([x.time, x.grams ? Math.round(x.grams) + '\u00a0g' : '',
+    x.preset].filter(Boolean).join(' · '))}</small></div><span class="who">${x.who && x.who !== 'Jonathan' ? esc(x.who) : ago(x.t)}</span></li>`).join('')
+    : '<li class="empty">Nothing sliced yet</li>';
+  for (const img of $('#rs-list').querySelectorAll('img')) {
+    fetch('/api/slices/preview?key=' + encodeURIComponent(img.dataset.key), {headers: {Authorization: 'Bearer ' + tok}})
+      .then(r => r.ok ? r.blob() : null).then(b => { if (b) img.src = URL.createObjectURL(b); }).catch(() => {});
+  }
+}
+$('#rs-list').addEventListener('click', async e => {
+  const li = e.target.closest('li[data-key]');
+  if (!li) return;
+  li.style.opacity = .5;
+  try { await api('/api/slices/select', {key: li.dataset.key}); } catch (err) { toast(err.message); }
+  sliceT = 0;  // fetch the picture again: it's a different slice now
+  await loadSlice().catch(() => {});
+  rsSeen = ''; loadRecent();
+  goToWidget($('#sw'));  // to the Sliced card, where Print is
+});
+
 // --- models waiting to slice: choose how each sits, right on the slice card -----------------------------------------
 let plateV = -1, plateTimer = null;
 async function loadPlate() {
@@ -1382,7 +1418,7 @@ async function keepFile(key, blob) {
 
 // --- iPhone dashboard: long-press a widget to move, hide and add widgets (saved on this phone) -------------------
 const WIDGETS = [  // key, element, name; this order is the default
-  ['printer', '#pw', '3D printer'], ['shop', '#shop-w', 'Company'], ['slice', '#sw', 'Sliced'], ['home', '.home-w', 'Home'], ['brain', '#brain-w', 'Brain'],
+  ['printer', '#pw', '3D printer'], ['shop', '#shop-w', 'Company'], ['recent', '#rs-w', 'Recently sliced'], ['slice', '#sw', 'Sliced'], ['home', '.home-w', 'Home'], ['brain', '#brain-w', 'Brain'],
   ['drive', '#cloud-w', 'Batman drive'], ['files', '.files-w', 'Received files'], ['computers', '#machines-w', 'Laptop, PC & HP'],
   ['music', '#mw', 'Music'], ['claude', '.claude-w', 'Claude usage'], ['batsy', '#batsy-w', 'Batsy']];
 const wEl = k => $(WIDGETS.find(w => w[0] === k)[1]);
@@ -1666,8 +1702,8 @@ async function refresh() {
     if (String(e.message).startsWith('Not paired')) toast(e.message);
   } finally { busy = false; }
 }
-refresh(); loadLight(); loadFiles(); loadSlice(); loadPlate(); loadCloudWidget(); loadBrain();
+refresh(); loadLight(); loadFiles(); loadSlice(); loadPlate(); loadRecent(); loadCloudWidget(); loadBrain();
 setInterval(() => { if (!document.hidden) { loadCloudWidget(); loadBrain(); } }, 60000);
 setInterval(refresh, 3000);
-setInterval(() => { if (!document.hidden) { loadLight(); loadFiles(); loadSlice(); loadPlate(); } }, 20000);
+setInterval(() => { if (!document.hidden) { loadLight(); loadFiles(); loadSlice(); loadPlate(); loadRecent(); } }, 20000);
 document.addEventListener('visibilitychange', () => { if (!document.hidden) { refresh(); loadLight(); loadFiles(); loadSlice(); loadPlate(); loadCloudWidget(); loadBrain(); } });

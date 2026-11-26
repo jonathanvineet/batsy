@@ -33,6 +33,7 @@ import socket
 import subprocess
 import threading
 import time
+import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -771,6 +772,50 @@ class Hub:
         return {"title": title or gcode.stem, "t": int(paths.stat().st_mtime), "gcode": str(gcode), "paths": str(paths),
                 "preview": str(gcode.with_suffix(".png")), **est}
 
+    def _slice_files(self) -> list[Path]:
+        from batsy import calib
+
+        return sorted([*Path(self.cfg.get("files.inbox")).expanduser().glob("**/sliced/*.paths.json"),
+                       *(calib.OUT / "sliced").glob("*.paths.json")], key=lambda p: -p.stat().st_mtime)
+
+    def slices(self, n: int = 8) -> list[dict]:
+        """The recently sliced, newest first: the "Recently sliced" card."""
+        from batsy import slicer
+
+        out = []
+        for i, paths in enumerate(self._slice_files()[:n]):
+            gcode = paths.with_name(paths.name.removesuffix(".paths.json") + ".gcode")
+            if not gcode.exists():
+                continue
+            est = slicer._estimates(gcode)
+            name, _, preset = gcode.stem.rpartition(" - ")
+            out.append({"id": i, "key": paths.name, "name": (name or gcode.stem).removesuffix(" turned").replace("_", " "),
+                        "preset": preset, "t": int(paths.stat().st_mtime), "time": est.get("time"),
+                        "grams": est.get("grams"), "who": paths.parent.parent.name})
+        return out
+
+    def slice_select(self, key: str) -> dict:
+        """Make that slice the current one: the Sliced card shows it, its Print button and "print it" print it."""
+        import os
+
+        paths = next((p for p in self._slice_files() if p.name == key), None)
+        if not paths:
+            return {"ok": False, "say": "I can't find that slice any more."}
+        gcode = paths.with_name(paths.name.removesuffix(".paths.json") + ".gcode")
+        now = time.time()
+        for f in (gcode, gcode.with_suffix(".png"), paths):  # the newest again: that's what the Sliced card shows
+            if f.exists():
+                os.utime(f, (now, now))
+        last = self.last_slice() or {}
+        model = next((m for m in paths.parent.parent.glob("*") if m.suffix.lower() in (".stl", ".3mf", ".obj")
+                      and gcode.stem.startswith(m.stem)), gcode)
+        self.app.slice_last = {"model": str(model), "process": gcode.stem.rpartition(" - ")[2], "overrides": {},
+                               "result": {"gcode": str(gcode), "time": last.get("time"), "grams": last.get("grams"),
+                                          "preview": str(gcode.with_suffix(".png")), "paths": str(paths),
+                                          "name": last.get("title"), "process": gcode.stem.rpartition(" - ")[2]},
+                               "t": now}
+        return {"ok": True, "say": ""}
+
     def home_action(self, action: str) -> dict:
         from batsy import home
 
@@ -1092,6 +1137,14 @@ def _handler(hub: Hub):
                     f = DATA_DIR / f"plate_option_{max(0, min(k, 5))}.png"
                     return self._send(200, body=f.read_bytes(), ctype="image/png") if f.exists() else self._send(404, {})
                 return self._send(200, plate.state())
+            if self.path.startswith("/api/slices"):  # the "Recently sliced" card
+                if self.path.startswith("/api/slices/preview"):
+                    key = urllib.parse.unquote(self.path.split("key=", 1)[-1].split("&")[0]) if "key=" in self.path else ""
+                    paths = next((p for p in hub._slice_files() if p.name == key), None)
+                    png = paths.with_name(paths.name.removesuffix(".paths.json") + ".png") if paths else None
+                    return self._send(200, body=png.read_bytes(), ctype="image/png") if png and png.exists() \
+                        else self._send(404, {})
+                return self._send(200, {"slices": hub.slices()})
             if self.path.startswith("/api/slice"):
                 last = hub.last_slice()
                 if self.path.startswith("/api/slice/paths"):
@@ -1143,6 +1196,8 @@ def _handler(hub: Hub):
                 return self._send(200, {"token": token(), "remote": hub.remote_url()})
             if not self._authed():
                 return
+            if self.path.startswith("/api/slices/select"):  # tapped a recent slice: it becomes the current one
+                return self._send(200, hub.slice_select(str(self._body().get("key", ""))))
             if self.path.startswith("/api/plate"):  # tapped on the slice card: start choosing, or pick an option
                 from batsy import plate, slicer
 
