@@ -124,3 +124,23 @@ body.on #cockpit { opacity: 1; transform: none; }
 .hint { grid-area: hint; text-align: center; font: 600 11px var(--display); letter-spacing: .22em; text-transform: uppercase;
   color: var(--dim); }
 #w-music .sub { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* --- the company panel (cockpit.js drawShop) --- */
+#shop .sh-sum { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; margin-bottom: 8px; }
+#shop .sh-sum span { font-size: 11px; color: var(--muted); display: flex; flex-direction: column; }
+#shop .sh-sum b { font: 700 20px/1 var(--display); color: var(--text); }
+#shop .sh-sum .hot b { color: var(--signal); }
+#shop .sh-now b { display: block; font: 600 15px/1.2 var(--display); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--signal); }
+#shop .sh-now small { color: var(--muted); font-size: 12px; }
+#shop .sh-now .bar { margin: 6px 0 4px; height: 5px; }
+#shop ol { list-style: none; margin: 4px 0 0; padding: 0; }
+#shop li { display: flex; justify-content: space-between; gap: 8px; font-size: 13px; padding: 4px 0; border-top: 1px solid var(--line); }
+#shop li span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#shop li em { font-style: normal; color: var(--muted); }
+#shop li small { color: var(--muted); white-space: nowrap; }
+#shop li small.ready { color: var(--good, #4fd18b); }
+#shop li small.failed { color: var(--bad, #ff5c4d); }
+#shop li.empty { color: var(--dim); border: 0; }
+#shop .sh-money { margin-top: 6px; font-size: 12px; color: var(--muted); }
+#shop .sh-money .bad { color: var(--bad, #ff5c4d); }
+#shop[hidden] { display: none; }

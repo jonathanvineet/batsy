@@ -90,6 +90,7 @@ function renderWidgets(d) {
     } else html = `<div class="line">Idle</div><div class="sub">Nozzle ${Math.round(p.hotend || 0)}° · bed ${Math.round(p.bed || 0)}°</div>`;
   }
   $('#w-printer .body').innerHTML = html;
+  drawShop(d.shop);
   // music
   const m = d.music;
   $('#w-music .body').innerHTML = m && m.title ? `${m.art ? `<img src="${esc(m.art)}" alt="">` : ''}<div class="t">
@@ -187,3 +188,20 @@ const handlers = {
   done() { setState('idle'); $('#status').textContent = ''; },
 };
 window.batsy = {cmd(m) { try { (handlers[m.cmd] || (() => {}))(m); } catch (e) { console.error('cockpit ' + m.cmd + ': ' + e); } }};
+
+// --- the company (batsy/shop/): what's printing, next up, the month ------------------------------------------------
+function drawShop(s) {
+  $('#shop').hidden = !s;
+  if (!s) return;
+  const inr = n => '₹' + Math.round(n || 0).toLocaleString('en-IN');
+  const h = x => x < 1 ? `${Math.round(x * 60)}m` : `${Math.floor(x)}h ${String(Math.round(x % 1 * 60)).padStart(2, '0')}m`;
+  const c = s.counts || {}, m = s.month || {};
+  $('#shop .body').innerHTML = `<div class="sh-sum"><span><b>${c.quote || 0}</b>quotes</span><span><b>${(c.confirmed || 0) + (c.printing || 0)}</b>in work</span>
+      <span class="${c.ready ? 'hot' : ''}"><b>${c.ready || 0}</b>to deliver</span><span><b>${h(s.queue_hours || 0)}</b>queued</span></div>
+    ${s.printing ? `<div class="sh-now"><b>${esc(s.printing.part)}</b><small>${esc(s.printing.code)}${s.printing.customer ? ' · ' + esc(s.printing.customer) : ''}
+      · ${Math.round(s.printing.progress || 0)}%</small><div class="bar"><i style="width:${s.printing.progress || 0}%"></i></div></div>` : ''}
+    <ol>${(s.next || []).map(j => `<li><span>${esc(j.part)} <em>×${j.left}</em></span><small class="${j.status}">${j.status === 'failed' ? 'reprint' : j.status} · ${h(j.hours)}${j.due ? ' · due ' + esc(j.due) : ''}</small></li>`).join('')
+      || '<li class="empty">Nothing queued</li>'}</ol>
+    <div class="sh-money">30 days: <b>${inr(m.revenue)}</b> in · <b class="${(m.profit || 0) < 0 ? 'bad' : ''}">${inr(m.profit)}</b> profit${m.failure_loss ? ` · <b class="bad">${inr(m.failure_loss)}</b> lost (${m.failed_runs}/${m.runs})` : ''}${m.owed ? ` · ${inr(m.owed)} owed` : ''}</div>`;
+}
+

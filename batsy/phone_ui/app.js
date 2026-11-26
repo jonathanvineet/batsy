@@ -1382,7 +1382,7 @@ async function keepFile(key, blob) {
 
 // --- iPhone dashboard: long-press a widget to move, hide and add widgets (saved on this phone) -------------------
 const WIDGETS = [  // key, element, name; this order is the default
-  ['printer', '#pw', '3D printer'], ['slice', '#sw', 'Sliced'], ['home', '.home-w', 'Home'], ['brain', '#brain-w', 'Brain'],
+  ['printer', '#pw', '3D printer'], ['shop', '#shop-w', 'Company'], ['slice', '#sw', 'Sliced'], ['home', '.home-w', 'Home'], ['brain', '#brain-w', 'Brain'],
   ['drive', '#cloud-w', 'Batman drive'], ['files', '.files-w', 'Received files'], ['computers', '#machines-w', 'Laptop, PC & HP'],
   ['music', '#mw', 'Music'], ['claude', '.claude-w', 'Claude usage'], ['batsy', '#batsy-w', 'Batsy']];
 const wEl = k => $(WIDGETS.find(w => w[0] === k)[1]);

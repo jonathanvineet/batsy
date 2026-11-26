@@ -6,6 +6,7 @@
 <meta name="theme-color" content="#000000">
 <title>Batsy</title>
 <link rel="stylesheet" href="/app/app.css">
+<link rel="stylesheet" href="/app/shop.css">
 <!-- installable on iPhone (Share > Add to Home Screen) and Android: full screen, own icon -->
 <link rel="manifest" href="/app/manifest.webmanifest">
 <link rel="apple-touch-icon" href="/app/icons/apple-touch-icon.png">
@@ -83,6 +84,15 @@
         <div class="pw-meta" id="pw-info"></div>
         <div class="pw-temps">Nozzle <b id="pw-noz">–</b> · Bed <b id="pw-bed">–</b></div>
         <div class="pw-btns" id="pw-btns"></div>
+      </article>
+      <!-- the company (batsy/shop/, shop.js): printing now, next up, today's money; tap Queue for all of it -->
+      <article class="w shop-w" id="shop-w">
+        <div class="cw-head"><h3>Company</h3></div>
+        <div class="sh-chips"></div>
+        <p class="sh-today">…</p>
+        <div class="sh-now"></div>
+        <ul class="sh-next"></ul>
+        <div class="sh-btns"></div>
       </article>
       <!-- the newest slice: its picture, time and filament; 3D opens the toolpaths to turn around -->
       <article class="w sw" id="sw">
@@ -167,6 +177,7 @@
 </div></div>
 <button id="bell" aria-label="Turn on notifications" hidden><svg class="i" viewBox="0 0 24 24"><path d="M18 8a6 6 0 1 0-12 0c0 7-3 9-3 9h18s-3-2-3-9M13.7 21a2 2 0 0 1-3.4 0"/></svg></button>
 <div id="slice3d" hidden><iframe id="slice3d-frame" title="Slice preview"></iframe></div>
+<div id="shopsheet" hidden><div class="panel" id="shoppanel"></div></div>
 <div id="toast" role="status"></div>
 <dialog id="confirm"><p id="confirm-text"></p><div class="row"><button value="no" class="ghost">Cancel</button><button value="yes" class="danger">Yes</button></div></dialog>
 <div class="editbar" id="editbar" hidden>
@@ -239,5 +250,6 @@
   </div>
 </div>
 <script src="/app/app.js"></script>
+<script src="/app/shop.js"></script>
 </body>
 </html>

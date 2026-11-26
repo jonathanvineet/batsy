@@ -97,3 +97,23 @@ def today_line() -> str:
     if p["revenue"] or p["failure_loss"]:
         bits.append(f"today ₹{p['revenue']:.0f} in, ₹{p['failure_loss']:.0f} lost")
     return ", ".join(bits)
+
+
+def cockpit() -> dict:
+    """The cockpit's company panel: small, read-only."""
+    from batsy.shop import jobs
+
+    q = jobs.queue_list()
+    counts = {r["status"]: r["n"] for r in db.q("SELECT status, COUNT(*) AS n FROM orders GROUP BY status")}
+    p = pnl(30)
+    run = db.one("SELECT r.*, o.code FROM runs r LEFT JOIN orders o ON o.id = r.order_id "
+                 "WHERE r.outcome = 'printing' ORDER BY r.id DESC LIMIT 1")
+    printing = next((j for j in q if j["status"] == "printing"), None)
+    return {"today": today_line(), "counts": counts,
+            "printing": printing and {"part": printing["part"], "code": printing["order_code"],
+                                      "customer": printing["customer"], "progress": (run or {}).get("progress")},
+            "next": [{"part": j["part"], "code": j["order_code"], "customer": j["customer"], "status": j["status"],
+                      "left": j["copies"] - j["done_copies"], "hours": j["left_hours"], "due": j.get("due")}
+                     for j in q if j["status"] != "printing"][:4],
+            "queue_hours": round(sum(j["left_hours"] for j in q), 1),
+            "month": {k: p[k] for k in ("revenue", "profit", "failure_loss", "failed_runs", "runs", "owed")}}

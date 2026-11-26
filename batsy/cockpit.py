@@ -209,6 +209,12 @@ def payload(app) -> dict:
                                    for x in research.all_research()[:4]]}
     except Exception as e:
         log.debug("research: %s", e)
+    try:  # the company (batsy/shop/): the queue, what's printing, the month's money
+        from batsy.shop import reports as shop_reports
+
+        out["shop"] = shop_reports.cockpit()
+    except Exception as e:
+        log.debug("shop: %s", e)
     try:
         from batsy import received
 

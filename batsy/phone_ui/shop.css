@@ -1,0 +1,55 @@
+/* The company widget and its sheet (shop.js). Same look as the other widgets: dark, yellow signal. */
+.shop-w { gap: clamp(8px, 2.4vmin, 12px); }
+.shop-w .sh-today { color: var(--muted); font-size: clamp(12px, 3.2vmin, 14px); line-height: 1.3; }
+.sh-chips { display: flex; gap: 6px; flex-wrap: wrap; }
+.sh-chips span { background: var(--w2); border-radius: 12px; padding: 6px 10px; font-size: 11px; color: var(--muted);
+  display: flex; flex-direction: column; line-height: 1.15; }
+.sh-chips b { font: 700 clamp(16px, 4.6vmin, 22px)/1 var(--display); color: var(--text); }
+.sh-chips .hot b { color: var(--signal); }
+.sh-chips .bad b { color: var(--bad); }
+.sh-run { position: relative; background: var(--w2); border-radius: 14px; padding: 10px 12px 14px; overflow: hidden; }
+.sh-run b { display: block; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sh-run small { color: var(--muted); font-size: 12px; }
+.sh-run i { position: absolute; left: 0; bottom: 0; height: 4px; background: var(--signal); transition: width 1s; }
+.sh-run.idle { padding: 10px 12px; }
+.sh-run.big { padding: 14px 14px 18px; }
+.sh-next { list-style: none; display: flex; flex-direction: column; gap: 8px; min-height: 0; overflow: hidden; }
+.sh-next li { display: grid; grid-template-columns: 1fr auto; column-gap: 8px; align-items: center; }
+.sh-next li b { font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: clamp(13px, 3.8vmin, 16px); }
+.sh-next li small { grid-column: 1; color: var(--muted); font-size: 11px; }
+.sh-next li .st { grid-row: 1 / span 2; grid-column: 2; }
+.sh-next em, .sh-list em { font-style: normal; color: var(--muted); }
+.shop-w .empty, .sh-list .empty { color: var(--dim); font-size: 13px; }
+.st { font-size: 10px; letter-spacing: .06em; text-transform: uppercase; padding: 3px 7px; border-radius: 8px; background: var(--w2); color: var(--muted); }
+.st.ready { color: var(--good); }
+.st.slicing { color: #b9a6ff; }
+.st.failed { color: var(--bad); }
+.st.printing { color: var(--signal); }
+.sh-btns { display: flex; gap: 8px; margin-top: auto; }
+.sh-btns button, .sh-row button, .sh-acts button { flex: 1; height: clamp(34px, 10vmin, 42px); border-radius: 14px; background: var(--w2);
+  color: var(--text); font: 600 14px var(--body); border: 0; }
+.sh-btns .go, .sh-acts .go { background: var(--signal); color: var(--ink); }
+.sh-row { display: flex; gap: 8px; margin-top: 10px; }
+.sh-row .danger { color: var(--bad); }
+
+#shopsheet { position: fixed; inset: 0; background: rgba(0, 0, 0, .7); display: flex; align-items: flex-end; justify-content: center; z-index: 8; }
+#shopsheet[hidden] { display: none; }
+#shoppanel { overflow-y: auto; max-height: 88vh; }
+.sh-head { display: flex; align-items: center; justify-content: space-between; }
+.sh-head h3 { font: 700 22px/1 var(--display); letter-spacing: .1em; text-transform: uppercase; color: var(--signal); }
+.sh-head button { background: none; border: 0; color: var(--muted); font-size: 18px; }
+.sh-sub { color: var(--muted); font-size: 13px; }
+.sh-list { list-style: none; display: flex; flex-direction: column; gap: 8px; }
+.sh-list li { display: flex; gap: 10px; align-items: center; background: var(--w2); border-radius: 14px; padding: 10px 12px; }
+.sh-l { flex: 1; min-width: 0; }
+.sh-l b { display: block; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sh-l small { color: var(--muted); font-size: 12px; line-height: 1.4; }
+.sh-l .warn { color: var(--warn); }
+.sh-acts { display: flex; flex-direction: column; gap: 6px; align-items: stretch; width: 84px; }
+.sh-acts button { height: 32px; flex: none; background: var(--w); }
+.sh-acts .st { text-align: center; }
+#shoppanel h4 { font: 600 13px var(--display); letter-spacing: .12em; text-transform: uppercase; color: var(--muted); margin-top: 6px; }
+.sh-ev { list-style: none; display: flex; flex-direction: column; gap: 6px; font-size: 13px; color: var(--muted); }
+.sh-reasons { display: flex; flex-wrap: wrap; gap: 6px; margin: 10px 0; }
+.sh-reasons button { border: 1px solid rgba(255, 255, 255, .15); background: none; color: var(--muted); border-radius: 12px; padding: 6px 10px; font-size: 12px; }
+.sh-reasons button.on { border-color: var(--signal); color: var(--signal); }
