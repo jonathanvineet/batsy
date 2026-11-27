@@ -62,7 +62,15 @@ class Ears:
         self.stream = None
         self.last_frame = time.monotonic()
         self.next_retry = 0.0
-        self._open()
+        self.retry_delay = 5.0
+        try:
+            self._open()
+        except Exception as e:
+            # Keep the assistant alive if the selected/default input is absent at boot.
+            # The audio loop's watchdog will retry after start().
+            self.stream = None
+            self.next_retry = time.monotonic() + self.retry_delay
+            log.error("microphone unavailable at startup: %s", e)
 
     def _open(self) -> None:
         import sounddevice as sd
@@ -89,13 +97,15 @@ class Ears:
         return q
 
     def start(self) -> None:
-        self.stream.start()
+        if self.stream is not None:
+            self.stream.start()
         self.last_frame = time.monotonic()
 
     def close(self) -> None:
         try:
-            self.stream.stop()
-            self.stream.close()
+            if self.stream is not None:
+                self.stream.stop()
+                self.stream.close()
         except Exception:
             pass
 
@@ -111,17 +121,19 @@ class Ears:
             sd._initialize()
             self._open()
             self.start()
+            self.retry_delay = 5.0
+            self.next_retry = 0.0
             log.info("microphone reopened")
             return True
         except Exception as e:
             log.error("microphone still unavailable: %s", e)
-            self.next_retry = time.monotonic() + 5
+            self.next_retry = time.monotonic() + self.retry_delay
+            self.retry_delay = min(self.retry_delay * 2, 60.0)
             return False
 
     def _watchdog(self) -> None:
         now = time.monotonic()
         if now - self.last_frame > 4 and now >= self.next_retry:
-            self.next_retry = now + 5
             self.reopen()
 
     def drain(self) -> None:

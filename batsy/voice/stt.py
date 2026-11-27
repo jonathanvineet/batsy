@@ -10,6 +10,7 @@ from batsy import lexicon
 from batsy.config import DATA_DIR, MODELS_DIR
 
 log = logging.getLogger("batsy.stt")
+_rapidfuzz_warning_logged = False
 
 PROMPT = ("Batsy, Arduino, Fedora, terminal, sketch, upload, compile, serial monitor, ESP32, Uno, Nano, "
           "Python, GitHub, VS Code, Firefox, CPU, RAM.")
@@ -147,6 +148,12 @@ class Transcriber:
                     text = second
             text = topics.repair(kind, text)
         except Exception as e:
+            global _rapidfuzz_warning_logged
+            if isinstance(e, ModuleNotFoundError) and e.name == "rapidfuzz":
+                if not _rapidfuzz_warning_logged:
+                    log.warning("rapidfuzz is not installed; topic-specific speech correction is disabled")
+                    _rapidfuzz_warning_logged = True
+                return first
             log.warning("topic pass failed: %s", e)
             return first
         if text != first:
