@@ -1,0 +1,18 @@
+:root { --bg: #0b0d12; --panel: #14171f; --line: #262a35; --text: #e9e9ee; --mute: #8a8f9c; --signal: #f5c518; }
+body { margin: 0; width: 300px; padding: 14px; background: var(--bg); color: var(--text); font: 13px/1.4 system-ui, sans-serif; }
+header { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; }
+header img { width: 22px; height: 22px; border-radius: 5px; }
+header b { letter-spacing: .18em; color: var(--signal); }
+#state { margin-left: auto; font-size: 11px; color: var(--mute); }
+#page { color: var(--mute); margin-bottom: 10px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+button, input { font: inherit; border-radius: 8px; border: 1px solid var(--line); }
+button { width: 100%; margin: 0 0 8px; padding: 9px; background: var(--panel); color: var(--text); cursor: pointer; }
+button:hover { border-color: var(--signal); }
+button:disabled { opacity: .5; cursor: wait; }
+input { width: 100%; box-sizing: border-box; padding: 8px; margin-bottom: 8px; background: var(--panel); color: var(--text); }
+#askf { display: flex; gap: 6px; }
+#askf input { margin: 0; }
+#askf button { width: auto; margin: 0; padding: 8px 12px; }
+#out { min-height: 1em; margin: 10px 0; white-space: pre-wrap; }
+.small { display: flex; gap: 6px; align-items: center; font-size: 11px; color: var(--mute); }
+.small input { width: auto; margin: 0; }

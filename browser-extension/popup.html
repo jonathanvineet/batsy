@@ -1,0 +1,20 @@
+<!doctype html>
+<meta charset="utf-8">
+<link rel="stylesheet" href="popup.css">
+<header><img src="icon.png" alt=""><b>BATSY</b><span id="state"></span></header>
+<section id="pair" hidden>
+  <p>Say <i>“Batsy, pair the browser”</i>, then type the code it shows.</p>
+  <input id="code" inputmode="numeric" maxlength="7" placeholder="6-digit code" autofocus>
+  <input id="device" placeholder="This computer's name (Mac, laptop…)">
+  <button id="go">Pair</button>
+</section>
+<section id="main" hidden>
+  <div id="page"></div>
+  <button data-a="track">Keep track of this</button>
+  <button data-a="save">Save to brain</button>
+  <form id="askf"><input id="q" placeholder="Ask Batsy about this page…"><button>Ask</button></form>
+  <p id="out"></p>
+  <label class="small"><input type="checkbox" id="paused"> Pause sharing what I'm on</label>
+</section>
+<script src="common.js"></script>
+<script src="popup.js"></script>

@@ -217,6 +217,12 @@ class Batsy:
         except Exception:
             log.exception("research didn't start")
         try:
+            from batsy import tracker
+
+            tracker.start_watching(self)  # things you said to keep track of: their dates, emails and repo
+        except Exception:
+            log.exception("tracker didn't start")
+        try:
             from batsy import mail
 
             mail.start(self)  # Gmail, read every 10 minutes once connected (read-only): mail.py
@@ -733,7 +739,7 @@ class Batsy:
         from batsy import idle
 
         away = (idle.idle_ms() or 0) > 60_000 or getattr(getattr(self, "cockpit", None), "visible", False)
-        if not away:
+        if not away and self.cfg.get("overlay").get("desktop_notifications", False):  # off: Jonathan wants none (27 Nov)
             try:
                 subprocess.Popen(["notify-send", "-a", "Batsy", "--hint=int:transient:1", "-t", "6000", "Batsy", text],
                                  stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -986,6 +992,28 @@ class Batsy:
         from batsy.tools import screen
 
         n = _strip_fillers(_norm(text))
+        try:
+            from batsy import browser
+
+            said = browser.handle(self, n)  # "what am I doing", "what was I looking at" (Brave's history, locally)
+        except Exception:
+            log.exception("browser")
+            said = None
+        if said:
+            self._route = "instant"
+            self._reply(said)
+            return True
+        try:
+            from batsy import tracker
+
+            said = tracker.handle(self, n)  # "keep track, I'm doing the scaler hackathon", "how's the hackathon going"
+        except Exception:
+            log.exception("tracker")
+            said = None
+        if said:
+            self._route = "instant"
+            self._reply(said)
+            return True
         try:
             from batsy.shop import voice as shop_voice
 

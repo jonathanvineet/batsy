@@ -110,10 +110,31 @@ function renderWidgets(d) {
     .toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'})}</div>` : '') +
     (today.length ? '<ul>' + today.slice(0, 4).map(t => `<li class="${t.done ? 'done' : ''}">${esc(t.text)}</li>`).join('') + '</ul>'
       : '<p class="sub">Nothing planned</p>');
-  // files
-  const f = d.files || [];
-  $('#w-files .body').innerHTML = f.length ? '<ul>' + f.map(x => `<li>${esc(x.name)}<small>${ago(Math.max(0, d.t - x.t))}</small></li>`).join('')
-    + '</ul>' : '<p class="sub">Nothing received lately</p>';
+  drawTracking(d.tracking || []);
+}
+
+// --- tracking (tracker.py): "keep track, I'm doing the hackathon": the next date, a countdown, the dates, the repo ----
+const countdown = s => s == null ? '' : s <= 0 ? 'now' : s < 3600 ? `${Math.round(s / 60)}m` : s < 86400 * 2
+  ? `${Math.floor(s / 3600)}h ${Math.round(s % 3600 / 60)}m` : `${Math.floor(s / 86400)}d ${Math.round(s % 86400 / 3600)}h`;
+const dayOf = w => {
+  const d = new Date(w.length > 10 ? w.replace(' ', 'T') : w + 'T00:00');
+  return d.toLocaleDateString([], {weekday: 'short', day: 'numeric', month: 'short'}) +
+    (w.length > 10 ? ' · ' + d.toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'}) : '');
+};
+function drawTracking(list) {
+  // just what matters at a glance: when this round ends, when it all ends (everything else is in the brain note)
+  $('#track').hidden = !list.length;
+  if (!list.length) return;
+  $('#track .body').innerHTML = list.map(t => {
+    const r = t.round, e = t.end;
+    return `<div class="tr"><div class="tr-name">${esc(t.name)}</div>
+      <div class="tr-left ${t.left_s != null && t.left_s < 86400 ? 'soon' : ''}">${r ? `<b>${countdown(t.left_s)}</b><small>left</small>` : ''}</div>
+      <dl class="tr-dates">
+        ${r ? `<dt>${esc(r.what)}</dt><dd>${dayOf(r.when)}</dd>` : '<dt>No deadline found yet</dt><dd></dd>'}
+        ${e && (!r || e.when !== r.when) ? `<dt>Ends · ${esc(e.what)}</dt><dd>${dayOf(e.when)}</dd>` : ''}
+      </dl>
+      ${t.repo ? `<div class="repo">${esc(t.repo.name.split('/').pop())} · ${t.repo.today || 0} commits today</div>` : ''}</div>`;
+  }).join('');
 }
 
 // --- Batsy live: the wave -------------------------------------------------------------------------------------------

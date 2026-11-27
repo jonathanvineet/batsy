@@ -881,11 +881,11 @@ def _cancel_reminder(app, m, text):
             monitor.cancel(items[0][0])
             return "Cancelled it."
         return f"You have {len(items)} reminders. Which one? Say cancel the reminder about, and what it's for."
-    want = set(target.split()) - {"the", "my", "a", "to", "about"}
+    want = set(target.lower().split()) - {"the", "my", "a", "to", "about"}  # (case: "Professional" missed "professional")
     found = _when(target)
     best, best_score = None, 0.0
     for mid, it in items:
-        sc = len(want & set((it.get("what") or "").split())) / max(1, len(want))
+        sc = len(want & set((it.get("what") or "").lower().replace(",", " ").split())) / max(1, len(want))
         if found and abs(it["next_run"] - found[0].timestamp()) < 120:
             sc += 1
         if sc > best_score:

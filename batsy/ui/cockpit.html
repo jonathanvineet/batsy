@@ -37,13 +37,17 @@ fill="currentColor" stroke="none">
     <article class="panel" id="done"><h2>Just finished</h2><ol></ol></article>
   </section>
 
-  <section class="live" id="live">
-    <canvas id="wave"></canvas>
-    <div class="state"><i></i><span id="state">Idle</span><em id="status"></em></div>
-    <div class="talk">
-      <p class="you" id="you"></p>
-      <p class="said" id="said"></p>
-    </div>
+  <section class="mid">
+    <section class="live" id="live">
+      <canvas id="wave"></canvas>
+      <div class="state"><i></i><span id="state">Idle</span><em id="status"></em></div>
+      <div class="talk">
+        <p class="you" id="you"></p>
+        <p class="said" id="said"></p>
+      </div>
+    </section>
+    <!-- what you asked Batsy to keep track of (tracker.py): the countdown, the dates, the repo -->
+    <article class="panel" id="track" hidden><h2>Tracking</h2><div class="body"></div></article>
   </section>
 
   <section class="col right">
@@ -53,10 +57,9 @@ fill="currentColor" stroke="none">
 
   <footer class="widgets">
     <article class="w" id="w-printer"><h3>3D printer</h3><div class="body"></div></article>
-    <article class="w" id="w-music"><h3>Music</h3><div class="body"></div></article>
-    <article class="w" id="w-research"><h3>Research</h3><div class="body"></div></article>
     <article class="w" id="w-today"><h3>Today</h3><div class="body"></div></article>
-    <article class="w" id="w-files"><h3>Files</h3><div class="body"></div></article>
+    <article class="w" id="w-research"><h3>Research</h3><div class="body"></div></article>
+    <article class="w" id="w-music"><h3>Music</h3><div class="body"></div></article>
   </footer>
   <p class="hint">Move the mouse or press a key to close · Say “Batsy” any time</p>
 </main>

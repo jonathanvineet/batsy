@@ -274,7 +274,20 @@ def _act(app, mid: str) -> None:
     if not r or r["acted"]:
         return
     said = []
-    if r["due"] and r["what"]:
+    actionable = bool(r["important"]) and r["kind"] in ("assignment", "deadline", "exam", "meeting", "interview", "bill",
+                                                          "work", "personal") \
+        and not re.search(r"no-?reply|newsletter|jobalerts|notifications?@|marketing|digest|linkedin|naukri|unstop|devpost",
+                          r["sender"] + " " + (r["body"][:300] if r["body"] else ""), re.I)
+    try:  # anything about something you asked Batsy to keep track of is never junk
+        from batsy import tracker
+
+        tracked = tracker.match_mail(r)
+        if tracked:
+            actionable = True
+            threading.Thread(target=tracker.refresh, args=(app, tracked["id"]), daemon=True).start()
+    except Exception:
+        pass
+    if r["due"] and r["what"] and actionable:  # (newsletters and alerts "due today" used to land under the clock)
         day = dt.date.fromisoformat(r["due"][:10])
         if day >= dt.date.today():
             get_store().add_agenda(day.isoformat(), f"{r['what']} (email from {r['sender']})")
@@ -285,7 +298,7 @@ def _act(app, mid: str) -> None:
     fresh = r["t"] > time.time() - 3600  # arrived in the last hour: news. Older (a first look at an inbox): quiet
     if not fresh:
         pass  # older mail (a first look at an inbox): read quietly; anything still due is under the clock already
-    elif r["important"] or r["due"]:
+    elif r["important"] or (r["due"] and actionable):
         _last.update(id=mid, t=time.time())
         on = f" on {r['account'].split('@')[0]}" if len(accounts()) > 1 and r["account"] else ""
         app.announce(f"New email{on} from {r['sender']}: {r['summary'] or r['subject']}" + (". " + ", ".join(said) + "."

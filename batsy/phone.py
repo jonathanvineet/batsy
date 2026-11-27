@@ -1196,6 +1196,19 @@ def _handler(hub: Hub):
                 return self._send(200, {"token": token(), "remote": hub.remote_url()})
             if not self._authed():
                 return
+            if self.path == "/api/browser/visit":  # the browser extension: the tab you switched to (title + address)
+                from batsy import browser
+
+                b = self._body()
+                browser.add_visit(str(b.get("url") or ""), str(b.get("title") or ""), str(b.get("device") or ""))
+                return self._send(200, {"ok": True})
+            if self.path == "/api/browser/action":  # its buttons: keep track of this / ask about this / save to brain
+                from batsy import browser
+
+                out = browser.action(hub.app, self._body())
+                if out.get("say"):
+                    hub.app.overlay.send("status", text=out["say"][:120])
+                return self._send(200, out)
             if self.path.startswith("/api/slices/select"):  # tapped a recent slice: it becomes the current one
                 return self._send(200, hub.slice_select(str(self._body().get("key", ""))))
             if self.path.startswith("/api/plate"):  # tapped on the slice card: start choosing, or pick an option
@@ -1352,6 +1365,10 @@ def handle(app, n: str) -> str | None:
     if PHONE_INSTALL.match(n):
         app.overlay.send("status", text="Installing the app on your phone")
         return hub.install_over_usb()
+    if re.search(r"\bpair (?:the |my |a )?(?:browser|brave|chrome|extension)\b", n):
+        code = hub.new_pair_code()
+        app.show_visual("card", f"Pair the Batsy extension | Click the Batsy button in the browser and enter {code}.")
+        return f"Click the Batsy button in the browser and enter {' '.join(code)}."
     if PHONE_PAIR.match(n):
         if re.search(r"\bi ?phone\b|\bipad\b", n):  # the iPhone app pairs with a code (USB pairing is Android's)
             code = hub.new_pair_code()

@@ -134,8 +134,9 @@ QUICK_SYSTEM = ("You are Batsy, {user}'s friendly voice assistant. {user} is {ab
                 "no lists or markdown. Speak plainly as yourself: no role-play, sound effects, stage directions, "
                 "narration or quotation marks; ignore any theme or character from earlier talk. Input is speech-to-text, so guess sensibly at misheard words. If the answer "
                 "needs the laptop, the internet, recent events, or facts you're not sure of, reply with only: PASS. "
-                "You can't DO anything (print, slice, send, open, play, set, buy, change, save): if he asks you to do "
-                "something, reply with only: PASS. Never say you did, sent, started or set something.")
+                "You can't operate anything (the printer, apps, files, music, messages, email, lights, settings): if "
+                "he asks you to operate one of those, reply with only: PASS, and never say you did, sent, started or set "
+                "something. Questions are yours to answer: recipes, how to do or make something, explanations, ideas.")
 
 
 def vision_source(text: str) -> str | None:
@@ -587,7 +588,7 @@ class LocalBrain:
         if not self.loaded():  # it has to load first (several seconds): say so rather than go quiet
             emit("One moment.")
             self.warm_soon()
-        if len(text.split()) <= 14 and not NEEDS_TOOLS.search(text.lower()) and not COMMAND.match(text.lower()):
+        if len(text.split()) <= 25 and not NEEDS_TOOLS.search(text.lower()) and not COMMAND.match(text.lower()):  # (14 sent "how do I make an omelette…" to the slow tool path)
             self.route = "quick"
             if self._quick(text, emit, on_marker, abort):
                 return self._finish(source, text, spoken, actions, abort)

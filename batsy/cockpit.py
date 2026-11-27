@@ -209,6 +209,12 @@ def payload(app) -> dict:
                                    for x in research.all_research()[:4]]}
     except Exception as e:
         log.debug("research: %s", e)
+    try:  # things you're keeping track of (tracker.py): the next date, the deadline, the repo
+        from batsy import tracker
+
+        out["tracking"] = [tracker.status(t) for t in tracker.active()]
+    except Exception as e:
+        log.debug("tracking: %s", e)
     try:  # the company (batsy/shop/): the queue, what's printing, the month's money
         from batsy.shop import reports as shop_reports
 

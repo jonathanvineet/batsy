@@ -185,6 +185,7 @@ class MemoryStore:
 
     # --- agenda (plans per day, filled by the good-night routine or the agenda tool) --------------
     def add_agenda(self, day: str, text: str) -> int:
+        text = todo_text(text)
         with self.lock, self.db:
             rid = self.db.execute("INSERT INTO agenda (day, text, t) VALUES (?,?,?)", (day, text, time.time())).lastrowid
         try:  # the day's note in the brain: a checkbox under Plan
@@ -289,3 +290,27 @@ def get_store() -> MemoryStore:
     if _store is None:
         _store = MemoryStore()
     return _store
+
+
+def todo_text(raw: str) -> str:
+    """A to-do as a short task, not the sentence it was said in:
+    "No, I don't think so. But I have to deliver the Noel John Sprint." -> "Deliver Noel John's print".
+    (Every to-do comes through add_agenda, whichever handler made it.)"""
+    import re
+
+    t = re.sub(r"\s+", " ", raw or "").strip()
+    suffix = ""
+    m = re.search(r"\s*(\([^)]*\))\s*$", t)  # "(Scaler hackathon)", "(email from …)": kept as they are
+    if m:
+        t, suffix = t[:m.start()], " " + m.group(1)
+    sentences = [x for x in re.split(r"(?<=[.!?])\s+", t) if x]
+    t = next((x for x in sentences if re.search(r"\b(?:have|has|need|needs|got|gotta|must|should|remember)\b", x, re.I)),
+             sentences[-1] if sentences else t)
+    t = re.sub(r"^(?:(?:no|yes|yeah|okay|ok|so|and|but|well|also|actually|um|uh)[, ]+)+", "", t, flags=re.I)
+    t = re.sub(r"^(?:i|we)(?:'ve| have| had| need| needed| must| should| got| gotta| am going| was going)?(?: got)? "
+               r"(?:to|gotta) ", "", t, flags=re.I)
+    t = re.sub(r"^remember to ", "", t, flags=re.I)
+    t = re.sub(r"\b(?:the )?((?:[A-Z][a-z]+ ?){1,3}) Sprint\b", lambda m: m.group(1).strip() + "'s print", t)  # heard
+    t = re.sub(r"\b(?:today|tonight|tomorrow)\b", "", t, flags=re.I)
+    t = re.sub(r"\s+", " ", t).strip(" ,.;:")
+    return ((t[:1].upper() + t[1:]) if t else (raw or "").strip()) + suffix
