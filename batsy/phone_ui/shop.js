@@ -3,7 +3,7 @@
 // Loaded after app.js and uses its helpers (api, $, esc, toast, confirmBox).
 'use strict';
 let shop = null;
-const shopInr = n => '₹' + Math.round(n || 0).toLocaleString('en-IN');
+const shopInr = n => (n < 0 ? '−' : '') + '₹' + Math.abs(Math.round(n || 0)).toLocaleString('en-IN');  // −₹32, not ₹-32
 const shopHrs = h => { const m = Math.round((h || 0) * 60); return m < 60 ? `${m}m` : `${Math.floor(m / 60)}h ${String(m % 60).padStart(2, '0')}m`; };
 const SHOP_STATE = {waiting: 'waiting', slicing: 'slicing', ready: 'ready', printing: 'printing', failed: 'reprint'};
 
@@ -31,10 +31,19 @@ function drawShop() {
   $('#shop-w .sh-now').innerHTML = running
     ? `<div class="sh-run"><b>${esc(running.part)}</b><small>${esc(running.order_code)} · ${Math.round(p.progress || 0)}%${p.remaining_s ? ' · ' + shopHrs(p.remaining_s / 3600) + ' left' : ''}</small>
        <i style="width:${Math.max(2, p.progress || 0)}%"></i></div>`
-    : `<div class="sh-run idle"><small>${p.connected ? 'Printer free' : 'Printer offline'}</small></div>`;
+    : (p.printing || p.paused)  // printing something that isn't a company job (a "print it"): still not free
+      ? `<div class="sh-run"><b>${esc(p.job || 'Printing')}</b><small>${p.paused ? 'paused' : 'printing'} · ${Math.round(p.progress || 0)}%${p.remaining_s ? ' · ' + shopHrs(p.remaining_s / 3600) + ' left' : ''} · not a company job</small>
+         <i style="width:${Math.max(2, p.progress || 0)}%"></i></div>`
+      : `<div class="sh-run idle"><small>${p.connected ? 'Printer free' : 'Printer offline'}</small></div>`;
   $('#shop-w .sh-next').innerHTML = next.slice(0, 3).map(j => `<li><b>${esc(j.part)} <em>×${j.copies - j.done_copies}</em></b>
       <small>${esc(j.customer || j.order_code)} · ${shopHrs(j.left_hours)}</small><span class="st ${j.status}">${SHOP_STATE[j.status] || j.status}</span></li>`).join('')
     || '<li class="empty">Nothing queued</li>';
+  // quotes waiting for your price, and recent failed / stopped prints (what they cost)
+  const qs = s.quotes || [], ls = s.losses || [];
+  $('#shop-w .sh-quotes').innerHTML = (qs.length ? `<h4>Quotes to price</h4>` + qs.map(o => `<li><b>${esc(o.title)}</b>
+      <small>${esc(o.code)}</small><span class="pr">${o.override ? shopInr(o.override) : shopInr(o.price) + ' <em>suggested</em>'}</span></li>`).join('') : '')
+    + (ls.length ? `<h4>Losses</h4>` + ls.map(r => `<li class="loss"><b>${esc(r.title)}</b>
+      <small>${r.outcome === 'cancelled' ? 'stopped' : 'failed'} · ${Math.round(r.grams)} g · ${shopHrs(r.hours)}</small><span class="pr bad">−${shopInr(r.loss)}</span></li>`).join('') : '');
   const first = next[0];
   const busy = p.printing || p.paused || s.running;
   $('#shop-w .sh-btns').innerHTML = (first && !busy && first.status === 'ready'

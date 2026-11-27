@@ -369,7 +369,7 @@ def reprice(order_id: int) -> dict:
     rows = []
     for p in parts:
         n = numbers(p)
-        rows.append({**n, "material": (p.get("options") or {}).get("material", "PLA"), "qty": p["qty"],
+        rows.append({**n, "name": p.get("name"), "material": (p.get("options") or {}).get("material", "PLA"), "qty": p["qty"],
                      "design_hours": (p.get("options") or {}).get("design_hours", 0)})
     rush = False
     if o.get("due"):

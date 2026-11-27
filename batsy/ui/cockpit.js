@@ -193,7 +193,7 @@ window.batsy = {cmd(m) { try { (handlers[m.cmd] || (() => {}))(m); } catch (e) {
 function drawShop(s) {
   $('#shop').hidden = !s;
   if (!s) return;
-  const inr = n => '₹' + Math.round(n || 0).toLocaleString('en-IN');
+  const inr = n => (n < 0 ? '−' : '') + '₹' + Math.abs(Math.round(n || 0)).toLocaleString('en-IN');
   const h = x => x < 1 ? `${Math.round(x * 60)}m` : `${Math.floor(x)}h ${String(Math.round(x % 1 * 60)).padStart(2, '0')}m`;
   const c = s.counts || {}, m = s.month || {};
   $('#shop .body').innerHTML = `<div class="sh-sum"><span><b>${c.quote || 0}</b>quotes</span><span><b>${(c.confirmed || 0) + (c.printing || 0)}</b>in work</span>

@@ -47,8 +47,9 @@ def _table(gcode: Path) -> dict:
                     d = v if rel else v - last
                     if not rel:
                         last = v
-                    if d > 0:
-                        total += d
+                    # net: a retraction (-5 mm) and its un-retract (+5 mm) cancel out. Counting only the pushes made
+                    # the 13.7 g flute read 108 g (920 retractions), and every loss with it
+                    total = max(0.0, total + d)
             if n % STEP == 0:
                 marks.append(round(total, 2))
             n += 1

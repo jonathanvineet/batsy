@@ -37,6 +37,13 @@ DEFAULT_RATES = {
     "round_to": 10.0,
     "design_rate_per_hour": 300.0,  # modelling work you do for a customer
     "rush_pct": 25.0,               # due within 48 hours
+    # Jonathan's own quick formula (27 Nov): base = grams x formula_per_gram + hours x formula_per_hour, + profit;
+    # standard items at a fixed price. A suggestion: he sets the final price himself.
+    "formula": 1.0,                 # 1 = quote with the formula below, 0 = the full PrintDesk breakdown above
+    "formula_per_gram": 1.5,
+    "formula_per_hour": 2.0,
+    "formula_profit_pct": 50.0,
+    "fixed_prices": {"keychain": 150.0},
 }
 
 
@@ -53,6 +60,8 @@ def set_rates(changes: dict) -> dict:
             continue
         if k == "materials":
             cur["materials"] = {str(m).upper(): float(p) for m, p in (v or {}).items()}
+        elif k == "fixed_prices":
+            cur["fixed_prices"] = {str(m).lower(): float(p) for m, p in (v or {}).items()}
         else:
             cur[k] = float(v)
     db.set_setting("rates", cur)
@@ -94,9 +103,41 @@ def part_cost(grams: float, hours: float, material: str = "PLA", qty: int = 1, d
             "hours": round(hours * qty, 2), "qty": qty}
 
 
-def order_price(parts: list[dict], rush: bool = False, discount: float = 0, r: dict | None = None) -> dict:
-    """parts: [{grams, hours, material, qty, design_hours}] -> the full breakdown and the price to charge."""
+def formula_price(parts: list[dict], discount: float = 0, r: dict | None = None) -> dict:
+    """Jonathan's formula: each part (grams x 1.5 + hours x 2) x qty, + 50% profit, rounded up to the nearest 10;
+    a standard item (a keychain) at its fixed price. Only a suggestion: the final price is his."""
     r = r or rates()
+    fixed = {k.lower(): v for k, v in (r.get("fixed_prices") or {}).items()}
+    lines, base_total, fixed_total = [], 0.0, 0.0
+    for p in parts:
+        g, h, qty = float(p.get("grams") or 0), float(p.get("hours") or 0), int(p.get("qty") or 1)
+        name = str(p.get("name") or "").lower()
+        std = next((v for k, v in fixed.items() if k in name), None)
+        if std is not None:
+            fixed_total += std * qty
+            lines.append({"name": p.get("name"), "fixed": std, "qty": qty, "grams": round(g * qty, 1),
+                          "hours": round(h * qty, 2), "each": std})
+            continue
+        base = g * r["formula_per_gram"] + h * r["formula_per_hour"]
+        base_total += base * qty
+        lines.append({"name": p.get("name"), "grams": round(g * qty, 1), "hours": round(h * qty, 2), "qty": qty,
+                      "material": round(g * r["formula_per_gram"] * qty, 2), "machine": round(h * r["formula_per_hour"] * qty, 2),
+                      "each": round(base, 2), "manufacturing": round(base * qty, 2)})
+    price = base_total * (1 + r["formula_profit_pct"] / 100) + fixed_total
+    price = max(price - (discount or 0), 0)
+    step = r["round_to"] or 1
+    price = math.ceil(price / step) * step if price else 0
+    return {"lines": lines, "packaging": 0, "manufacturing": round(base_total, 2), "margin_pct": r["formula_profit_pct"],
+            "rush": False, "discount": discount, "price": round(price, 2), "profit": round(price - base_total - fixed_total, 2),
+            "formula": f"(₹{r['formula_per_gram']:g}/g + ₹{r['formula_per_hour']:g}/h) + {r['formula_profit_pct']:g}%",
+            "suggested": True}
+
+
+def order_price(parts: list[dict], rush: bool = False, discount: float = 0, r: dict | None = None) -> dict:
+    """parts: [{grams, hours, material, qty, design_hours, name}] -> the full breakdown and the price to charge."""
+    r = r or rates()
+    if r.get("formula"):
+        return formula_price(parts, discount, r)
     lines = [part_cost(p.get("grams") or 0, p.get("hours") or 0, p.get("material") or "PLA", int(p.get("qty") or 1),
                        float(p.get("design_hours") or 0), r) for p in parts]
     manufacturing = sum(x["manufacturing"] for x in lines) + (r["packaging_flat"] if parts else 0)
@@ -114,6 +155,11 @@ def order_price(parts: list[dict], rush: bool = False, discount: float = 0, r: d
 def run_cost(grams: float, hours: float, material: str = "PLA", r: dict | None = None) -> dict:
     """What a print actually used: filament laid down and hours the machine ran."""
     r = r or rates()
+    if r.get("formula"):  # the same base rates as your quotes: a failed print loses what it would have been priced at
+        cpg = float(r["formula_per_gram"])
+        m, mach, pw = grams * cpg, hours * float(r["formula_per_hour"]), 0.0
+        return {"grams": round(grams, 1), "hours": round(hours, 3), "per_gram": round(cpg, 3), "material": round(m, 2),
+                "machine": round(mach, 2), "power": 0.0, "total": round(m + mach, 2)}
     cpg = per_gram(material, r)
     m, mach, pw = grams * cpg, hours * r["machine_rate_per_hour"], hours * power_per_hour(r)
     return {"grams": round(grams, 1), "hours": round(hours, 3), "per_gram": round(cpg, 3), "material": round(m, 2),

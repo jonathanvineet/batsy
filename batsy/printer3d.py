@@ -331,6 +331,12 @@ class Printer:
             vault_capture.print_started(job, str(gcode), dict(self.state.get("info") or {}), started)
         except Exception:
             log.exception("brain: print note")
+        try:  # a company order's part, printed with "print it" / the phone: on the books (stops = real loss)
+            from batsy.shop import voice as shop_voice
+
+            shop_voice.adopt_print(gcode, keep, started)
+        except Exception:
+            log.exception("company: tracking the print")
         try:  # the 3D slice window has done its job: closed, its cache cleared
             from batsy import slicer
 
@@ -922,6 +928,7 @@ def _print(app, pr: Printer, what: str, proc: str | None) -> str | None:
         return f"I couldn't slice it: {e}"
     when = f" It takes about {slicer._say_time(r['time'])}" if r.get("time") else ""
     grams = f" and {round(r['grams'])} grams of filament" if r.get("grams") else ""
-    if not app._confirm_now(f"Print {model.stem.replace('_', ' ')} with {r['process']}?{when}{grams}. Is the bed clear?"):
+    warn = (" " + r["warn"]) if r.get("warn") else ""  # a tall part on a tiny base: said before it starts
+    if not app._confirm_now(f"Print {model.stem.replace('_', ' ')} with {r['process']}?{when}{grams}.{warn} Is the bed clear?"):
         return "Okay, not printing."
     return pr.print_now(Path(r["gcode"]), model.stem.replace("_", " "))

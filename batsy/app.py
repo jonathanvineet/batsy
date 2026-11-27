@@ -986,6 +986,17 @@ class Batsy:
         from batsy.tools import screen
 
         n = _strip_fillers(_norm(text))
+        try:
+            from batsy.shop import voice as shop_voice
+
+            said = shop_voice.handle(self, n)  # "add the flute to the company", "the flute print failed", its quote
+        except Exception:
+            log.exception("company")
+            said = None
+        if said:
+            self._route = "instant"
+            self._reply(said)
+            return True
         from batsy import mail
 
         said = mail.handle(self, n, text) if self._may("mail", "todo") else None  # "check my email", "what's due"
@@ -1177,6 +1188,14 @@ class Batsy:
         m = re.match(r"(?:(?:please|can you|could you) )?(open|launch|start|run) (.+)", n)
         if m and not re.search(r"\b(camera|webcam)\b", m.group(2)):
             said = apps.open_target(m.group(2))
+            if said:
+                self._reply(said)
+                return True
+        # "ah I close all my my brave wave tab tabs": the browser, whatever the words around it
+        if re.search(r"\b(?:close|quit|exit|shut)\b.*\b(?:brave|browser|firefox|chrome)\b", n) and \
+                not re.search(r"\b(?:don'?t|not|never)\b", n):
+            which = next((b for b in ("brave", "firefox", "chrome") if b in n), "brave")
+            said = apps.close_app(which)
             if said:
                 self._reply(said)
                 return True
@@ -1426,13 +1445,20 @@ class Batsy:
         if update:
             repo = Path(__file__).resolve().parent.parent
             self.overlay.send("status", text="Pulling the latest code")
-            p = subprocess.run(["git", "-C", str(repo), "pull", "--ff-only"], capture_output=True, text=True,
-                               timeout=120)
+            # --rebase: a commit made here (Batsy's own "commit the batsy folder") and one pushed from the Mac used to
+            # stop a plain fast-forward pull dead ("diverged"). Ours goes on top of theirs; on a real conflict the
+            # rebase is undone, so the folder is exactly as it was.
+            p = subprocess.run(["git", "-C", str(repo), "pull", "--rebase", "--autostash"], capture_output=True,
+                               text=True, timeout=120)
             out = (p.stdout + p.stderr).strip()
             log.info("git pull: %s", out[-500:])
             if p.returncode != 0:
-                first = next((ln for ln in out.splitlines() if ln.strip()), "unknown error")
-                self._reply(f"The git pull failed: {first[:160]}")
+                subprocess.run(["git", "-C", str(repo), "rebase", "--abort"], capture_output=True, timeout=30)
+                clash = [ln.split()[-1] for ln in out.splitlines() if ln.startswith("CONFLICT")]
+                why = (f"the same lines changed here and on GitHub in {', '.join(c.split('/')[-1] for c in clash[:3])}"
+                       if clash else next((ln for ln in out.splitlines()
+                                           if ln.strip() and not ln.startswith(("From ", " * ", "hint:"))), "unknown error"))
+                self._reply(f"The git pull didn't go through: {why[:160]}. Nothing changed here.")
                 return True
             if "Already up to date" in out:
                 reason = "update: already up to date"

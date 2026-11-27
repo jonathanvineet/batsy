@@ -91,7 +91,9 @@ def options(model: Path) -> tuple[object, list[dict]]:
         shape = ("standing upright" if h >= 0.85 * longest else "lying flat" if h <= 0.4 * longest else "on its side")
         if foot < 5:
             shape += ", balancing on a point"
-        found.append({"t": t, "cost": cost, "support": support, "foot": foot, "height": h, "prob": prob,
+        tippy = h > 30 and h > 6 * max(foot, 1) ** 0.5  # tall on a tiny base: it gets knocked over mid-print
+        found.append({"t": t, "cost": cost * (4 if tippy else 1), "tippy": tippy, "support": support, "foot": foot,
+                      "height": h, "prob": prob,
                       "how": ("as you sent it: " if i == 0 else "") + shape, "shape": shape, "first": i == 0})
     first, rest = found[0], found[1:]
     natural = sorted([o for o in rest if o["prob"] >= 0.05 and o["foot"] >= 5], key=lambda o: -o["prob"])[:2]
@@ -111,7 +113,7 @@ def options(model: Path) -> tuple[object, list[dict]]:
                       + (f", on {o['foot']:.0f} mm²" if o["foot"] >= 5 else "")
                       + ("" if o["first"] else f", {less}% less support" if less >= 0 else
                          f", {-less}% more support" if less > -100 else ", needs more support"))
-    best = min(range(len(opts)), key=lambda k: opts[k]["cost"] * (0.6 if opts[k]["prob"] >= 0.1 else 1.0))
+    best = min(range(len(opts)), key=lambda k: (opts[k]["tippy"], opts[k]["cost"] * (0.6 if opts[k]["prob"] >= 0.1 else 1.0)))
     opts[best]["best"] = True
     return m, opts
 
@@ -270,7 +272,7 @@ def _short(o: dict) -> str:
         word = "Tip down"
     else:
         word = o["shape"].split(",")[0].replace("standing upright", "Upright").capitalize()
-    return f"{word} · {o['height']:.0f} mm"
+    return f"{word} · {o['height']:.0f} mm" + (" ⚠ tips over" if o.get("tippy") else "")
 
 
 def state() -> dict:

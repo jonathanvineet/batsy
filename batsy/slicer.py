@@ -514,7 +514,7 @@ def smart(models: list[Path]) -> tuple[dict, list[str]]:
     import trimesh
     from scipy.spatial import ConvexHull
 
-    brim, support, why = False, 0.0, []
+    brim, support, why, warn = False, 0.0, [], ""
     for m in models:
         try:
             mesh = _placed(trimesh.load(str(m), force="mesh"))
@@ -529,6 +529,9 @@ def smart(models: list[Path]) -> tuple[dict, list[str]]:
         h = float(mesh.extents[2])
         if foot < 100 or h > 3.5 * math.sqrt(max(foot, 1)):
             brim = True
+        if h > 30 and h > 6 * math.sqrt(max(foot, 1)):  # the flute: 102 mm on 29 mm² came loose and spaghettied
+            warn = (f"Careful: {Path(m).stem.replace('_', ' ')} is {h:.0f} mm tall on a {foot:.0f} mm² base, so it will "
+                    f"probably get knocked over. Lie it down instead?")
         # overhangs past 50° that hang over a real drop: a thread's flank has the next turn ~1 mm below it (prints
         # fine), a branch or a lip hangs over air (needs support). Rays straight down find what's under each face.
         import numpy as np
@@ -558,6 +561,8 @@ def smart(models: list[Path]) -> tuple[dict, list[str]]:
         why.append("no supports (nothing really overhangs)")
     else:
         why.append(f"supports ({support:.0f} mm² hangs over air)")
+    if warn:
+        why.append("WARN " + warn)
     return out, why
 
 
@@ -617,6 +622,7 @@ def _slice_model(model: Path, process: str | None = None, overrides: dict | None
         shutil.move(str(gcodes[0]), dest)
     result = {"gcode": str(dest), "process": pname + (f" ({label})" if label else ""), "secs": round(time.time() - t0, 1),
               "decided": [d for d, k in zip(decided, ("brim_type", "ironing_type", "enable_support")) if k not in (overrides or {})],
+              "warn": next((d[5:] for d in decided if d.startswith("WARN ")), ""),
               **_estimates(dest)}
     try:  # a picture of the sliced paths, so you can see the slicing
         from batsy import preview
@@ -663,7 +669,7 @@ def describe(model: Path, r: dict) -> str:
         bits.append(f"it prints in about {_say_time(r['time'])}")
     if r.get("grams"):
         bits.append(f"{round(r['grams'])} grams")
-    return ", ".join(bits) + "."
+    return ", ".join(bits) + "." + (" " + r["warn"] if r.get("warn") else "")
 
 
 def _say_time(t: str) -> str:

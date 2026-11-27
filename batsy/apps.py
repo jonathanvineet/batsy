@@ -119,5 +119,10 @@ def close_app(target: str) -> str | None:
     app = INDEX.find(re.sub(r"^(the|my)\s+", "", target.strip().lower()))
     if not app or not app.binary:
         return None
-    subprocess.run(["pkill", "-x", app.binary], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    # a launcher script ("brave-browser-stable") isn't the running program ("brave"): close both, politely (SIGTERM:
+    # browsers save their session, so the tabs can come back)
+    real = {"brave-browser-stable": "brave", "brave-browser": "brave", "google-chrome-stable": "chrome",
+            "chromium-browser": "chromium", "firefox-bin": "firefox"}.get(app.binary)
+    for name in filter(None, (app.binary, real)):
+        subprocess.run(["pkill", "-x", name], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     return f"Closed {app.name}."

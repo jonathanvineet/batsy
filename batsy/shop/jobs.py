@@ -439,8 +439,12 @@ def close(rid: int, outcome: str, st: dict | None, error: str = "", app=None) ->
     sp = db.one("SELECT id FROM spools WHERE active = 1 AND upper(material) = ? ORDER BY id DESC LIMIT 1", (mat.upper(),))
     if sp and grams:
         db.run("UPDATE spools SET used_g = used_g + ? WHERE id = ?", (grams, sp["id"]))
-    label = f"{o.get('code')} {p.get('name')}"
-    if outcome == "done":
+    label = f"{o.get('code')} {p.get('name') or o.get('title') or ''}".strip()
+    if outcome == "done" and not j:  # printed with "print it" / the phone, not from the queue: the order is ready
+        msg = f"Printed {label}: {grams:.0f} g, {hours:.1f} h, cost ₹{cost['total']:.0f}."
+        if o and o.get("status") in ("quote", "confirmed", "printing"):
+            db.update("orders", o["id"], updated=time.time())
+    elif outcome == "done":
         done = (j.get("done_copies") or 0) + (r.get("plate_copies") or 1)
         db.update("jobs", j["id"], done_copies=done, status="done" if done >= j["copies"] else "waiting",
                   gcode_key=j.get("gcode_key") if done >= j["copies"] or _same_plate(j, done) else None,
@@ -454,7 +458,8 @@ def close(rid: int, outcome: str, st: dict | None, error: str = "", app=None) ->
             db.update("orders", o["id"], status="ready", updated=time.time())
             msg += f" Order {o.get('code')} is ready for delivery."
     else:
-        db.update("jobs", j["id"], status="failed", updated=time.time())
+        if j:
+            db.update("jobs", j["id"], status="failed", updated=time.time())
         pct = (use.get("fraction") or 0) * 100
         msg = (f"{'Stopped' if outcome == 'cancelled' else 'Failed'}: {label} at {pct:.0f}%. "
                f"Lost {grams:.0f} g and {hours:.1f} h: ₹{loss:.0f}. It's waiting for a reprint.")

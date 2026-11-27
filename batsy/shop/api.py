@@ -170,6 +170,14 @@ def overview(app, p: dict) -> dict:
     if p["role"] == "admin":
         out["month"] = reports.pnl(30)
         out["spools"] = reports.spools()
+        # quotes waiting for your price (the formula's suggestion; yours is final), and what failed prints cost lately
+        out["quotes"] = [{"id": o["id"], "code": o["code"], "title": o["title"], "price": o.get("price") or 0,
+                          "override": o.get("price_override")}
+                         for o in db.q("SELECT * FROM orders WHERE status = 'quote' ORDER BY updated DESC LIMIT 5")]
+        out["losses"] = [{"title": (db.get("orders", r["order_id"]) or {}).get("title", "print"), "loss": r["loss"] or 0,
+                          "grams": r["grams"] or 0, "hours": r["hours"] or 0, "outcome": r["outcome"], "t": r["ended"]}
+                         for r in db.q("SELECT * FROM runs WHERE outcome IN ('failed','cancelled') AND loss > 0 "
+                                       "ORDER BY ended DESC LIMIT 3")]
     return out
 
 

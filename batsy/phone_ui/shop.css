@@ -53,3 +53,15 @@
 .sh-reasons { display: flex; flex-wrap: wrap; gap: 6px; margin: 10px 0; }
 .sh-reasons button { border: 1px solid rgba(255, 255, 255, .15); background: none; color: var(--muted); border-radius: 12px; padding: 6px 10px; font-size: 12px; }
 .sh-reasons button.on { border-color: var(--signal); color: var(--signal); }
+
+/* quotes to price (the formula's suggestion) and recent losses */
+.sh-quotes { list-style: none; display: flex; flex-direction: column; gap: 6px; }
+.sh-quotes:empty { display: none; }
+.sh-quotes h4 { font: 700 11px var(--display); letter-spacing: .18em; text-transform: uppercase; color: var(--muted); margin: 4px 0 0; }
+.sh-quotes li { display: grid; grid-template-columns: 1fr auto; gap: 0 10px; background: var(--w2); border-radius: 12px; padding: 8px 12px; }
+.sh-quotes li b { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sh-quotes li small { grid-column: 1; color: var(--muted); font-size: 12px; }
+.sh-quotes .pr { grid-column: 2; grid-row: 1 / span 2; align-self: center; font: 700 18px var(--display); text-align: right; }
+.sh-quotes .pr em { display: block; font: 500 10px var(--body, system-ui); color: var(--muted); font-style: normal; }
+.sh-quotes .pr.bad { color: var(--bad, #ff5c4d); }
+body.dash .shop-w { height: auto; }   /* grows to show the queue, quotes and losses (it was cut off) */

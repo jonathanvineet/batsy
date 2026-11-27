@@ -638,7 +638,15 @@ class LocalBrain:
                 if on_tool:
                     on_tool(name)
                 self.status(f"Running {name.replace('_', ' ')}")
-                if name == "run_shell" and NO_LOCAL.search(str(args.get("command", ""))):
+                if name == "run_shell" and re.search(r"\b(?:close|quit|exit|stop|kill|shut)\b", text, re.I) and \
+                        re.search(r"xdg-open|https?://|\b(?:brave|firefox|chrome|chromium|google-chrome)\b(?!.*(?:pkill|kill))",
+                                  str(args.get("command", ""))):
+                    # asked to CLOSE something, it opened a made-up page instead ("close all my Brave tabs" ->
+                    # brave github.com/jonathan/helm): opening is never the answer to closing
+                    log.warning("local model tried to open %r when asked to close: refused", args.get("command"))
+                    out, is_error = ("Refused: he asked you to close something, not open it. Say you couldn't, in one "
+                                     "short sentence.", True)
+                elif name == "run_shell" and NO_LOCAL.search(str(args.get("command", ""))):
                     # the small model guessing at git ("git init ~/Batsy/repo", "git config --global url.repos ...")
                     # or deleting things: never. Batsy's own git ("commit and push") or Claude do that properly.
                     log.warning("local model tried %r: refused", args.get("command"))

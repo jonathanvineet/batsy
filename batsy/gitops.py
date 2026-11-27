@@ -225,7 +225,8 @@ def _answer(app, n: str) -> str | None:
         except Exception:
             near = []
         return _ask(_asked["push"], _asked["undo"], f"Which one, {' or '.join(near)}?" if near else "Which folder?")
-    push, undo_ = _asked["push"], _asked["undo"]
+    # what you say now counts: "commit and push the batsy folder" as the answer still means push
+    push, undo_ = _asked["push"] or bool(re.search(r"\bpush", n)), _asked["undo"]
     _asked.update(t=0.0, tries=0)
     if undo_:
         return undo(path)
@@ -234,6 +235,8 @@ def _answer(app, n: str) -> str | None:
 
 
 def handle(app, n: str) -> str | None:
+    # "comment and push the batsy folder": how the mic hears "commit" in a git command
+    n = re.sub(r"\bcomm?ents?\b(?=.*\b(?:push|folder|repo|changes|batsy)\b)", "commit", n)
     said = _answer(app, n)
     if said:
         return said
