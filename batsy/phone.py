@@ -537,8 +537,15 @@ class Hub:
             return {"ok": True, "ignored": True}
         with activity.work("Your phone's mic", "voice", "Transcribing what you said on the phone"):
             text = self.app.stt.transcribe(audio, quiet=True).strip()
+        if text:  # the phone skipped the word fixes: technical words, then the names in your life by sound
+            from batsy import context_words, lexicon
+
+            text = context_words.correct(lexicon.fix(text, self.app.cfg))
         log.info("phone mic (%s): %r", mode, text)
         if not text:
+            if mode != "ears":  # you held the button and talked: say it didn't come through
+                log.info("phone mic: nothing in %.1f s of audio (peak %d)", audio.size / 16000, int(abs(audio).max()))
+                return {"ok": True, "heard": "…", "say": "I didn't catch that, the recording was silent. Try again."}
             return {"ok": True, "ignored": True}
         if mode == "ears":
             found, rest = strip_wake_word(text, self.cfg.get("voice.wake_words"))
@@ -1144,7 +1151,7 @@ def _handler(hub: Hub):
                     png = paths.with_name(paths.name.removesuffix(".paths.json") + ".png") if paths else None
                     return self._send(200, body=png.read_bytes(), ctype="image/png") if png and png.exists() \
                         else self._send(404, {})
-                return self._send(200, {"slices": hub.slices()})
+                return self._send(200, {"slices": hub.slices(40)})  # all of them: the card scrolls
             if self.path.startswith("/api/slice"):
                 last = hub.last_slice()
                 if self.path.startswith("/api/slice/paths"):
@@ -1365,7 +1372,8 @@ def handle(app, n: str) -> str | None:
     if PHONE_INSTALL.match(n):
         app.overlay.send("status", text="Installing the app on your phone")
         return hub.install_over_usb()
-    if re.search(r"\bpair (?:the |my |a )?(?:browser|brave|chrome|extension)\b", n):
+    if re.search(r"\b(?:pair|pear|pare|bare|bear|fair|far|para|parda|connect|link) (?:the |my |a |uh )?"
+                 r"(?:browser|brosa|browsa|brave|chrome|extension)\b", n):  # (how the mic heard "pair my browser")
         code = hub.new_pair_code()
         app.show_visual("card", f"Pair the Batsy extension | Click the Batsy button in the browser and enter {code}.")
         return f"Click the Batsy button in the browser and enter {' '.join(code)}."

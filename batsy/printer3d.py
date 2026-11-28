@@ -27,13 +27,46 @@ TEMPS = re.compile(r"T:\s*([\d.]+)\s*/\s*([\d.]+).*?B:\s*([\d.]+)\s*/\s*([\d.]+)
 SD = re.compile(r"(?:SD|TF) printing byte (\d+)/(\d+)")  # Creality's firmware says "TF printing"
 
 
+PORT_FILE = Path.home() / ".local/share/batsy/printer_port"  # the by-id link the printer answered on last time
+
+
+def _not_printer() -> set[str]:
+    """Other boards with the same USB chip (the camera mount's Uno is a CH340 too): never the printer."""
+    try:
+        from batsy import camera_mount
+
+        return {str(Path(x).resolve()) for x in camera_mount.ports()}
+    except Exception:
+        return set()
+
+
 def find_port() -> str | None:
-    """The printer's USB serial (CH340 on Creality boards), not your phone's."""
+    """The printer's USB serial (CH340 on Creality boards), not your phone's and not the camera mount's Uno.
+    The link it answered on before wins; ttyUSB numbers swap when things are plugged in a different order."""
+    others = _not_printer()
+    try:
+        known = PORT_FILE.read_text().strip()
+        if known and Path(known).exists() and str(Path(known).resolve()) not in others:
+            return str(Path(known).resolve())
+    except OSError:
+        pass
     for link in sorted(glob.glob("/dev/serial/by-id/*")):
-        if re.search(r"1a86|ch34|usb-serial|creality|marlin", link, re.I) and "android" not in link.lower():
+        if re.search(r"1a86|ch34|usb-serial|creality|marlin", link, re.I) and "android" not in link.lower() \
+                and str(Path(link).resolve()) not in others:
             return str(Path(link).resolve())
-    ports = sorted(glob.glob("/dev/ttyUSB*"))
+    ports = [x for x in sorted(glob.glob("/dev/ttyUSB*")) if x not in others]
     return ports[0] if ports else None
+
+
+def remember_port(dev: str) -> None:
+    """The printer answered on dev: keep its stable by-id name for next time."""
+    for link in glob.glob("/dev/serial/by-id/*"):
+        if str(Path(link).resolve()) == str(Path(dev).resolve()):
+            try:
+                PORT_FILE.write_text(link)
+            except OSError:
+                pass
+            return
 
 
 class Printer:
@@ -108,6 +141,7 @@ class Printer:
             # printer's board and kills a print. The board restarts once now, on this first open, never again.
             subprocess.run(["stty", "-F", port, "-hupcl"], capture_output=True)
             log.info("printer: connected on %s", port)
+            remember_port(port)
             boot_until = time.time() + 6  # the board restarts as the port opens: let it finish
             try:
                 self._read_until(boot_until)
@@ -928,7 +962,7 @@ def _print(app, pr: Printer, what: str, proc: str | None) -> str | None:
         return f"I couldn't slice it: {e}"
     when = f" It takes about {slicer._say_time(r['time'])}" if r.get("time") else ""
     grams = f" and {round(r['grams'])} grams of filament" if r.get("grams") else ""
-    warn = (" " + r["warn"]) if r.get("warn") else ""  # a tall part on a tiny base: said before it starts
+    warn = (" " + re.sub(r"\s*Lie it down instead\?", "", r["warn"])) if r.get("warn") else ""  # one question only
     if not app._confirm_now(f"Print {model.stem.replace('_', ' ')} with {r['process']}?{when}{grams}.{warn} Is the bed clear?"):
         return "Okay, not printing."
     return pr.print_now(Path(r["gcode"]), model.stem.replace("_", " "))

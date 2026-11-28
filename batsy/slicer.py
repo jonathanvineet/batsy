@@ -483,12 +483,44 @@ def _estimates(gcode: Path) -> dict:
     return out
 
 
+MODEL_SETTINGS = Path.home() / ".local/share/batsy/model_settings.json"
+
+
+def _model_key(model: Path) -> str:
+    return re.sub(r" (?:laid|turned)$", "", Path(model).stem)
+
+
+def model_settings(model: Path) -> dict:
+    try:
+        return json.loads(MODEL_SETTINGS.read_text()).get(_model_key(model), {})
+    except (OSError, ValueError):
+        return {}
+
+
+def keep_settings(model: Path, overrides: dict | None) -> None:
+    """These settings belong to this model now: every later slice of it uses them (None forgets them)."""
+    try:
+        all_ = json.loads(MODEL_SETTINGS.read_text()) if MODEL_SETTINGS.exists() else {}
+    except ValueError:
+        all_ = {}
+    k = _model_key(model)
+    if overrides:
+        all_[k] = {**all_.get(k, {}), **overrides}
+    else:
+        all_.pop(k, None)
+    MODEL_SETTINGS.write_text(json.dumps(all_, indent=1))
+
+
 def slice_model(model: Path, process: str | None = None, overrides: dict | None = None, label: str = "",
                 filament_overrides: dict | None = None, others: list[Path] | None = None) -> dict:
     """Slice model (and `others` with it, all arranged on one plate) with your printer and the process (default
     "nicee"), plus any tweaks on top. Returns {"gcode", "time", "grams", ...}."""
     from batsy import activity
 
+    sticky = model_settings(model)
+    if sticky:  # fixes made for this model before (slower travel after a layer shift, a wider brim): kept
+        overrides = {**sticky, **(overrides or {})}
+        label = label or "custom"
     what = plate_name([model, *(others or [])])
     with activity.work(f"Slicing {what}", "slice", f"Slicing {what} with {process or settings().get('default', 'your preset')} (OrcaSlicer)"):
         return _slice_model(model, process, overrides, label, filament_overrides, others)

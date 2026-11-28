@@ -1056,7 +1056,11 @@ def _under_clock(app, m, text):
 
 
 # "completed making a video for our alumni meeting", "I finished the website", "tick off the video", "mark X done"
-@handles(r"(?:batsy )?(?:i(?:'ve| have)? )?(?:completed|finished|done with|done|did|wrapped up|sent|submitted) (.+)",
+DONE_VERBS = (r"completed|finished|done with|done|did|wrapped up|sent|submitted|delivered|handed over|gave|paid|called|"
+              r"bought|printed|sliced|fixed|posted|shipped|booked|emailed|mailed|cleaned|made|returned|collected|picked up")
+
+
+@handles(rf"(?:batsy )?(?:(?:uh|um|so|and|okay|ok|yeah) )*(?:i(?:'ve| have)?(?: already| just)? )?(?P<verb>{DONE_VERBS}) (.+)",
          r"(?:tick|check|cross) off (.+)", r"mark (.+?) (?:as )?(?:done|finished|complete|completed)")
 def _tick_off(app, m, text):
     from rapidfuzz import fuzz
@@ -1064,14 +1068,20 @@ def _tick_off(app, m, text):
     from batsy.memory_store import get_store
 
     st = get_store()
-    said = re.sub(r"^(?:the|my|our|that|it)\s+", "", m.group(1).strip())
+    said = re.sub(r"^(?:the|my|our|that|it)\s+", "", m.group(m.lastindex).strip())
     days = [(dt.date.today() - dt.timedelta(days=k)).isoformat() for k in range(3)]  # today, and 2 days back
     open_ = [r for d in days for r in st.agenda_for(d) if not r["done"]]
     if not open_:
         return None
+    verb = (m.groupdict().get("verb") or "").split()[0] if m.groupdict().get("verb") else ""
+    stem = re.sub(r"(?:ed|d)$", "", verb)[:5] if verb not in ("did", "done", "made", "gave", "paid", "sent") else ""
+    same_verb = [r for r in open_ if stem and r["text"].lower().startswith(stem)]
     best = max(open_, key=lambda r: fuzz.token_set_ratio(said.lower(), r["text"].lower()))
     if fuzz.token_set_ratio(said.lower(), best["text"].lower()) < 70:
-        return None  # "I finished the movie": not one of your to-dos, so just talk
+        # "I delivered the novel transfer" (Noel John's print, misheard): the one to-do that starts "Deliver"
+        if len(same_verb) != 1:
+            return None  # "I finished the movie": not one of your to-dos, so just talk
+        best = same_verb[0]
     st.tick_agenda(best["id"])
     left = sum(1 for r in st.agenda_for(days[0]) if not r["done"])
     return f"Nice, ticked off: {best['text']}." + (f" {left} left for today." if left else " That's everything for today.")

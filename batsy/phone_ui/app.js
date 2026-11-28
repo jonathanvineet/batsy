@@ -1037,7 +1037,8 @@ async function loadRecent() {
   if (key === rsSeen) return;
   rsSeen = key;
   const tok = store.get('token', '');
-  $('#rs-list').innerHTML = list.length ? list.slice(0, 6).map((x, i) => `<li data-key="${esc(x.key)}" class="${i === 0 ? 'now' : ''}">
+  $('#rs-n').textContent = list.length > 1 ? `${list.length}` : '';
+  $('#rs-list').innerHTML = list.length ? list.map((x, i) => `<li data-key="${esc(x.key)}" class="${i === 0 ? 'now' : ''}">
     <img alt="" data-key="${esc(x.key)}"><div><b>${esc(x.name)}</b><small>${esc([x.time, x.grams ? Math.round(x.grams) + '\u00a0g' : '',
     x.preset].filter(Boolean).join(' · '))}</small></div><span class="who">${x.who && x.who !== 'Jonathan' ? esc(x.who) : ago(x.t)}</span></li>`).join('')
     : '<li class="empty">Nothing sliced yet</li>';

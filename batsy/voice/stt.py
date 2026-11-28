@@ -54,7 +54,9 @@ class Transcriber:
             model = dict(encoder=f("encoder"), decoder=f("decoder"), joiner=f("joiner"), tokens=str(d / "tokens.txt"),
                          model_type="nemo_transducer", num_threads=4)
             try:
-                self.parakeet = sherpa_onnx.OfflineRecognizer.from_transducer(**model, **self._hotwords(cfg, d))
+                hot = self._hotwords(cfg, d)
+                self.parakeet = sherpa_onnx.OfflineRecognizer.from_transducer(**model, **hot)
+                self._hot = bool(hot)
             except Exception as e:
                 log.warning("Parakeet hotwords unavailable (%s); plain decoding", e)
                 self.parakeet = sherpa_onnx.OfflineRecognizer.from_transducer(**model)
@@ -78,8 +80,30 @@ class Transcriber:
             vocab.write_text("".join(f"{piece}\t{-int(i)}\n" for piece, i in pieces))
         hot = DATA_DIR / "hotwords.txt"
         hot.write_text("\n".join(words) + "\n")
+        Transcriber._base_words, Transcriber._chars = words, chars
         return dict(decoding_method="modified_beam_search", hotwords_file=str(hot),
                     hotwords_score=cfg.get("voice.hotwords_score"), modeling_unit="bpe", bpe_vocab=str(vocab))
+
+    _hot = False
+    _base_words: list[str] = []
+    _chars: set = set()
+
+    def _stream(self):
+        """A decode biased toward the usual words plus the names in your life right now (what you're tracking,
+        who's in your to-dos, who sends you files: batsy/context_words.py), so "QoreChain" isn't "course in"."""
+        if not self._hot:
+            return self.parakeet.create_stream()
+        try:
+            from batsy import context_words
+
+            now = [" ".join(re.sub(r"[^\w' ]", " ", w).split()) for w in context_words.hotwords()]
+            now = [w for w in now if w and set(w) <= self._chars and w not in self._base_words]
+            if not now:
+                return self.parakeet.create_stream()
+            return self.parakeet.create_stream(hotwords="\n".join([*self._base_words, *(f"{w} :1.5" for w in now)]))
+        except Exception as e:
+            log.debug("context hotwords: %s", e)
+            return self.parakeet.create_stream()
 
     def live(self, preroll: list[bytes] | None = None) -> "LiveTranscript":
         """Transcribe while you're still talking (Parakeet only): see LiveTranscript."""
@@ -87,7 +111,7 @@ class Transcriber:
 
     def raw(self, audio: np.ndarray) -> str:
         """Just the model's transcript of some audio, nothing fixed up."""
-        stream = self.parakeet.create_stream()
+        stream = self._stream()
         stream.accept_waveform(16000, audio.astype(np.float32) / 32768.0)
         self.parakeet.decode_stream(stream)
         return stream.result.text.strip()
@@ -99,7 +123,7 @@ class Transcriber:
         if done is not None:  # most of it was transcribed while you were talking
             text = done
         elif self.engine == "parakeet":
-            stream = self.parakeet.create_stream()
+            stream = self._stream()
             stream.accept_waveform(16000, audio.astype(np.float32) / 32768.0)
             self.parakeet.decode_stream(stream)
             text = stream.result.text.strip()
@@ -117,7 +141,9 @@ class Transcriber:
             text = json.loads(rec.FinalResult()).get("text", "")
         if not quiet:  # (wake-word checks stay raw)
             text = self._by_topic(audio, text)
-            fixed = lexicon.fix(text, self.cfg)
+            from batsy import context_words
+
+            fixed = context_words.correct(lexicon.fix(text, self.cfg))  # then the names in your life by sound
             log.info("heard: %s%s", text, f"  ->  {fixed}" if fixed != text else "")
             text = fixed
         return text

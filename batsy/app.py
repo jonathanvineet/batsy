@@ -1090,6 +1090,17 @@ class Batsy:
         if showcase.handle(self, n):  # "show what you can do": the narrated tour on a live dashboard
             self._route = "command"
             return True
+        from batsy import camera_mount
+
+        try:
+            said = camera_mount.handle(self, n)  # "turn the camera left", "tilt the camera up": the Uno on USB
+        except Exception:
+            log.exception("camera mount")
+            said = "The camera mount isn't answering properly. Check its USB cable and power."
+        if said is not None:
+            self._route = "instant"
+            self._reply(said)
+            return True
         said = home.handle(self, n) if self._may("home") else None  # "turn on the light", "night mode": the ESP32
         if said is not None:
             self._route = "instant"

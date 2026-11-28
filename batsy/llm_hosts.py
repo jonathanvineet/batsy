@@ -123,21 +123,52 @@ def background_chat(cfg, body: dict, timeout: int = 600, tries: int = 6) -> str:
     you ask something, to start again afterwards. Returns the answer's text."""
     import json
 
+    import http.client
+    import socket
+    import urllib.parse
+
     body = {**body, "stream": True}
     for _ in range(tries):
         _wait_quiet()
         out, cut, done = "", False, False
+        base = best(cfg)
+        u = urllib.parse.urlsplit(base)
+        send = {**body, "keep_alive": -1 if base != cfg.get("local.url").rstrip("/") else cfg.get("local.keep_alive")} \
+            if "keep_alive" in body else body
+        conn = http.client.HTTPConnection(u.hostname, u.port or 80, timeout=timeout)
+        stop = threading.Event()
+
+        def watch():
+            # you started talking: hang up at once, even while the model is still reading a long prompt (no words
+            # come back for a minute then, so checking between words left your question waiting behind it)
+            nonlocal cut
+            while not stop.wait(0.2):
+                if _live:
+                    cut = True
+                    try:
+                        conn.sock.shutdown(socket.SHUT_RDWR)
+                    except (OSError, AttributeError):
+                        pass
+                    return
+
         try:
-            with open_chat(cfg, body, timeout) as r:
-                for line in r:
-                    if _live:  # you started talking: closing the stream stops the model at once
-                        cut = True
-                        break
-                    part = json.loads(line) if line.strip() else {}
-                    out += part.get("message", {}).get("content", "")
-                    done = done or bool(part.get("done"))
-        except OSError as e:
-            log.info("background job: %s", e)
+            conn.connect()
+            threading.Thread(target=watch, daemon=True).start()
+            conn.request("POST", "/api/chat", body=json.dumps(send).encode(), headers={"Content-Type": "application/json"})
+            r = conn.getresponse()
+            for line in r:
+                if _live:
+                    cut = True
+                    break
+                part = json.loads(line) if line.strip() else {}
+                out += part.get("message", {}).get("content", "")
+                done = done or bool(part.get("done"))
+        except (OSError, http.client.HTTPException, ValueError) as e:
+            if not cut:
+                log.info("background job: %s", e)
+        finally:
+            stop.set()
+            conn.close()
         if done:
             return out.strip()
         if not cut:  # the host went away mid-answer: pick again and start over

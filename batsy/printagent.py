@@ -184,6 +184,8 @@ def _slice(a) -> dict:
     for kv in a.set or []:
         k, _, v = kv.partition("=")
         overrides[k.strip()] = [v.strip()]
+    if overrides:  # the print expert's fixes stay with the model (a re-slice from the position card lost them)
+        slicer.keep_settings(model, overrides)
     path, info = model, {"copies": 1}
     if a.copies > 1 or a.size or a.scale:
         plan = {"copies": a.copies, **({"target_mm": a.size} if a.size else {}), **({"scale": a.scale} if a.scale else {})}

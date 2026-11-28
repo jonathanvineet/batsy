@@ -38,10 +38,11 @@ class Stream:
 
         self.lines = [ln for ln in (raw.split(";", 1)[0].strip()
                                     for raw in gcode.read_text(errors="replace").splitlines()) if ln]
-        self.st = {"state": "starting", "job": job, "gcode": str(gcode), "line": 0, "total": len(self.lines),
+        self.start = int(sys.argv[4]) if len(sys.argv) > 4 else 0  # carrying on a print from this line
+        self.st = {"state": "starting", "job": job, "gcode": str(gcode), "line": self.start, "total": len(self.lines),
                    "started": time.time(), "pid": os.getpid(), "hotend": None, "hotend_target": 0, "bed": None,
                    "bed_target": 0, "error": None}
-        port = sys.argv[3] if len(sys.argv) > 3 else "/dev/ttyUSB0"
+        port = sys.argv[3] if len(sys.argv) > 3 and sys.argv[3] else "/dev/ttyUSB0"
         self.ser = serial.Serial()
         self.ser.port, self.ser.baudrate, self.ser.timeout = port, 115200, 0.5
         self.ser.open()  # -hupcl is set on the port: opening doesn't restart the printer
@@ -64,15 +65,24 @@ class Stream:
         False if it asked for an earlier line again (the caller goes back)."""
         body = f"N{n} {cmd}"
         self.ser.write(f"{body}*{_cs(body)}\n".encode())
-        end = time.time() + timeout
+        end, sent, busy = time.time() + timeout, time.time(), False
         while time.time() < end:
             line = self.read()
             self.save()
+            if line.startswith("echo:busy"):
+                busy = True  # heating or a long move: its "ok" comes later
             if not line:
+                # the line got lost (the USB cable was pulled and put back, the printer still running): the printer
+                # is quiet and not busy, so send it again. It says "Resend" for the next one if it had it already.
+                if not busy and time.time() - sent > 20:
+                    self.ser.write(f"{body}*{_cs(body)}\n".encode())
+                    sent = time.time()
                 continue
             m = re.match(r"(?:Resend|rs):?\s*(\d+)", line, re.I)
             if m:
                 self.resend = int(m.group(1))
+                if self.resend > n:  # it had this line after all (it wants the next): carry on
+                    return True
                 return False
             if line.startswith("ok"):
                 return True
@@ -96,7 +106,7 @@ class Stream:
             pass
         self.st["state"] = "printing"
         self.save(True)
-        n, i, last_temp = 1, 0, time.time()
+        n, i, last_temp = 1, self.start, time.time()
         while i < len(self.lines):
             if self._control():
                 return

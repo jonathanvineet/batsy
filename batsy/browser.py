@@ -131,7 +131,7 @@ def _extension_rows(since: float) -> list[dict]:
     return [r for r in rows if r.get("t", 0) >= since]
 
 
-def _now(prompt: str, max_tokens: int = 300) -> str:
+def _now(prompt: str, max_tokens: int = 300, json_mode: bool = False) -> str:
     """The local AI for a button you just pressed: straight away, ahead of the background jobs (mail backlog)."""
     import json
 
@@ -141,7 +141,7 @@ def _now(prompt: str, max_tokens: int = 300) -> str:
     cfg = Config.load()
     body = {"model": cfg.get("local.model"), "keep_alive": cfg.get("local.keep_alive"), "stream": False,
             "messages": [{"role": "user", "content": prompt}],
-            "options": {"temperature": 0.2, "num_predict": max_tokens, "num_ctx": 4096}}
+            "options": {"temperature": 0.2, "num_predict": max_tokens, "num_ctx": 4096}, **({"format": "json"} if json_mode else {})}
     with llm_hosts.live(), llm_hosts.open_chat(cfg, body, 120) as r:
         return json.loads(r.read()).get("message", {}).get("content", "").strip()
 

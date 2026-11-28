@@ -274,10 +274,10 @@ def _act(app, mid: str) -> None:
     if not r or r["acted"]:
         return
     said = []
+    automated = bool(re.search(AUTOMATED, r["sender"] + " " + (r["body"][:300] if r["body"] else ""), re.I))
     actionable = bool(r["important"]) and r["kind"] in ("assignment", "deadline", "exam", "meeting", "interview", "bill",
                                                           "work", "personal") \
-        and not re.search(r"no-?reply|newsletter|jobalerts|notifications?@|marketing|digest|linkedin|naukri|unstop|devpost",
-                          r["sender"] + " " + (r["body"][:300] if r["body"] else ""), re.I)
+        and not automated
     try:  # anything about something you asked Batsy to keep track of is never junk
         from batsy import tracker
 
@@ -298,18 +298,24 @@ def _act(app, mid: str) -> None:
     fresh = r["t"] > time.time() - 3600  # arrived in the last hour: news. Older (a first look at an inbox): quiet
     if not fresh:
         pass  # older mail (a first look at an inbox): read quietly; anything still due is under the clock already
-    elif r["important"] or (r["due"] and actionable):
+    elif (r["important"] and not automated) or (r["due"] and actionable):  # (foundit "update your salary": not news)
         _last.update(id=mid, t=time.time())
         on = f" on {r['account'].split('@')[0]}" if len(accounts()) > 1 and r["account"] else ""
         app.announce(f"New email{on} from {r['sender']}: {r['summary'] or r['subject']}" + (". " + ", ".join(said) + "."
                                                                                        if said else ""))
-    if r["write"] and fresh:  # (old mail: say "prepare the report for …" if you still need it)
+    if r["write"] and fresh and actionable:  # never a draft for a job site's or a newsletter's "update your profile"  # (old mail: say "prepare the report for …" if you still need it)
         threading.Thread(target=draft, args=(app, mid, False), daemon=True, name="mail-draft").start()
     with _lock:
         db = _db()
         db.execute("UPDATE mail SET acted = ? WHERE id = ?", (time.time(), mid))
         db.commit()
         db.close()
+
+
+# sites and robots, not people: never news, never to-dos, never a draft (unless it's about something tracked)
+AUTOMATED = (r"no-?reply|do-?not-?reply|newsletter|jobalerts|job-?alerts|notifications?@|alerts?@|marketing|digest|"
+             r"linkedin|naukri|unstop|devpost|foundit|monster|indeed|glassdoor|internshala|shine\.com|apna|instahyre|"
+             r"wellfound|hirist|cutshort|updates?@|news@|info@|hello@|team@|promo|offers?@")
 
 
 def when_to_date(words: str, sent: dt.date | None = None) -> str:

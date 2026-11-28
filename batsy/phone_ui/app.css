@@ -314,7 +314,12 @@ dialog .ghost { background: var(--w2); } dialog .danger { background: var(--bad)
 /* --- the newest slice ------------------------------------------------------------------------------------- */
 /* recently sliced: a row each, picture, name, time and grams; tap = make it the current slice */
 .rs-w h3 { margin-bottom: 8px; }
-.rs-list { list-style: none; display: flex; flex-direction: column; gap: 6px; overflow-y: auto; max-height: 100%; }
+/* every slice, scrolling inside the card (the cards themselves snap page by page, so the list keeps its own scroll) */
+.rs-list { list-style: none; display: flex; flex-direction: column; gap: 6px; overflow-y: auto; flex: 1 1 auto;
+  min-height: 0; overscroll-behavior: contain; -webkit-overflow-scrolling: touch; touch-action: pan-y; padding-bottom: 6px; }
+.rs-n { margin-left: 6px; padding: 2px 8px; border-radius: 99px; background: var(--w2); color: var(--muted);
+  font-size: .8em; letter-spacing: 0; }
+.rs-n:empty { display: none; }
 .rs-list li { display: grid; grid-template-columns: 52px 1fr auto; gap: 10px; align-items: center; padding: 6px;
   border-radius: 12px; background: var(--w2); cursor: pointer; }
 .rs-list li:active { transform: scale(.98); }
@@ -325,6 +330,7 @@ dialog .ghost { background: var(--w2); } dialog .danger { background: var(--bad)
 .rs-list .who { font-size: 11px; color: var(--muted); text-align: right; }
 .rs-list .empty { background: none; cursor: default; color: var(--muted); }
 body.dash .rs-w { height: auto; min-height: 140px; }
+body.dash .rs-list { max-height: 360px; }
 .sw { display: grid; grid-template-columns: 55% 1fr; gap: clamp(10px, 3vmin, 18px); position: relative; }
 /* models waiting to be sliced, and "how should it sit?": over the card, tap an option */
 .sw-plate { position: absolute; inset: 0; z-index: 2; border-radius: inherit; background: var(--card, #111318);
