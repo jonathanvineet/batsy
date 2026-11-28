@@ -15,6 +15,8 @@ APP_DIRS = [
     HOME / ".local/share/applications",
     Path("/var/lib/flatpak/exports/share/applications"),
     HOME / ".local/share/flatpak/exports/share/applications",
+    # Snap publishes ordinary desktop entries here; their Exec usually wraps the app in `snap run`.
+    Path("/var/lib/snapd/desktop/applications"),
 ]
 FOLDERS = {
     "home": HOME, "my home": HOME, "home folder": HOME, "downloads": HOME / "Downloads",
@@ -40,9 +42,18 @@ ALIASES = {
 
 
 class App:
-    def __init__(self, desktop_id: str, name: str, generic: str, keywords: str, exec_: str):
+    def __init__(self, desktop_id: str, name: str, generic: str, keywords: str, exec_: str,
+                 snap_name: str = "", snap_command: str = ""):
         self.id, self.name, self.generic, self.keywords = desktop_id, name, generic, keywords
         self.binary = Path(re.sub(r"%\w", "", exec_).split()[0]).name if exec_.split() else ""
+        self.exec_line = exec_
+        flatpak = re.search(r"\bflatpak\s+run\s+(?:[^\s]+\s+)*([A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)+)", exec_)
+        self.flatpak_id = flatpak.group(1) if flatpak else ""
+        # Snap's desktop IDs vary by distro/version; use snap's own metadata when present.
+        self.snap_name = snap_name
+        self.snap_command = snap_command or (self.binary if self.binary not in {"snap", "spotify_spotify"} else "")
+        if not self.snap_name and ("/snap/" in exec_ or "/snapd/snap/" in exec_):
+            self.snap_name = self.snap_command
         self.search = " ".join([name, generic, keywords, desktop_id.replace(".", " "), self.binary]).lower()
 
 
@@ -63,7 +74,8 @@ class AppIndex:
                 if e.get("NoDisplay", "false").lower() == "true" or e.get("Type", "Application") != "Application":
                     continue
                 apps[f.stem] = App(f.stem, e.get("Name", f.stem), e.get("GenericName", ""),
-                                   e.get("Keywords", "").replace(";", " "), e.get("Exec", ""))
+                                   e.get("Keywords", "").replace(";", " "), e.get("Exec", ""),
+                                   e.get("X-SnapInstanceName", ""), e.get("X-SnapAppName", ""))
         self.apps, self.loaded = list(apps.values()), time.time()
 
     def find(self, name: str) -> App | None:
@@ -111,7 +123,14 @@ def open_target(target: str) -> str | None:
         return f"Opening {t}." if _launch(["xdg-open", url]) else None
     app = INDEX.find(t)
     if app:
-        return f"Opening {app.name}." if _launch(["gtk-launch", app.id]) else None
+        if _launch(["gtk-launch", app.id]):
+            return f"Opening {app.name}."
+        # Some minimal desktop sessions lack gtk-launch; use the package manager's app ID.
+        if app.snap_name and _launch(["snap", "run", f"{app.snap_name}.{app.snap_command}"]):
+            return f"Opening {app.name}."
+        if app.flatpak_id and _launch(["flatpak", "run", app.flatpak_id]):
+            return f"Opening {app.name}."
+        return None
     return None
 
 
@@ -119,10 +138,19 @@ def close_app(target: str) -> str | None:
     app = INDEX.find(re.sub(r"^(the|my)\s+", "", target.strip().lower()))
     if not app or not app.binary:
         return None
+    if app.flatpak_id and shutil.which("flatpak"):
+        p = subprocess.run(["flatpak", "kill", app.flatpak_id], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        if p.returncode == 0:
+            return f"Closed {app.name}."
     # a launcher script ("brave-browser-stable") isn't the running program ("brave"): close both, politely (SIGTERM:
     # browsers save their session, so the tabs can come back)
     real = {"brave-browser-stable": "brave", "brave-browser": "brave", "google-chrome-stable": "chrome",
             "chromium-browser": "chromium", "firefox-bin": "firefox"}.get(app.binary)
-    for name in filter(None, (app.binary, real)):
+    names = [app.binary, real]
+    if app.snap_name:
+        names.extend((app.snap_command, app.snap_name))
+    for name in filter(None, dict.fromkeys(names)):
+        if name in {"snap", "flatpak"}:
+            continue
         subprocess.run(["pkill", "-x", name], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     return f"Closed {app.name}."
