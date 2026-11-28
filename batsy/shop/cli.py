@@ -5,8 +5,9 @@
   batsy shop ask "question"         the business brain (local model, Claude Code when it's hard)
   batsy shop key                    PrintDesk Pro's proxy key (its .env.local BATSY_SHOP_KEY)
   batsy shop staff add LOGIN NAME   let a tailnet login use PrintDesk (staff); `staff admin LOGIN NAME`; `staff rm LOGIN`
-  batsy shop supabase --env FILE    link Batsy to the team's site (SUPABASE_URL + SUPABASE_SERVICE_ROLE_KEY from
-                                    that .env): orders, costs and failures are written back, prices read
+  batsy shop supabase --env FILE    Supabase credentials for when PrintDesk's site isn't running (SUPABASE_URL +
+                                    SUPABASE_SERVICE_ROLE_KEY from that .env and the .env.local beside it). While
+                                    the site runs, Batsy goes through its cached database gateway instead.
   batsy shop import-supabase        old PrintDesk orders and price list, from Supabase (SUPABASE_URL and
                                     SUPABASE_SERVICE_ROLE_KEY in the environment, or --env path/to/.env)
 """
@@ -21,9 +22,15 @@ from batsy.shop import api, brain, costing, db, jobs, quote, reports, sync
 
 
 def _env(path: str | None) -> dict:
+    """The environment, then FILE's .env.local sibling (where the secrets live), then FILE itself."""
     env = dict(os.environ)
     if path:
-        for line in Path(path).expanduser().read_text().splitlines():
+        p = Path(path).expanduser()
+        files = [p.parent / ".env.local", p] if p.name == ".env" else [p]
+        if p.name == ".env.local" and (p.parent / ".env").exists():
+            files.append(p.parent / ".env")  # the URL is in the committed .env
+        text = "\n".join(f.read_text() for f in files if f.exists())
+        for line in text.splitlines():
             if "=" in line and not line.lstrip().startswith("#"):
                 k, v = line.split("=", 1)
                 env.setdefault(k.strip(), v.strip().strip('"').strip("'"))

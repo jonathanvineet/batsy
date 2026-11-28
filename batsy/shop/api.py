@@ -388,13 +388,14 @@ def start(app) -> None:
     proxy_key()
     jobs.watch(app)
 
-    def rates_loop():  # the team's price list (Supabase pricing_rates) is Batsy's
+    def rates_loop():  # the team's price list (Supabase pricing_rates) is Batsy's; updates that are waiting go out
         while True:
             try:
-                sync.pull_rates()
+                sync.pull_rates()  # itself only every 5 minutes
+                sync.retry_pending()
             except Exception:
-                log.exception("shop: rates from the site")
-            time.sleep(300)
+                log.exception("shop: sync with the site")
+            time.sleep(60)
 
     threading.Thread(target=rates_loop, daemon=True, name="shop-rates").start()
 

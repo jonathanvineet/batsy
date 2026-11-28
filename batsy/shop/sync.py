@@ -15,9 +15,15 @@ queue, runs). They're linked by order: a Batsy order's external_id is the Supaba
   a Batsy order with no link gets a Supabase order when it's confirmed, so it shows in the team's queue/revenue.
   rates           the team's pricing_rates row is Batsy's price list (read every 5 minutes): one price list.
 
-Credentials: DATA_DIR/shop/supabase.json {"url", "key"} (the service-role key: it bypasses the team's RLS, so it
-stays on this workstation). Set with `batsy shop supabase --env ~/elco/printdesk-pro/.env`.
-Everything here is best effort: Supabase being away never stops a print.
+How: through PrintDesk's database gateway on this workstation (http://127.0.0.1:3000/api/db, db-gateway.mjs in
+printdesk-pro), the same way the site's browsers go. It knows Batsy (127.0.0.1 is the admin) and caches everything:
+reads are answered from its copy of the tables when Supabase is down, writes are queued there and sent when it's
+back. If the site isn't running, Batsy talks to Supabase directly with DATA_DIR/shop/supabase.json {"url", "key"}
+(the service-role key: it bypasses the team's RLS, so it stays on this workstation), set with
+`batsy shop supabase --env ~/elco/printdesk-pro/.env.local`. BATSY_SHOP_SITE overrides the site's address.
+
+Everything here is best effort: Supabase being away never stops a print. An update that couldn't go out by either
+way is remembered (DATA_DIR/shop/sync_pending.json) and retried every minute until it does.
 """
 import json
 import logging
@@ -31,6 +37,10 @@ from batsy.shop import db
 
 log = logging.getLogger("batsy.shop.sync")
 CREDS = db.HOME / "supabase.json"
+PENDING = db.HOME / "sync_pending.json"
+SITE = os.environ.get("BATSY_SHOP_SITE", "http://127.0.0.1:3000").rstrip("/")
+_site = {"t": 0.0, "up": False}
+_pending_lock = threading.Lock()
 STATUS = {"quote": "pending", "confirmed": "pending", "printing": "printing", "ready": "ready_for_delivery",
           "delivered": "delivered", "cancelled": "cancelled"}
 _rates_at = 0.0
@@ -50,22 +60,73 @@ def set_creds(url: str, key: str) -> None:
     os.chmod(CREDS, 0o600)
 
 
-def _req(method: str, path: str, body=None, prefer: str = ""):
-    c = creds()
-    if not c:
-        return None
-    h = {"apikey": c["key"], "Authorization": f"Bearer {c['key']}", "Content-Type": "application/json"}
+def site_up() -> bool:
+    """Is PrintDesk's database gateway running here? (Asked at most every 30 s.)"""
+    if time.time() - _site["t"] < 30:
+        return _site["up"]
+    try:
+        with urllib.request.urlopen(f"{SITE}/api/db/_status", timeout=3) as r:
+            _site["up"] = bool(json.loads(r.read()).get("configured"))
+    except (urllib.error.URLError, OSError, ValueError):
+        _site["up"] = False
+    _site["t"] = time.time()
+    return _site["up"]
+
+
+def _send(base: str, key: str | None, method: str, path: str, body, prefer: str):
+    h = {"Content-Type": "application/json"}
+    if key:
+        h.update({"apikey": key, "Authorization": f"Bearer {key}"})
     if prefer:
         h["Prefer"] = prefer
-    req = urllib.request.Request(f"{c['url']}/rest/v1/{path}", method=method, headers=h,
+    req = urllib.request.Request(f"{base}/rest/v1/{path}", method=method, headers=h,
                                  data=json.dumps(body).encode() if body is not None else None)
-    with urllib.request.urlopen(req, timeout=15) as r:
+    with urllib.request.urlopen(req, timeout=20) as r:
         raw = r.read()
         return json.loads(raw) if raw else None
 
 
+def _req(method: str, path: str, body=None, prefer: str = ""):
+    """Through the site's gateway (cached, queued when Supabase is down), else straight to Supabase."""
+    if site_up():
+        try:
+            return _send(f"{SITE}/api/db", None, method, path, body, prefer)
+        except urllib.error.HTTPError:
+            raise  # the gateway answered: that's Supabase's (or the cache's) answer
+        except (urllib.error.URLError, OSError):
+            _site.update(t=time.time(), up=False)  # it just went away: try Supabase itself
+    c = creds()
+    if not c:
+        raise urllib.error.URLError("neither PrintDesk's gateway nor Supabase credentials are available")
+    return _send(c["url"], c["key"], method, path, body, prefer)
+
+
 def enabled() -> bool:
-    return creds() is not None
+    return creds() is not None or site_up()
+
+
+def _pending(add: int | None = None, drop: int | None = None) -> list[int]:
+    with _pending_lock:
+        try:
+            ids = set(json.loads(PENDING.read_text()))
+        except (OSError, ValueError):
+            ids = set()
+        if add is not None or drop is not None:
+            if add is not None:
+                ids.add(add)
+            if drop is not None:
+                ids.discard(drop)
+            db.HOME.mkdir(parents=True, exist_ok=True)
+            PENDING.write_text(json.dumps(sorted(ids)))
+        return sorted(ids)
+
+
+def retry_pending() -> None:
+    """Updates that couldn't reach the site or Supabase earlier: send them now (each is the order's latest state)."""
+    for oid in _pending():
+        if not enabled():
+            return
+        push(oid)
 
 
 # --- Supabase -> Batsy ---------------------------------------------------------------------------------------------
@@ -134,6 +195,7 @@ def _payload(oid: int) -> dict:
 
 def push(oid: int) -> None:
     if not enabled():
+        _pending(add=oid)  # neither the site nor Supabase credentials right now: send it when one is back
         return
     try:
         p = _payload(oid)
@@ -151,18 +213,28 @@ def push(oid: int) -> None:
             if made:
                 db.update("orders", oid, external_id=str(made[0]["id"]))
                 log.info("site order %s made for %s", made[0]["id"], o["code"])
+                _pending(drop=oid)
             return
         cur = (_req("GET", f"orders?id=eq.{sid}&select=failed_prints") or [{}])
         theirs = [f for f in ((cur[0] if cur else {}).get("failed_prints") or []) if not f.get("batsy_run")]
         body["failed_prints"] = theirs + p["fails"]
         body["production_cost"] = round(body["production_cost"] + sum(float(f.get("cost") or 0) for f in theirs), 2)
         _req("PATCH", f"orders?id=eq.{sid}", body, prefer="return=minimal")
+        if oid in _pending():
+            _pending(drop=oid)
+            log.info("site updated for order %s (it was waiting)", oid)
+    except urllib.error.HTTPError as e:
+        log.warning("supabase push %s: %s", oid, e)  # refused (a bad row): retrying won't help
+        db.event("batsy", "sync_failed", f"The site refused the update for order {oid}: {e}")
+        _pending(drop=oid)
     except (urllib.error.URLError, OSError, ValueError, KeyError) as e:
-        log.warning("supabase push %s: %s", oid, e)
-        db.event("batsy", "sync_failed", f"Couldn't update the site for order {oid}: {e}")
+        log.warning("supabase push %s: %s (will retry)", oid, e)
+        if oid not in _pending():
+            db.event("batsy", "sync_failed", f"Couldn't update the site for order {oid}: {e}. Batsy will keep trying.")
+        _pending(add=oid)
 
 
 def later(oid: int | None) -> None:
     """push() in the background: never in the way of printing."""
-    if oid and enabled():
+    if oid:  # the "is the site up" check is a request too: keep it off the caller's thread
         threading.Thread(target=push, args=(oid,), daemon=True, name="shop-sync").start()
